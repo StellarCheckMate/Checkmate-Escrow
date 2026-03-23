@@ -52,9 +52,7 @@ impl OracleContract {
 
     /// Check whether a result has been submitted for a match.
     pub fn has_result(env: Env, match_id: u64) -> bool {
-        env.storage()
-            .persistent()
-            .has(&DataKey::Result(match_id))
+        env.storage().persistent().has(&DataKey::Result(match_id))
     }
 }
 
@@ -95,16 +93,8 @@ mod tests {
         let (env, contract_id) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &MatchResult::Draw,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
         // second submit should panic
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &MatchResult::Draw,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
     }
 }

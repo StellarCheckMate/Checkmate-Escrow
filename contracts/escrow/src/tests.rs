@@ -137,3 +137,22 @@ fn test_cancel_refunds_deposit() {
     assert_eq!(token_client.balance(&player1), 1000);
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 }
+
+#[test]
+#[should_panic(expected = "Contract already initialized")]
+fn test_double_initialize_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle1 = Address::generate(&env);
+    let oracle2 = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // First initialization should succeed
+    client.initialize(&oracle1);
+
+    // Second initialization should panic
+    client.initialize(&oracle2);
+}
