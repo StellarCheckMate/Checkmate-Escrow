@@ -9,4 +9,5 @@ pub enum Error {
     Unauthorized = 4,
     InvalidState = 5,
     AlreadyExists = 6,
+    AlreadyInitialized = 7,
 }

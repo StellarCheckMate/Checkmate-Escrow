@@ -14,6 +14,9 @@ pub struct EscrowContract;
 impl EscrowContract {
     /// Initialize the contract with a trusted oracle address.
     pub fn initialize(env: Env, oracle: Address) {
+        if env.storage().instance().has(&DataKey::Oracle) {
+            panic!("Contract already initialized");
+        }
         env.storage().instance().set(&DataKey::Oracle, &oracle);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
     }
@@ -101,7 +104,9 @@ impl EscrowContract {
             m.state = MatchState::Active;
         }
 
-        env.storage().persistent().set(&DataKey::Match(match_id), &m);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
         Ok(())
     }
 
@@ -131,21 +136,15 @@ impl EscrowContract {
             Winner::Player1 => client.transfer(&env.current_contract_address(), &m.player1, &pot),
             Winner::Player2 => client.transfer(&env.current_contract_address(), &m.player2, &pot),
             Winner::Draw => {
-                client.transfer(
-                    &env.current_contract_address(),
-                    &m.player1,
-                    &m.stake_amount,
-                );
-                client.transfer(
-                    &env.current_contract_address(),
-                    &m.player2,
-                    &m.stake_amount,
-                );
+                client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+                client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
             }
         }
 
         m.state = MatchState::Completed;
-        env.storage().persistent().set(&DataKey::Match(match_id), &m);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
         Ok(())
     }
 
@@ -167,22 +166,16 @@ impl EscrowContract {
         let client = token::Client::new(&env, &m.token);
 
         if m.player1_deposited {
-            client.transfer(
-                &env.current_contract_address(),
-                &m.player1,
-                &m.stake_amount,
-            );
+            client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
         }
         if m.player2_deposited {
-            client.transfer(
-                &env.current_contract_address(),
-                &m.player2,
-                &m.stake_amount,
-            );
+            client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
         }
 
         m.state = MatchState::Cancelled;
-        env.storage().persistent().set(&DataKey::Match(match_id), &m);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
         Ok(())
     }
 
