@@ -7,6 +7,9 @@ use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
 use types::{DataKey, Match, MatchState, Platform, Winner};
 
+/// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
+const MATCH_TTL_LEDGERS: u32 = 518_400;
+
 #[contract]
 pub struct EscrowContract;
 
@@ -90,6 +93,11 @@ impl EscrowContract {
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage()
@@ -151,6 +159,11 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         Ok(())
     }
 
@@ -197,6 +210,11 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
 
         let topics = (Symbol::new(&env, "match"), symbol_short!("completed"));
         env.events().publish(topics, (match_id, winner));
@@ -240,6 +258,11 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("cancelled")),
