@@ -168,7 +168,7 @@ impl EscrowContract {
     }
 
     /// Oracle submits the verified match result and triggers payout.
-    pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+    pub fn submit_result(env: Env, match_id: u64, game_id: String, winner: Winner) -> Result<(), Error> {
         if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
             return Err(Error::ContractPaused);
         }
@@ -188,6 +188,10 @@ impl EscrowContract {
 
         if m.state != MatchState::Active {
             return Err(Error::InvalidState);
+        }
+
+        if m.game_id != game_id {
+            return Err(Error::GameIdMismatch);
         }
 
         let client = token::Client::new(&env, &m.token);

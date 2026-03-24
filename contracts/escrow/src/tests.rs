@@ -86,7 +86,7 @@ fn test_payout_winner() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &String::from_str(&env, "game1"), &Winner::Player1);
 
     // player1 started with 1000, deposited 100, won the 200 pot → 1100
     assert_eq!(token_client.balance(&player1), 1100);
@@ -110,7 +110,7 @@ fn test_draw_refund() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Draw);
+    client.submit_result(&id, &String::from_str(&env, "game2"), &Winner::Draw);
 
     assert_eq!(token_client.balance(&player1), 1000);
     assert_eq!(token_client.balance(&player2), 1000);
@@ -188,7 +188,7 @@ fn test_submit_result_emits_event() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &String::from_str(&env, "game_evt"), &Winner::Player1);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -493,7 +493,7 @@ fn test_ttl_extended_on_submit_result() {
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player2);
+    client.submit_result(&id, &String::from_str(&env, "ttl_game3"), &Winner::Player2);
 
     let ttl = env.as_contract(&contract_id, || {
         env.storage().persistent().get_ttl(&DataKey::Match(id))
@@ -520,4 +520,29 @@ fn test_ttl_extended_on_cancel() {
         env.storage().persistent().get_ttl(&DataKey::Match(id))
     });
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+}
+
+#[test]
+fn test_submit_result_wrong_game_id_returns_mismatch() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "correct_game_id"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let result = client.try_submit_result(
+        &id,
+        &String::from_str(&env, "wrong_game_id"),
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::GameIdMismatch)));
 }
