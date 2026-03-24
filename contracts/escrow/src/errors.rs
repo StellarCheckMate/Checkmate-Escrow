@@ -11,4 +11,5 @@ pub enum Error {
     AlreadyExists = 6,
     AlreadyInitialized = 7,
     Overflow = 8,
+    ContractPaused = 9,
 }
