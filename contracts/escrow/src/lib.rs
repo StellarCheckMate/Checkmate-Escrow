@@ -4,7 +4,7 @@ mod errors;
 mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
 use types::{DataKey, Match, MatchState, Platform, Winner};
 
 #[contract]
@@ -145,6 +145,10 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
+
+        let topics = (Symbol::new(&env, "match"), symbol_short!("completed"));
+        env.events().publish(topics, (match_id, winner));
+
         Ok(())
     }
 
