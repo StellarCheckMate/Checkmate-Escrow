@@ -291,3 +291,20 @@ fn test_admin_unpause_allows_create_match() {
     );
     assert_eq!(id, 0);
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_create_match_with_zero_stake_fails() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // This should fail because stake_amount is 0
+    let _id = client.create_match(
+        &player1,
+        &player2,
+        &0,
+        &token,
+        &String::from_str(&env, "zero_stake_game"),
+        &Platform::Lichess,
+    );
+}

@@ -62,6 +62,9 @@ impl EscrowContract {
         if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
             return Err(Error::ContractPaused);
         }
+        if stake_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         let id: u64 = env
             .storage()
