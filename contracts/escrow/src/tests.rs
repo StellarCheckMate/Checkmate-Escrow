@@ -132,7 +132,7 @@ fn test_cancel_refunds_deposit() {
     );
 
     client.deposit(&id, &player1);
-    client.cancel_match(&id);
+    client.cancel_match(&id, &player1);
 
     assert_eq!(token_client.balance(&player1), 1000);
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
@@ -220,7 +220,7 @@ fn test_cancel_match_emits_event() {
         &Platform::Lichess,
     );
 
-    client.cancel_match(&id);
+    client.cancel_match(&id, &player1);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -310,6 +310,134 @@ fn test_create_match_with_zero_stake_fails() {
 }
 
 #[test]
+fn test_player2_cancel_pending_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_p2_cancel"),
+        &Platform::Lichess,
+    );
+
+    // Player2 cancels the pending match
+    client.cancel_match(&id, &player2);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+#[test]
+fn test_player2_cancel_refunds_both_players() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_p2_cancel_refund"),
+        &Platform::Lichess,
+    );
+
+    // Both players deposit - this changes state to Active
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Now the match is Active, not Pending - cancel should fail with InvalidState
+    let result = client.try_cancel_match(&id, &player2);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_player2_cancel_only_player2_deposited() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_p2_only"),
+        &Platform::Lichess,
+    );
+
+    // Only player2 deposits (player1 abandoned)
+    client.deposit(&id, &player2);
+
+    // Player2 cancels and gets refund
+    client.cancel_match(&id, &player2);
+
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+#[test]
+fn test_cancel_active_match_fails_with_invalid_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_active_cancel"),
+        &Platform::Lichess,
+    );
+
+    // Both players deposit — transitions match to Active
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Verify match is Active before attempting cancel
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Attempt to cancel an Active match — must return InvalidState (error code #5)
+    let result = client.try_cancel_match(&id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "expected InvalidState error when cancelling an Active match"
+    );
+
+    // Match must still be Active — no state change
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Funds must remain in escrow — balances unchanged from post-deposit state
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 900);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_unauthorized_player_cannot_cancel() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_unauthorized"),
+        &Platform::Lichess,
+    );
+
+    // Create a third party who is not part of the match
+    let unauthorized = Address::generate(&env);
+
+    // This should panic with Unauthorized error
+    client.cancel_match(&id, &unauthorized);
+}
+
+#[test]
 fn test_ttl_extended_on_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -386,7 +514,7 @@ fn test_ttl_extended_on_cancel() {
         &String::from_str(&env, "ttl_game4"),
         &Platform::Lichess,
     );
-    client.cancel_match(&id);
+    client.cancel_match(&id, &player1);
 
     let ttl = env.as_contract(&contract_id, || {
         env.storage().persistent().get_ttl(&DataKey::Match(id))
