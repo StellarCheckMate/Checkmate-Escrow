@@ -2,9 +2,9 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, Events},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env, String,
+    vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
 fn setup() -> (Env, Address, Address, Address, Address, Address) {
@@ -136,6 +136,38 @@ fn test_cancel_refunds_deposit() {
 
     assert_eq!(token_client.balance(&player1), 1000);
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+#[test]
+fn test_submit_result_emits_event() {
+    let (env, contract_id, _oracle, player1, player2, token) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_evt"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("completed").into_val(&env),
+    ];
+    let matched = events.iter().find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match completed event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let decoded: (u64, Winner) = <(u64, Winner)>::try_from_val(&env, &data).unwrap();
+    assert_eq!(decoded, (id, Winner::Player1));
 }
 
 #[test]
