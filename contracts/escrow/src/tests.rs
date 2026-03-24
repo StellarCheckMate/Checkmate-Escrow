@@ -158,7 +158,9 @@ fn test_create_match_emits_event() {
         Symbol::new(&env, "match").into_val(&env),
         soroban_sdk::symbol_short!("created").into_val(&env),
     ];
-    let matched = events.iter().find(|(_, topics, _)| *topics == expected_topics);
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
     assert!(matched.is_some(), "match created event not emitted");
 
     let (_, _, data) = matched.unwrap();
@@ -194,7 +196,9 @@ fn test_submit_result_emits_event() {
         Symbol::new(&env, "match").into_val(&env),
         soroban_sdk::symbol_short!("completed").into_val(&env),
     ];
-    let matched = events.iter().find(|(_, topics, _)| *topics == expected_topics);
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
     assert!(matched.is_some(), "match completed event not emitted");
 
     let (_, _, data) = matched.unwrap();
@@ -224,7 +228,9 @@ fn test_cancel_match_emits_event() {
         Symbol::new(&env, "match").into_val(&env),
         soroban_sdk::symbol_short!("cancelled").into_val(&env),
     ];
-    let matched = events.iter().find(|(_, topics, _)| *topics == expected_topics);
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
     assert!(matched.is_some(), "match cancelled event not emitted");
 
     let (_, _, data) = matched.unwrap();
