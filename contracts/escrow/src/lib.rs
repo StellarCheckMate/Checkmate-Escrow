@@ -185,6 +185,12 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("cancelled")),
+            match_id,
+        );
+
         Ok(())
     }
 

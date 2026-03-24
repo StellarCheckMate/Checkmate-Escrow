@@ -4,7 +4,7 @@ mod errors;
 mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol};
 use types::{DataKey, MatchResult, ResultEntry};
 
 #[contract]
@@ -37,7 +37,12 @@ impl OracleContract {
 
         env.storage()
             .persistent()
-            .set(&DataKey::Result(match_id), &ResultEntry { game_id, result });
+            .set(&DataKey::Result(match_id), &ResultEntry { game_id, result: result.clone() });
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("result")),
+            (match_id, result),
+        );
 
         Ok(())
     }
@@ -59,7 +64,7 @@ impl OracleContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, Env, String};
+    use soroban_sdk::{testutils::{Address as _, Events}, Address, Env, IntoVal, String, Symbol};
 
     fn setup() -> (Env, Address) {
         let env = Env::default();
@@ -85,6 +90,33 @@ mod tests {
         assert!(client.has_result(&0u64));
         let entry = client.get_result(&0u64);
         assert_eq!(entry.result, MatchResult::Player1Wins);
+    }
+
+    #[test]
+    fn test_submit_result_emits_event() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "oracle").into_val(&env),
+            symbol_short!("result").into_val(&env),
+        ];
+        let matched = events.iter().find(|(_, topics, _)| *topics == expected_topics);
+        assert!(matched.is_some(), "oracle result event not emitted");
+
+        let (_, _, data) = matched.unwrap();
+        let (ev_id, ev_result): (u64, MatchResult) =
+            soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(ev_id, 0u64);
+        assert_eq!(ev_result, MatchResult::Player1Wins);
     }
 
     #[test]

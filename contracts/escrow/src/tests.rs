@@ -203,6 +203,36 @@ fn test_submit_result_emits_event() {
 }
 
 #[test]
+fn test_cancel_match_emits_event() {
+    let (env, contract_id, _oracle, player1, player2, token) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_cancel"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("cancelled").into_val(&env),
+    ];
+    let matched = events.iter().find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match cancelled event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+}
+
+#[test]
 #[should_panic(expected = "Contract already initialized")]
 fn test_double_initialize_fails() {
     let env = Env::default();
