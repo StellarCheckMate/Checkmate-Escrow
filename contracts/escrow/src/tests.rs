@@ -587,6 +587,29 @@ fn test_ttl_extended_on_cancel() {
 }
 
 #[test]
+fn test_submit_result_on_pending_match_returns_invalid_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pending_game"),
+        &Platform::Lichess,
+    );
+
+    // No deposits — match remains Pending
+    let result = client.try_submit_result(
+        &id,
+        &String::from_str(&env, "pending_game"),
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidState)));
+}
+
+#[test]
 fn test_submit_result_wrong_game_id_returns_mismatch() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
