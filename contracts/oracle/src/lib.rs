@@ -14,6 +14,9 @@ pub struct OracleContract;
 impl OracleContract {
     /// Initialize with a trusted admin (the off-chain oracle service).
     pub fn initialize(env: Env, admin: Address) {
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("Contract already initialized");
+        }
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
@@ -137,5 +140,19 @@ mod tests {
         client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
         // second submit should panic
         client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_double_initialize_fails() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+        // second initialize should panic
+        client.initialize(&admin);
     }
 }
