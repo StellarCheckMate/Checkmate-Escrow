@@ -2,12 +2,12 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::Address as _,
+    testutils::{Address as _, Events},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env, String,
+    vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
-fn setup() -> (Env, Address, Address, Address, Address, Address) {
+fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -24,14 +24,14 @@ fn setup() -> (Env, Address, Address, Address, Address, Address) {
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle);
+    client.initialize(&oracle, &admin);
 
-    (env, contract_id, oracle, player1, player2, token_addr)
+    (env, contract_id, oracle, player1, player2, token_addr, admin)
 }
 
 #[test]
 fn test_create_match() {
-    let (env, contract_id, _oracle, player1, player2, token) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -50,7 +50,7 @@ fn test_create_match() {
 
 #[test]
 fn test_deposit_and_activate() {
-    let (env, contract_id, _oracle, player1, player2, token) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -71,7 +71,7 @@ fn test_deposit_and_activate() {
 
 #[test]
 fn test_payout_winner() {
-    let (env, contract_id, _oracle, player1, player2, token) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -95,7 +95,7 @@ fn test_payout_winner() {
 
 #[test]
 fn test_draw_refund() {
-    let (env, contract_id, _oracle, player1, player2, token) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -118,7 +118,7 @@ fn test_draw_refund() {
 
 #[test]
 fn test_cancel_refunds_deposit() {
-    let (env, contract_id, _oracle, player1, player2, token) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -139,6 +139,106 @@ fn test_cancel_refunds_deposit() {
 }
 
 #[test]
+fn test_create_match_emits_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_ev2"),
+        &Platform::Lichess,
+    );
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("created").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match created event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_id, ev_p1, ev_p2, ev_stake): (u64, Address, Address, i128) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+    assert_eq!(ev_p1, player1);
+    assert_eq!(ev_p2, player2);
+    assert_eq!(ev_stake, 100);
+}
+
+#[test]
+fn test_submit_result_emits_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_evt"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("completed").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match completed event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let decoded: (u64, Winner) = <(u64, Winner)>::try_from_val(&env, &data).unwrap();
+    assert_eq!(decoded, (id, Winner::Player1));
+}
+
+#[test]
+fn test_cancel_match_emits_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_cancel"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("cancelled").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match cancelled event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+}
+
+#[test]
 #[should_panic(expected = "Contract already initialized")]
 fn test_double_initialize_fails() {
     let env = Env::default();
@@ -146,21 +246,56 @@ fn test_double_initialize_fails() {
 
     let oracle1 = Address::generate(&env);
     let oracle2 = Address::generate(&env);
+    let admin = Address::generate(&env);
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    // First initialization should succeed
-    client.initialize(&oracle1);
-
-    // Second initialization should panic
-    client.initialize(&oracle2);
+    client.initialize(&oracle1, &admin);
+    client.initialize(&oracle2, &admin);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #8)")]
+fn test_admin_pause_blocks_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "paused_game"),
+        &Platform::Lichess,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_admin_unpause_allows_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+    client.unpause();
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "unpaused_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id, 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
 fn test_create_match_with_zero_stake_fails() {
-    let (env, contract_id, _oracle, player1, player2, token) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // This should fail because stake_amount is 0

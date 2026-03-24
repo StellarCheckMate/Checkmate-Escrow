@@ -4,7 +4,7 @@ mod errors;
 mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, token, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
 use types::{DataKey, Match, MatchState, Platform, Winner};
 
 #[contract]
@@ -12,13 +12,39 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
-    /// Initialize the contract with a trusted oracle address.
-    pub fn initialize(env: Env, oracle: Address) {
+    /// Initialize the contract with a trusted oracle address and an admin.
+    pub fn initialize(env: Env, oracle: Address, admin: Address) {
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Oracle, &oracle);
+        env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
+        env.storage().instance().set(&DataKey::Paused, &false);
+    }
+
+    /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
+    pub fn pause(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &true);
+        Ok(())
+    }
+
+    /// Unpause the contract — admin only.
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &false);
+        Ok(())
     }
 
     /// Create a new match. Both players must call `deposit` before the game starts.
@@ -33,6 +59,9 @@ impl EscrowContract {
     ) -> Result<u64, Error> {
         player1.require_auth();
 
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            return Err(Error::ContractPaused);
+        }
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -61,9 +90,16 @@ impl EscrowContract {
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
+        // Guard against u64 overflow in release mode where wrapping would occur silently
+        let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage()
             .instance()
-            .set(&DataKey::MatchCount, &(id + 1));
+            .set(&DataKey::MatchCount, &next_id);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("created")),
+            (id, m.player1, m.player2, stake_amount),
+        );
 
         Ok(id)
     }
@@ -71,6 +107,10 @@ impl EscrowContract {
     /// Player deposits their stake into escrow.
     pub fn deposit(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
         player.require_auth();
+
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            return Err(Error::ContractPaused);
+        }
 
         let mut m: Match = env
             .storage()
@@ -116,6 +156,10 @@ impl EscrowContract {
 
     /// Oracle submits the verified match result and triggers payout.
     pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            return Err(Error::ContractPaused);
+        }
+
         let oracle: Address = env
             .storage()
             .instance()
@@ -149,6 +193,10 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
+
+        let topics = (Symbol::new(&env, "match"), symbol_short!("completed"));
+        env.events().publish(topics, (match_id, winner));
+
         Ok(())
     }
 
@@ -180,6 +228,12 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("cancelled")),
+            match_id,
+        );
+
         Ok(())
     }
 
