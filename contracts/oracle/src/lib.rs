@@ -7,6 +7,9 @@ use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol};
 use types::{DataKey, MatchResult, ResultEntry};
 
+/// ~30 days at 5s/ledger.
+const MATCH_TTL_LEDGERS: u32 = 518_400;
+
 #[contract]
 pub struct OracleContract;
 
@@ -45,6 +48,11 @@ impl OracleContract {
                 result: result.clone(),
             },
         );
+        env.storage().persistent().extend_ttl(
+            &DataKey::Result(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
 
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("result")),
@@ -72,7 +80,7 @@ impl OracleContract {
 mod tests {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Events},
+        testutils::{storage::Persistent as _, Address as _, Events},
         Address, Env, IntoVal, String, Symbol,
     };
 
@@ -154,5 +162,24 @@ mod tests {
         client.initialize(&admin);
         // second initialize should panic
         client.initialize(&admin);
+    }
+
+    #[test]
+    fn test_ttl_extended_on_submit_result() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+
+        let ttl = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get_ttl(&DataKey::Result(0u64))
+        });
+        assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
     }
 }
