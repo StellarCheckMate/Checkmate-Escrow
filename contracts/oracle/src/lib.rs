@@ -35,9 +35,13 @@ impl OracleContract {
             return Err(Error::AlreadySubmitted);
         }
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::Result(match_id), &ResultEntry { game_id, result: result.clone() });
+        env.storage().persistent().set(
+            &DataKey::Result(match_id),
+            &ResultEntry {
+                game_id,
+                result: result.clone(),
+            },
+        );
 
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("result")),
@@ -64,7 +68,10 @@ impl OracleContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::{Address as _, Events}, Address, Env, IntoVal, String, Symbol};
+    use soroban_sdk::{
+        testutils::{Address as _, Events},
+        Address, Env, IntoVal, String, Symbol,
+    };
 
     fn setup() -> (Env, Address) {
         let env = Env::default();
@@ -109,7 +116,9 @@ mod tests {
             Symbol::new(&env, "oracle").into_val(&env),
             symbol_short!("result").into_val(&env),
         ];
-        let matched = events.iter().find(|(_, topics, _)| *topics == expected_topics);
+        let matched = events
+            .iter()
+            .find(|(_, topics, _)| *topics == expected_topics);
         assert!(matched.is_some(), "oracle result event not emitted");
 
         let (_, _, data) = matched.unwrap();
