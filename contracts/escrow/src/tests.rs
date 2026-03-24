@@ -71,7 +71,7 @@ fn test_deposit_and_activate() {
 
 #[test]
 fn test_payout_winner() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -86,7 +86,7 @@ fn test_payout_winner() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     // player1 started with 1000, deposited 100, won the 200 pot → 1100
     assert_eq!(token_client.balance(&player1), 1100);
@@ -95,7 +95,7 @@ fn test_payout_winner() {
 
 #[test]
 fn test_draw_refund() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -110,7 +110,7 @@ fn test_draw_refund() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Draw);
+    client.submit_result(&id, &Winner::Draw, &oracle);
 
     assert_eq!(token_client.balance(&player1), 1000);
     assert_eq!(token_client.balance(&player2), 1000);
@@ -174,7 +174,7 @@ fn test_create_match_emits_event() {
 
 #[test]
 fn test_submit_result_emits_event() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -188,7 +188,7 @@ fn test_submit_result_emits_event() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -313,7 +313,6 @@ fn test_create_match_with_zero_stake_fails() {
 fn test_player2_cancel_pending_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    let token_client = TokenClient::new(&env, &token);
 
     let id = client.create_match(
         &player1,
@@ -334,7 +333,6 @@ fn test_player2_cancel_pending_match() {
 fn test_player2_cancel_refunds_both_players() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    let token_client = TokenClient::new(&env, &token);
 
     let id = client.create_match(
         &player1,
@@ -377,6 +375,41 @@ fn test_player2_cancel_only_player2_deposited() {
 
     assert_eq!(token_client.balance(&player2), 1000);
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+#[test]
+fn test_non_oracle_cannot_submit_result() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_unauth_oracle"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Attempt submit_result from a random non-oracle address
+    let impostor = Address::generate(&env);
+    let result = client.try_submit_result(&id, &Winner::Player1, &impostor);
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
+        "expected Unauthorized when non-oracle calls submit_result"
+    );
+
+    // Match must remain Active — no state change
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Funds must remain in escrow
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 900);
 }
 
 #[test]
