@@ -164,6 +164,12 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("deposited")),
+            (match_id, player),
+        );
+
         Ok(())
     }
 
