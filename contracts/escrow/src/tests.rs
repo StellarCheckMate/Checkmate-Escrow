@@ -139,6 +139,38 @@ fn test_cancel_refunds_deposit() {
 }
 
 #[test]
+fn test_create_match_emits_event() {
+    let (env, contract_id, _oracle, player1, player2, token) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_ev2"),
+        &Platform::Lichess,
+    );
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("created").into_val(&env),
+    ];
+    let matched = events.iter().find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match created event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_id, ev_p1, ev_p2, ev_stake): (u64, Address, Address, i128) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+    assert_eq!(ev_p1, player1);
+    assert_eq!(ev_p2, player2);
+    assert_eq!(ev_stake, 100);
+}
+
+#[test]
 fn test_submit_result_emits_event() {
     let (env, contract_id, _oracle, player1, player2, token) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
