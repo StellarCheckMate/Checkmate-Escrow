@@ -173,6 +173,39 @@ fn test_create_match_emits_event() {
 }
 
 #[test]
+fn test_deposit_emits_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_dep_ev"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("deposited").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "deposit event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_id, ev_player): (u64, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+    assert_eq!(ev_player, player1);
+}
+
+#[test]
 fn test_submit_result_emits_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
