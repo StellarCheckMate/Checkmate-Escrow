@@ -33,6 +33,10 @@ impl EscrowContract {
     ) -> Result<u64, Error> {
         player1.require_auth();
 
+        if stake_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
         let id: u64 = env
             .storage()
             .instance()

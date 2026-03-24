@@ -10,4 +10,5 @@ pub enum Error {
     InvalidState = 5,
     AlreadyExists = 6,
     AlreadyInitialized = 7,
+    InvalidAmount = 8,
 }
