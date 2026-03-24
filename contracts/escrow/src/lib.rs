@@ -57,9 +57,11 @@ impl EscrowContract {
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
+        // Guard against u64 overflow in release mode where wrapping would occur silently
+        let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage()
             .instance()
-            .set(&DataKey::MatchCount, &(id + 1));
+            .set(&DataKey::MatchCount, &next_id);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
