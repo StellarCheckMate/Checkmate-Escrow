@@ -61,6 +61,11 @@ impl EscrowContract {
             .instance()
             .set(&DataKey::MatchCount, &(id + 1));
 
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("created")),
+            (id, m.player1, m.player2, stake_amount),
+        );
+
         Ok(id)
     }
 
