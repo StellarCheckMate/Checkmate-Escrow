@@ -10,4 +10,6 @@ pub enum Error {
     InvalidState = 5,
     AlreadyExists = 6,
     AlreadyInitialized = 7,
+    Overflow = 8,
+    ContractPaused = 9,
 }
