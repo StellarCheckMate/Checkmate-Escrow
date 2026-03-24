@@ -223,7 +223,8 @@ impl EscrowContract {
     }
 
     /// Cancel a pending match and refund any deposits.
-    /// Either player can cancel a pending match.
+    /// - If only the caller has deposited (or neither has), the caller alone can cancel.
+    /// - If the other player has also deposited, both players must authorise the cancellation.
     pub fn cancel_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
         let mut m: Match = env
             .storage()
@@ -235,7 +236,6 @@ impl EscrowContract {
             return Err(Error::InvalidState);
         }
 
-        // Either player1 or player2 can cancel a pending match
         let is_p1 = caller == m.player1;
         let is_p2 = caller == m.player2;
 
@@ -244,6 +244,13 @@ impl EscrowContract {
         }
 
         caller.require_auth();
+
+        // If the other player has deposited, they must also consent to the cancellation.
+        let other_deposited = if is_p1 { m.player2_deposited } else { m.player1_deposited };
+        if other_deposited {
+            let other = if is_p1 { m.player2.clone() } else { m.player1.clone() };
+            other.require_auth();
+        }
 
         let client = token::Client::new(&env, &m.token);
 

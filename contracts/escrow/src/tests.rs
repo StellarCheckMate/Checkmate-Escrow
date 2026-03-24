@@ -353,6 +353,37 @@ fn test_player2_cancel_refunds_both_players() {
 }
 
 #[test]
+fn test_cancel_requires_both_auth_when_other_player_deposited() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_mutual_cancel"),
+        &Platform::Lichess,
+    );
+
+    // Only player2 deposits
+    client.deposit(&id, &player2);
+
+    // player1 tries to cancel unilaterally — must fail because player2 has deposited
+    env.set_auths(&[]);
+    let result = client.try_cancel_match(&id, &player1);
+    assert!(result.is_err(), "player1 should not cancel without player2 consent when player2 has deposited");
+
+    // Reset auths and cancel with both players consenting (mock_all_auths covers both)
+    env.mock_all_auths();
+    client.cancel_match(&id, &player1);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+    assert_eq!(token_client.balance(&player2), 1000);
+}
+
+#[test]
 fn test_player2_cancel_only_player2_deposited() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
