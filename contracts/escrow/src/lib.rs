@@ -201,7 +201,8 @@ impl EscrowContract {
     }
 
     /// Cancel a pending match and refund any deposits.
-    pub fn cancel_match(env: Env, match_id: u64) -> Result<(), Error> {
+    /// Either player can cancel a pending match.
+    pub fn cancel_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
         let mut m: Match = env
             .storage()
             .persistent()
@@ -212,8 +213,15 @@ impl EscrowContract {
             return Err(Error::InvalidState);
         }
 
-        // Only player1 (creator) can cancel
-        m.player1.require_auth();
+        // Either player1 or player2 can cancel a pending match
+        let is_p1 = caller == m.player1;
+        let is_p2 = caller == m.player2;
+
+        if !is_p1 && !is_p2 {
+            return Err(Error::Unauthorized);
+        }
+
+        caller.require_auth();
 
         let client = token::Client::new(&env, &m.token);
 
