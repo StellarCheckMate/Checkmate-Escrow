@@ -983,3 +983,29 @@ fn test_create_match_with_oversized_game_id_fails() {
         "create_match must reject game_id longer than 64 characters"
     );
 }
+
+// ── deposit blocked when contract is paused ───────────────────────────────────
+
+#[test]
+fn test_deposit_blocked_when_paused() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "paused_deposit_game"),
+        &Platform::Lichess,
+    );
+
+    client.pause();
+
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::ContractPaused)),
+        "deposit must return ContractPaused when the contract is paused"
+    );
+}
