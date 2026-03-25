@@ -38,10 +38,8 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("paused")),
-            (),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "admin"), symbol_short!("paused")), ());
         Ok(())
     }
 
@@ -54,10 +52,8 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
-        env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("unpaused")),
-            (),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "admin"), symbol_short!("unpaused")), ());
         Ok(())
     }
 
@@ -192,8 +188,18 @@ impl EscrowContract {
     }
 
     /// Oracle submits the verified match result and triggers payout.
-    pub fn submit_result(env: Env, match_id: u64, winner: Winner, caller: Address) -> Result<(), Error> {
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+    pub fn submit_result(
+        env: Env,
+        match_id: u64,
+        winner: Winner,
+        caller: Address,
+    ) -> Result<(), Error> {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             return Err(Error::ContractPaused);
         }
 
@@ -309,10 +315,7 @@ impl EscrowContract {
             return Err(Error::InvalidState);
         }
 
-        let elapsed = env
-            .ledger()
-            .sequence()
-            .saturating_sub(m.created_ledger);
+        let elapsed = env.ledger().sequence().saturating_sub(m.created_ledger);
 
         if elapsed < MATCH_TIMEOUT_LEDGERS {
             return Err(Error::MatchNotExpired);
