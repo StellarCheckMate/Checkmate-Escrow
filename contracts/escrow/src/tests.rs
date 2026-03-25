@@ -878,6 +878,19 @@ fn test_unpause_emits_event() {
 }
 
 #[test]
+fn test_duplicate_game_id_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "unique_game_123");
+
+    client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+
+    let result = client.try_create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+    assert_eq!(result, Err(Ok(Error::DuplicateGameId)));
+}
+
+#[test]
 fn test_deposit_into_cancelled_match_returns_match_cancelled() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
