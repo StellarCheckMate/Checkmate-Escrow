@@ -13,4 +13,5 @@ pub enum Error {
     Overflow = 8,
     ContractPaused = 9,
     InvalidAmount = 10,
+    MatchNotExpired = 11,
 }

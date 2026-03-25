@@ -10,6 +10,9 @@ use types::{DataKey, Match, MatchState, Platform, Winner};
 /// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
 
+/// ~24 hours at 5s/ledger. Pending matches not fully funded within this window can be expired.
+const MATCH_TIMEOUT_LEDGERS: u32 = 17_280;
+
 #[contract]
 pub struct EscrowContract;
 
@@ -287,6 +290,55 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("cancelled")),
+            match_id,
+        );
+
+        Ok(())
+    }
+
+    /// Expire a pending match that has not been fully funded within MATCH_TIMEOUT_LEDGERS.
+    /// Anyone can call this; funds are returned to whoever deposited.
+    pub fn expire_match(env: Env, match_id: u64) -> Result<(), Error> {
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::Pending {
+            return Err(Error::InvalidState);
+        }
+
+        let elapsed = env
+            .ledger()
+            .sequence()
+            .saturating_sub(m.created_ledger);
+
+        if elapsed < MATCH_TIMEOUT_LEDGERS {
+            return Err(Error::MatchNotExpired);
+        }
+
+        let client = token::Client::new(&env, &m.token);
+
+        if m.player1_deposited {
+            client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+        }
+        if m.player2_deposited {
+            client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+        }
+
+        m.state = MatchState::Cancelled;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("expired")),
             match_id,
         );
 
