@@ -337,8 +337,10 @@ impl EscrowContract {
         if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
             return Ok(0);
         }
-        let deposited = m.player1_deposited as i128 + m.player2_deposited as i128;
-        Ok(deposited * m.stake_amount)
+        // Count depositors explicitly — avoids fragile bool-to-integer casting.
+        let depositors: i128 = if m.player1_deposited { 1 } else { 0 }
+            + if m.player2_deposited { 1 } else { 0 };
+        Ok(depositors * m.stake_amount)
     }
 }
 
