@@ -35,6 +35,10 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("paused")),
+            (),
+        );
         Ok(())
     }
 
@@ -47,6 +51,10 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("unpaused")),
+            (),
+        );
         Ok(())
     }
 
