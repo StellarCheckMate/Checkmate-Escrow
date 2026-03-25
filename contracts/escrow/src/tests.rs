@@ -879,6 +879,50 @@ fn test_cancel_completed_match_returns_invalid_state() {
     assert_eq!(token_client.balance(&player2), 900);
 }
 
+// ── deposit on a Completed match ─────────────────────────────────────────────
+
+/// Complete a match via submit_result, then attempt to deposit into it.
+/// deposit() guards on `m.state != MatchState::Pending` and must return
+/// `Error::InvalidState`. Token balances must remain unchanged after the
+/// failed deposit attempt.
+#[test]
+fn test_deposit_into_completed_match_returns_invalid_state() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_deposit_game"),
+        &Platform::Lichess,
+    );
+
+    // Both players deposit → match becomes Active
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Oracle submits result → match transitions to Completed, payout executed
+    client.submit_result(&id, &Winner::Player1, &oracle);
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+    assert_eq!(token_client.balance(&player1), 1100);
+    assert_eq!(token_client.balance(&player2), 900);
+
+    // Attempting to deposit into a Completed match must be rejected
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "deposit into a Completed match must return InvalidState"
+    );
+
+    // Balances must be untouched after the failed deposit
+    assert_eq!(token_client.balance(&player1), 1100);
+    assert_eq!(token_client.balance(&player2), 900);
+}
+
 // ── From main: pause / unpause emit events ───────────────────────────────────
 
 #[test]
