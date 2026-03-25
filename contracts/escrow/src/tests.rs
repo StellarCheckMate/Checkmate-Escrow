@@ -1112,3 +1112,28 @@ fn test_deposit_blocked_when_paused() {
         "deposit must return ContractPaused when the contract is paused"
     );
 }
+
+// ── submit_result blocked when contract is paused ────────────────────────────
+
+#[test]
+fn test_submit_result_blocked_when_paused() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "paused_submit_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    client.pause();
+
+    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
