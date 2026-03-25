@@ -327,6 +327,14 @@
                   "map": [
                     {
                       "key": {
+                        "symbol": "created_ledger"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "game_id"
                       },
                       "val": {

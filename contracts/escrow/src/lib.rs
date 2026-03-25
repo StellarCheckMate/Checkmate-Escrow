@@ -103,6 +103,7 @@ impl EscrowContract {
             state: MatchState::Pending,
             player1_deposited: false,
             player2_deposited: false,
+            created_ledger: env.ledger().sequence(),
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
