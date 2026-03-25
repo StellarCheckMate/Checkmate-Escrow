@@ -836,6 +836,29 @@ fn test_cancel_only_player2_deposited_refunds_player2() {
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 }
 
+/// Cancel match immediately after creation with no deposits — escrow balance must be 0.
+#[test]
+fn test_get_escrow_balance_returns_zero_after_cancel_with_no_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "no_deposit_cancel"),
+        &Platform::Lichess,
+    );
+
+    // Cancel immediately without any deposits
+    client.cancel_match(&id, &player1);
+
+    // Escrow balance should be 0 (no deposits were made)
+    assert_eq!(client.get_escrow_balance(&id), 0);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
 // ── From main: pause / unpause emit events ───────────────────────────────────
 
 #[test]
