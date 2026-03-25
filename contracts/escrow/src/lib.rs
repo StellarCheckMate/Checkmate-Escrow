@@ -162,6 +162,10 @@ impl EscrowContract {
 
         if m.player1_deposited && m.player2_deposited {
             m.state = MatchState::Active;
+            env.events().publish(
+                (Symbol::new(&env, "match"), symbol_short!("activated")),
+                match_id,
+            );
         }
 
         env.storage()
