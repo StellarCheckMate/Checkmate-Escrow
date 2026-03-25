@@ -318,6 +318,9 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+        if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
+            return Ok(0);
+        }
         let deposited = m.player1_deposited as i128 + m.player2_deposited as i128;
         Ok(deposited * m.stake_amount)
     }

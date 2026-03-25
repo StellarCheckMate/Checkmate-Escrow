@@ -876,3 +876,24 @@ fn test_unpause_emits_event() {
         "unpaused event not emitted"
     );
 }
+
+#[test]
+fn test_escrow_balance_zero_after_payout() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "payout_drain"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1, &oracle);
+
+    assert_eq!(client.get_escrow_balance(&id), 0);
+}
