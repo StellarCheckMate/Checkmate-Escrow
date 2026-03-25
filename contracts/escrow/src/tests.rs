@@ -26,6 +26,9 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
 
+    // Add the token to the allowlist
+    client.add_allowed_token(&token_addr);
+
     (env, contract_id, oracle, player1, player2, token_addr, admin)
 }
 
@@ -520,4 +523,163 @@ fn test_ttl_extended_on_cancel() {
         env.storage().persistent().get_ttl(&DataKey::Match(id))
     });
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+}
+
+// ============== Token Allowlist Tests ==============
+
+#[test]
+fn test_add_allowed_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    // Token should not be allowed initially
+    assert!(!client.is_token_allowed(&token));
+
+    // Add token to allowlist
+    client.add_allowed_token(&token);
+
+    // Token should now be allowed
+    assert!(client.is_token_allowed(&token));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_add_allowed_token_duplicate_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    // Add token to allowlist
+    client.add_allowed_token(&token);
+
+    // Adding the same token again should fail
+    client.add_allowed_token(&token);
+}
+
+#[test]
+fn test_remove_allowed_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    // Add token to allowlist
+    client.add_allowed_token(&token);
+    assert!(client.is_token_allowed(&token));
+
+    // Remove token from allowlist
+    client.remove_allowed_token(&token);
+
+    // Token should no longer be allowed
+    assert!(!client.is_token_allowed(&token));
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_create_match_with_disallowed_token_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+
+    // Create a token but DO NOT add it to allowlist
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = token_id.address();
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    // This should fail because token is not in allowlist
+    let _id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token_addr,
+        &String::from_str(&env, "disallowed_token_game"),
+        &Platform::Lichess,
+    );
+}
+
+#[test]
+fn test_create_match_with_allowed_token_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = token_id.address();
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    asset_client.mint(&player1, &1000);
+    asset_client.mint(&player2, &1000);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    // Add token to allowlist
+    client.add_allowed_token(&token_addr);
+
+    // Now create_match should succeed
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token_addr,
+        &String::from_str(&env, "allowed_token_game"),
+        &Platform::Lichess,
+    );
+
+    assert_eq!(id, 0);
+}
+
+#[test]
+fn test_non_admin_cannot_add_allowed_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    // Store auths before the call
+    let auths_before = env.auths().len();
+
+    // Try to add token without admin auth - should fail
+    let result = client.try_add_allowed_token(&token);
+
+    // The call should fail because only admin can add tokens
+    assert!(result.is_err());
 }
