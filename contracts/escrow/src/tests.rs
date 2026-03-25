@@ -399,6 +399,36 @@ fn test_admin_unpause_allows_create_match() {
 }
 
 #[test]
+fn test_admin_pause_blocks_submit_result() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create and fund a match
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "paused_submit_game"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Pause the contract
+    client.pause();
+
+    // Attempt to submit result on paused contract
+    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
+    assert_eq!(
+        result,
+        Err(Ok(Error::ContractPaused)),
+        "submit_result must be blocked when contract is paused"
+    );
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #10)")]
 fn test_create_match_with_zero_stake_fails() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
