@@ -379,7 +379,7 @@ fn test_admin_pause_blocks_create_match() {
         &String::from_str(&env, "paused_game"),
         &Platform::Lichess,
     );
-    assert!(result.is_err());
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
 #[test]
