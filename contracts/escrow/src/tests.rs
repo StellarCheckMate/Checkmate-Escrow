@@ -594,3 +594,172 @@ fn test_ttl_extended_on_cancel() {
     });
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
+
+// ── Task 1: non-admin cannot call pause / unpause ────────────────────────────
+
+#[test]
+fn test_non_admin_cannot_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    // Replace mock_all_auths with a targeted mock that only authorises non_admin,
+    // so admin.require_auth() inside pause() will not find a matching authorisation
+    // and the call must fail.
+    use soroban_sdk::testutils::MockAuth;
+    use soroban_sdk::testutils::MockAuthInvoke;
+    env.set_auths(&[MockAuth {
+        address: &non_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }
+    .into()]);
+
+    let result = client.try_pause();
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to call pause()"
+    );
+}
+
+#[test]
+fn test_non_admin_cannot_unpause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+    // Pause first (admin is mocked via mock_all_auths at this point)
+    client.pause();
+
+    use soroban_sdk::testutils::MockAuth;
+    use soroban_sdk::testutils::MockAuthInvoke;
+    env.set_auths(&[MockAuth {
+        address: &non_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "unpause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }
+    .into()]);
+
+    let result = client.try_unpause();
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to call unpause()"
+    );
+}
+
+// ── Task 2: cancel_match refund scenarios ────────────────────────────────────
+
+/// Both players deposit → match becomes Active → cancel must return InvalidState.
+/// (This already exists as test_cancel_active_match_fails_with_invalid_state and
+///  test_player2_cancel_refunds_both_players, but we add an explicit named test
+///  per the task description.)
+#[test]
+fn test_cancel_both_deposited_active_returns_invalid_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "both_dep_cancel"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Match is now Active — cancel must be rejected
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+    let result = client.try_cancel_match(&id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "cancelling an Active match must return InvalidState"
+    );
+
+    // Funds must remain in escrow
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 900);
+}
+
+/// Only player1 deposits, then cancels — player1 is refunded, player2 unchanged.
+#[test]
+fn test_cancel_only_player1_deposited_refunds_player1() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "p1_only_cancel"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    // player2 has NOT deposited
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 1000);
+
+    client.cancel_match(&id, &player1);
+
+    // player1 gets their stake back; player2 balance is untouched
+    assert_eq!(token_client.balance(&player1), 1000, "player1 should be fully refunded");
+    assert_eq!(token_client.balance(&player2), 1000, "player2 balance must not change");
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+/// Only player2 deposits, then cancels — player2 is refunded, player1 unchanged.
+#[test]
+fn test_cancel_only_player2_deposited_refunds_player2() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "p2_only_cancel2"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player2);
+    // player1 has NOT deposited
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&player2), 900);
+
+    client.cancel_match(&id, &player2);
+
+    // player2 gets their stake back; player1 balance is untouched
+    assert_eq!(token_client.balance(&player2), 1000, "player2 should be fully refunded");
+    assert_eq!(token_client.balance(&player1), 1000, "player1 balance must not change");
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
