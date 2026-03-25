@@ -142,7 +142,10 @@ fn test_deposit_emits_activated_event() {
     let matched = events
         .iter()
         .find(|(_, topics, _)| *topics == activated_topics);
-    assert!(matched.is_some(), "match activated event not emitted on second deposit");
+    assert!(
+        matched.is_some(),
+        "match activated event not emitted on second deposit"
+    );
 
     let (_, _, data) = matched.unwrap();
     let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
@@ -859,8 +862,16 @@ fn test_cancel_only_player1_deposited_refunds_player1() {
     client.cancel_match(&id, &player1);
 
     // player1 gets their stake back; player2 balance is untouched
-    assert_eq!(token_client.balance(&player1), 1000, "player1 should be fully refunded");
-    assert_eq!(token_client.balance(&player2), 1000, "player2 balance must not change");
+    assert_eq!(
+        token_client.balance(&player1),
+        1000,
+        "player1 should be fully refunded"
+    );
+    assert_eq!(
+        token_client.balance(&player2),
+        1000,
+        "player2 balance must not change"
+    );
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 }
 
@@ -888,8 +899,16 @@ fn test_cancel_only_player2_deposited_refunds_player2() {
     client.cancel_match(&id, &player2);
 
     // player2 gets their stake back; player1 balance is untouched
-    assert_eq!(token_client.balance(&player2), 1000, "player2 should be fully refunded");
-    assert_eq!(token_client.balance(&player1), 1000, "player1 balance must not change");
+    assert_eq!(
+        token_client.balance(&player2),
+        1000,
+        "player2 should be fully refunded"
+    );
+    assert_eq!(
+        token_client.balance(&player1),
+        1000,
+        "player1 balance must not change"
+    );
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 }
 
@@ -932,7 +951,9 @@ fn test_pause_emits_event() {
         soroban_sdk::symbol_short!("paused").into_val(&env),
     ];
     assert!(
-        events.iter().any(|(_, topics, _)| topics == expected_topics),
+        events
+            .iter()
+            .any(|(_, topics, _)| topics == expected_topics),
         "paused event not emitted"
     );
 }
@@ -952,7 +973,9 @@ fn test_unpause_emits_event() {
         soroban_sdk::symbol_short!("unpaused").into_val(&env),
     ];
     assert!(
-        events.iter().any(|(_, topics, _)| topics == expected_topics),
+        events
+            .iter()
+            .any(|(_, topics, _)| topics == expected_topics),
         "unpaused event not emitted"
     );
 }
