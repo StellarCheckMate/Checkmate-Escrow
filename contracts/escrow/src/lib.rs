@@ -62,7 +62,12 @@ impl EscrowContract {
     ) -> Result<u64, Error> {
         player1.require_auth();
 
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             return Err(Error::ContractPaused);
         }
         if stake_amount <= 0 {
@@ -100,9 +105,7 @@ impl EscrowContract {
         );
         // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
-        env.storage()
-            .instance()
-            .set(&DataKey::MatchCount, &next_id);
+        env.storage().instance().set(&DataKey::MatchCount, &next_id);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -116,7 +119,12 @@ impl EscrowContract {
     pub fn deposit(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
         player.require_auth();
 
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             return Err(Error::ContractPaused);
         }
 

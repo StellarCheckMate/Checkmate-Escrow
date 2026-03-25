@@ -26,7 +26,15 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
 
-    (env, contract_id, oracle, player1, player2, token_addr, admin)
+    (
+        env,
+        contract_id,
+        oracle,
+        player1,
+        player2,
+        token_addr,
+        admin,
+    )
 }
 
 #[test]
@@ -46,6 +54,16 @@ fn test_create_match() {
     assert_eq!(id, 0);
     let m = client.get_match(&id);
     assert_eq!(m.state, MatchState::Pending);
+}
+
+#[test]
+fn test_get_match_returns_match_not_found_for_unknown_id() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_get_match(&999);
+
+    assert!(matches!(result, Err(Ok(Error::MatchNotFound))));
 }
 
 #[test]

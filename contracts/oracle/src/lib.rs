@@ -176,9 +176,7 @@ mod tests {
         );
 
         let ttl = env.as_contract(&contract_id, || {
-            env.storage()
-                .persistent()
-                .get_ttl(&DataKey::Result(0u64))
+            env.storage().persistent().get_ttl(&DataKey::Result(0u64))
         });
         assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
     }
