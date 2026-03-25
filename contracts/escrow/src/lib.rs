@@ -168,7 +168,7 @@ impl EscrowContract {
     }
 
     /// Oracle submits the verified match result and triggers payout.
-    pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+    pub fn submit_result(env: Env, match_id: u64, winner: Winner, caller: Address) -> Result<(), Error> {
         if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
             return Err(Error::ContractPaused);
         }
@@ -178,7 +178,11 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::Oracle)
             .ok_or(Error::Unauthorized)?;
-        oracle.require_auth();
+
+        if caller != oracle {
+            return Err(Error::Unauthorized);
+        }
+        caller.require_auth();
 
         let mut m: Match = env
             .storage()
