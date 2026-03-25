@@ -70,6 +70,47 @@ fn test_deposit_and_activate() {
 }
 
 #[test]
+fn test_deposit_emits_activated_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_activated"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    // No activated event yet — only one deposit
+    let events_after_p1 = env.events().all();
+    let activated_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("activated").into_val(&env),
+    ];
+    assert!(
+        !events_after_p1
+            .iter()
+            .any(|(_, topics, _)| topics == activated_topics),
+        "activated event must not fire after first deposit"
+    );
+
+    client.deposit(&id, &player2);
+    let events = env.events().all();
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == activated_topics);
+    assert!(matched.is_some(), "match activated event not emitted on second deposit");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+}
+
+#[test]
 fn test_payout_winner() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
