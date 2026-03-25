@@ -194,6 +194,10 @@ impl EscrowContract {
             return Err(Error::InvalidState);
         }
 
+        if m.game_id != game_id {
+            return Err(Error::GameIdMismatch);
+        }
+
         let client = token::Client::new(&env, &m.token);
         let pot = m.stake_amount * 2;
 
