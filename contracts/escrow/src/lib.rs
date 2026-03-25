@@ -215,6 +215,10 @@ impl EscrowContract {
             return Err(Error::InvalidState);
         }
 
+        if !m.player1_deposited || !m.player2_deposited {
+            return Err(Error::NotFunded);
+        }
+
         let client = token::Client::new(&env, &m.token);
         let pot = m.stake_amount * 2;
 

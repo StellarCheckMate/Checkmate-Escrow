@@ -905,3 +905,55 @@ fn test_get_escrow_balance_stages() {
     client.deposit(&id, &player2);
     assert_eq!(client.get_escrow_balance(&id), 2 * stake);
 }
+
+// ── Defensive: submit_result with insufficient escrow balance ────────────────
+
+#[test]
+fn test_submit_result_returns_not_funded_when_deposits_missing() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = token_id.address();
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    asset_client.mint(&player1, &1000);
+    asset_client.mint(&player2, &1000);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token_addr,
+        &String::from_str(&env, "not_funded_game"),
+        &Platform::Lichess,
+    );
+
+    // Manually force the match into Active state without going through deposit,
+    // simulating a state inconsistency where state == Active but deposits are missing.
+    env.as_contract(&contract_id, || {
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(id))
+            .unwrap();
+        m.state = MatchState::Active;
+        // player1_deposited and player2_deposited remain false
+        env.storage().persistent().set(&DataKey::Match(id), &m);
+    });
+
+    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
+    assert_eq!(
+        result,
+        Err(Ok(Error::NotFunded)),
+        "submit_result must return NotFunded when deposits are missing despite Active state"
+    );
+}
