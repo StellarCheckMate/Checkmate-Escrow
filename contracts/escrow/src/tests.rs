@@ -89,7 +89,7 @@ fn test_deposit_and_activate() {
 
 #[test]
 fn test_payout_winner() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -104,16 +104,15 @@ fn test_payout_winner() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
-    // player1 started with 1000, deposited 100, won the 200 pot → 1100
     assert_eq!(token_client.balance(&player1), 1100);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 }
 
 #[test]
 fn test_draw_refund() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -128,7 +127,7 @@ fn test_draw_refund() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Draw);
+    client.submit_result(&id, &Winner::Draw, &oracle);
 
     assert_eq!(token_client.balance(&player1), 1000);
     assert_eq!(token_client.balance(&player2), 1000);
@@ -192,7 +191,7 @@ fn test_create_match_emits_event() {
 
 #[test]
 fn test_submit_result_emits_event() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -206,7 +205,7 @@ fn test_submit_result_emits_event() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -316,7 +315,6 @@ fn test_create_match_with_zero_stake_fails() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    // This should fail because stake_amount is 0
     let _id = client.create_match(
         &player1,
         &player2,
@@ -341,7 +339,6 @@ fn test_player2_cancel_pending_match() {
         &Platform::Lichess,
     );
 
-    // Player2 cancels the pending match
     client.cancel_match(&id, &player2);
 
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
@@ -361,11 +358,9 @@ fn test_player2_cancel_refunds_both_players() {
         &Platform::Lichess,
     );
 
-    // Both players deposit - this changes state to Active
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    // Now the match is Active, not Pending - cancel should fail with InvalidState
     let result = client.try_cancel_match(&id, &player2);
     assert!(result.is_err());
 }
@@ -385,14 +380,42 @@ fn test_player2_cancel_only_player2_deposited() {
         &Platform::Lichess,
     );
 
-    // Only player2 deposits (player1 abandoned)
     client.deposit(&id, &player2);
-
-    // Player2 cancels and gets refund
     client.cancel_match(&id, &player2);
 
     assert_eq!(token_client.balance(&player2), 1000);
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+#[test]
+fn test_non_oracle_cannot_submit_result() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_unauth_oracle"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let impostor = Address::generate(&env);
+    let result = client.try_submit_result(&id, &Winner::Player1, &impostor);
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
+        "expected Unauthorized when non-oracle calls submit_result"
+    );
+
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 900);
 }
 
 #[test]
@@ -410,14 +433,11 @@ fn test_cancel_active_match_fails_with_invalid_state() {
         &Platform::Lichess,
     );
 
-    // Both players deposit — transitions match to Active
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    // Verify match is Active before attempting cancel
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
-    // Attempt to cancel an Active match — must return InvalidState (error code #5)
     let result = client.try_cancel_match(&id, &player1);
     assert_eq!(
         result,
@@ -425,10 +445,7 @@ fn test_cancel_active_match_fails_with_invalid_state() {
         "expected InvalidState error when cancelling an Active match"
     );
 
-    // Match must still be Active — no state change
     assert_eq!(client.get_match(&id).state, MatchState::Active);
-
-    // Funds must remain in escrow — balances unchanged from post-deposit state
     assert_eq!(token_client.balance(&player1), 900);
     assert_eq!(token_client.balance(&player2), 900);
 }
@@ -448,10 +465,7 @@ fn test_unauthorized_player_cannot_cancel() {
         &Platform::Lichess,
     );
 
-    // Create a third party who is not part of the match
     let unauthorized = Address::generate(&env);
-
-    // This should panic with Unauthorized error
     client.cancel_match(&id, &unauthorized);
 }
 
@@ -498,7 +512,7 @@ fn test_ttl_extended_on_deposit() {
 
 #[test]
 fn test_ttl_extended_on_submit_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -511,7 +525,7 @@ fn test_ttl_extended_on_submit_result() {
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player2);
+    client.submit_result(&id, &Winner::Player2, &oracle);
 
     let ttl = env.as_contract(&contract_id, || {
         env.storage().persistent().get_ttl(&DataKey::Match(id))
