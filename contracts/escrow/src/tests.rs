@@ -150,6 +150,33 @@ fn test_deposit_emits_activated_event() {
 }
 
 #[test]
+fn test_deposit_into_cancelled_match_returns_invalid_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancelled_deposit_test"),
+        &Platform::Lichess,
+    );
+
+    // Cancel the match before any deposits
+    client.cancel_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+
+    // Attempt to deposit into the cancelled match
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "deposit into cancelled match must return InvalidState"
+    );
+}
+
+#[test]
 fn test_payout_winner() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
