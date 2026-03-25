@@ -876,3 +876,45 @@ fn test_unpause_emits_event() {
         "unpaused event not emitted"
     );
 }
+
+#[test]
+fn test_deposit_into_cancelled_match_returns_match_cancelled() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancelled_deposit"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id, &player1);
+
+    let result = client.try_deposit(&id, &player2);
+    assert_eq!(result, Err(Ok(Error::MatchCancelled)));
+}
+
+#[test]
+fn test_deposit_into_completed_match_returns_match_completed() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_deposit"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1, &oracle);
+
+    let result = client.try_deposit(&id, &player2);
+    assert_eq!(result, Err(Ok(Error::MatchCompleted)));
+}

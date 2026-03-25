@@ -143,6 +143,12 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
+        if m.state == MatchState::Cancelled {
+            return Err(Error::MatchCancelled);
+        }
+        if m.state == MatchState::Completed {
+            return Err(Error::MatchCompleted);
+        }
         if m.state != MatchState::Pending {
             return Err(Error::InvalidState);
         }
