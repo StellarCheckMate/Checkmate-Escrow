@@ -1043,11 +1043,7 @@ fn test_submit_result_returns_not_funded_when_deposits_missing() {
     // Manually force the match into Active state without going through deposit,
     // simulating a state inconsistency where state == Active but deposits are missing.
     env.as_contract(&contract_id, || {
-        let mut m: Match = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Match(id))
-            .unwrap();
+        let mut m: Match = env.storage().persistent().get(&DataKey::Match(id)).unwrap();
         m.state = MatchState::Active;
         // player1_deposited and player2_deposited remain false
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1069,7 +1065,10 @@ fn test_create_match_with_oversized_game_id_fails() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // 65 characters — one over the MAX_GAME_ID_LEN of 64
-    let oversized_id = String::from_str(&env, "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffffffffff1");
+    let oversized_id = String::from_str(
+        &env,
+        "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffffffffff1",
+    );
 
     let result = client.try_create_match(
         &player1,
