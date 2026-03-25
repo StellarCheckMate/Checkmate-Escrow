@@ -95,6 +95,16 @@ mod tests {
     }
 
     #[test]
+    fn test_has_result_returns_false_before_submission() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // On a fresh oracle contract, has_result should return false for any match_id
+        assert!(!client.has_result(&0u64));
+        assert!(!client.has_result(&999u64));
+    }
+
+    #[test]
     fn test_submit_and_get_result() {
         let (env, contract_id) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
