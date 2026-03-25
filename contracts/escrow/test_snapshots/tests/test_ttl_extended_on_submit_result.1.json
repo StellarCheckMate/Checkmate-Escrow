@@ -221,14 +221,14 @@
                   "u64": 0
                 },
                 {
-                  "string": "ttl_game3"
-                },
-                {
                   "vec": [
                     {
                       "symbol": "Player2"
                     }
                   ]
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 }
               ]
             }
