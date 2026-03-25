@@ -671,9 +671,6 @@ fn test_non_admin_cannot_unpause() {
 // ── Task 2: cancel_match refund scenarios ────────────────────────────────────
 
 /// Both players deposit → match becomes Active → cancel must return InvalidState.
-/// (This already exists as test_cancel_active_match_fails_with_invalid_state and
-///  test_player2_cancel_refunds_both_players, but we add an explicit named test
-///  per the task description.)
 #[test]
 fn test_cancel_both_deposited_active_returns_invalid_state() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -762,4 +759,45 @@ fn test_cancel_only_player2_deposited_refunds_player2() {
     assert_eq!(token_client.balance(&player2), 1000, "player2 should be fully refunded");
     assert_eq!(token_client.balance(&player1), 1000, "player1 balance must not change");
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+// ── From main: pause / unpause emit events ───────────────────────────────────
+
+#[test]
+fn test_pause_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        soroban_sdk::symbol_short!("paused").into_val(&env),
+    ];
+    assert!(
+        events.iter().any(|(_, topics, _)| topics == expected_topics),
+        "paused event not emitted"
+    );
+}
+
+#[test]
+fn test_unpause_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+    client.unpause();
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        soroban_sdk::symbol_short!("unpaused").into_val(&env),
+    ];
+    assert!(
+        events.iter().any(|(_, topics, _)| topics == expected_topics),
+        "unpaused event not emitted"
+    );
 }
