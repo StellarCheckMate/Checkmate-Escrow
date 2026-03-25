@@ -25,6 +25,8 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
+    // Register the test token as an allowed token
+    client.add_allowed_token(&token_addr);
 
     (
         env,
@@ -875,4 +877,134 @@ fn test_unpause_emits_event() {
         events.iter().any(|(_, topics, _)| topics == expected_topics),
         "unpaused event not emitted"
     );
+}
+
+// ── Token allowlist tests ─────────────────────────────────────────────────────
+
+#[test]
+fn test_create_match_with_allowed_token_succeeds() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // token was added to allowlist in setup()
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "allowed_token_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id, 0);
+}
+
+#[test]
+fn test_create_match_with_disallowed_token_fails() {
+    let (env, contract_id, _oracle, player1, player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Register a second token that is NOT added to the allowlist
+    let bad_token_admin = Address::generate(&env);
+    let bad_token_id = env.register_stellar_asset_contract_v2(bad_token_admin.clone());
+    let bad_token = bad_token_id.address();
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &bad_token,
+        &String::from_str(&env, "disallowed_token_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(Error::TokenNotAllowed)),
+        "expected TokenNotAllowed for a token not on the allowlist"
+    );
+}
+
+#[test]
+fn test_remove_allowed_token_blocks_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Remove the token that was added in setup()
+    client.remove_allowed_token(&token);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "removed_token_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(Error::TokenNotAllowed)),
+        "expected TokenNotAllowed after token was removed from allowlist"
+    );
+}
+
+#[test]
+fn test_is_allowed_token_returns_correct_state() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert!(client.is_allowed_token(&token), "token added in setup should be allowed");
+
+    let other_admin = Address::generate(&env);
+    let other_token_id = env.register_stellar_asset_contract_v2(other_admin);
+    let other_token = other_token_id.address();
+    assert!(!client.is_allowed_token(&other_token), "unregistered token should not be allowed");
+}
+
+#[test]
+fn test_non_admin_cannot_add_allowed_token() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let non_admin = Address::generate(&env);
+    let new_token_id = env.register_stellar_asset_contract_v2(non_admin.clone());
+    let new_token = new_token_id.address();
+
+    use soroban_sdk::testutils::MockAuth;
+    use soroban_sdk::testutils::MockAuthInvoke;
+    env.set_auths(&[MockAuth {
+        address: &non_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "add_allowed_token",
+            args: (new_token.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }
+    .into()]);
+
+    let result = client.try_add_allowed_token(&new_token);
+    assert!(result.is_err(), "non-admin should not be able to add an allowed token");
+}
+
+#[test]
+fn test_non_admin_cannot_remove_allowed_token() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let non_admin = Address::generate(&env);
+
+    use soroban_sdk::testutils::MockAuth;
+    use soroban_sdk::testutils::MockAuthInvoke;
+    env.set_auths(&[MockAuth {
+        address: &non_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "remove_allowed_token",
+            args: (token.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }
+    .into()]);
+
+    let result = client.try_remove_allowed_token(&token);
+    assert!(result.is_err(), "non-admin should not be able to remove an allowed token");
 }

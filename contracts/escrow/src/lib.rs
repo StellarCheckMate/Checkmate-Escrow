@@ -82,6 +82,16 @@ impl EscrowContract {
             return Err(Error::InvalidAmount);
         }
 
+        // Reject tokens that are not on the admin-managed allowlist
+        if !env
+            .storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false)
+        {
+            return Err(Error::TokenNotAllowed);
+        }
+
         let id: u64 = env
             .storage()
             .instance()
@@ -320,6 +330,42 @@ impl EscrowContract {
             .ok_or(Error::MatchNotFound)?;
         let deposited = m.player1_deposited as i128 + m.player2_deposited as i128;
         Ok(deposited * m.stake_amount)
+    }
+
+    /// Add a token address to the allowlist — admin only.
+    pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(token), &true);
+        Ok(())
+    }
+
+    /// Remove a token address from the allowlist — admin only.
+    pub fn remove_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .remove(&DataKey::AllowedToken(token));
+        Ok(())
+    }
+
+    /// Check whether a token is on the allowlist.
+    pub fn is_allowed_token(env: Env, token: Address) -> bool {
+        env.storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::AllowedToken(token))
+            .unwrap_or(false)
     }
 }
 
