@@ -10,6 +10,9 @@ use types::{DataKey, Match, MatchState, Platform, Winner};
 /// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
 
+/// Maximum allowed byte length for a game_id string.
+const MAX_GAME_ID_LEN: u32 = 64;
+
 #[contract]
 pub struct EscrowContract;
 
@@ -80,6 +83,9 @@ impl EscrowContract {
         }
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
+        }
+        if game_id.len() > MAX_GAME_ID_LEN {
+            return Err(Error::InvalidGameId);
         }
 
         let id: u64 = env

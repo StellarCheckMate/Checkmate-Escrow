@@ -957,3 +957,29 @@ fn test_submit_result_returns_not_funded_when_deposits_missing() {
         "submit_result must return NotFunded when deposits are missing despite Active state"
     );
 }
+
+// ── game_id length validation ─────────────────────────────────────────────────
+
+#[test]
+fn test_create_match_with_oversized_game_id_fails() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // 65 characters — one over the MAX_GAME_ID_LEN of 64
+    let oversized_id = String::from_str(&env, "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeeeffffffffffffffff1");
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &oversized_id,
+        &Platform::Lichess,
+    );
+
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidGameId)),
+        "create_match must reject game_id longer than 64 characters"
+    );
+}
