@@ -150,6 +150,33 @@ fn test_deposit_emits_activated_event() {
 }
 
 #[test]
+fn test_deposit_into_cancelled_match_returns_invalid_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancelled_deposit_test"),
+        &Platform::Lichess,
+    );
+
+    // Cancel the match before any deposits
+    client.cancel_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+
+    // Attempt to deposit into the cancelled match
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "deposit into cancelled match must return InvalidState"
+    );
+}
+
+#[test]
 fn test_payout_winner() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -369,6 +396,36 @@ fn test_admin_unpause_allows_create_match() {
         &Platform::Lichess,
     );
     assert_eq!(id, 0);
+}
+
+#[test]
+fn test_admin_pause_blocks_submit_result() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create and fund a match
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "paused_submit_game"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Pause the contract
+    client.pause();
+
+    // Attempt to submit result on paused contract
+    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
+    assert_eq!(
+        result,
+        Err(Ok(Error::ContractPaused)),
+        "submit_result must be blocked when contract is paused"
+    );
 }
 
 #[test]
@@ -833,6 +890,29 @@ fn test_cancel_only_player2_deposited_refunds_player2() {
     // player2 gets their stake back; player1 balance is untouched
     assert_eq!(token_client.balance(&player2), 1000, "player2 should be fully refunded");
     assert_eq!(token_client.balance(&player1), 1000, "player1 balance must not change");
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+/// Cancel match immediately after creation with no deposits — escrow balance must be 0.
+#[test]
+fn test_get_escrow_balance_returns_zero_after_cancel_with_no_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "no_deposit_cancel"),
+        &Platform::Lichess,
+    );
+
+    // Cancel immediately without any deposits
+    client.cancel_match(&id, &player1);
+
+    // Escrow balance should be 0 (no deposits were made)
+    assert_eq!(client.get_escrow_balance(&id), 0);
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 }
 
