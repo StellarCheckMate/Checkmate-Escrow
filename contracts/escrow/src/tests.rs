@@ -57,6 +57,23 @@ fn test_create_match() {
 }
 
 #[test]
+fn test_is_funded_returns_false_on_fresh_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+    );
+
+    assert_eq!(client.is_funded(&id), false);
+}
+
+#[test]
 fn test_get_match_returns_match_not_found_for_unknown_id() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
