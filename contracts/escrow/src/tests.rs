@@ -876,3 +876,26 @@ fn test_unpause_emits_event() {
         "unpaused event not emitted"
     );
 }
+
+#[test]
+fn test_multiple_matches_different_game_ids() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_ids = ["game_aaa", "game_bbb", "game_ccc"];
+
+    for (expected_id, game_id) in game_ids.iter().enumerate() {
+        let id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, game_id),
+            &Platform::Lichess,
+        );
+        assert_eq!(id, expected_id as u64);
+        let m = client.get_match(&id);
+        assert_eq!(m.id, expected_id as u64);
+        assert_eq!(m.game_id, String::from_str(&env, game_id));
+    }
+}
