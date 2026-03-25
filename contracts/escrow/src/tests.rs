@@ -594,3 +594,42 @@ fn test_ttl_extended_on_cancel() {
     });
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
+
+#[test]
+fn test_pause_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        soroban_sdk::symbol_short!("paused").into_val(&env),
+    ];
+    assert!(
+        events.iter().any(|(_, topics, _)| topics == expected_topics),
+        "paused event not emitted"
+    );
+}
+
+#[test]
+fn test_unpause_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+    client.unpause();
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        soroban_sdk::symbol_short!("unpaused").into_val(&env),
+    ];
+    assert!(
+        events.iter().any(|(_, topics, _)| topics == expected_topics),
+        "unpaused event not emitted"
+    );
+}
