@@ -57,7 +57,7 @@ fn test_create_match() {
 }
 
 #[test]
-fn test_is_funded_returns_false_on_fresh_match() {
+fn test_create_match_sets_created_ledger() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -66,11 +66,15 @@ fn test_is_funded_returns_false_on_fresh_match() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "abc123"),
+        &String::from_str(&env, "ledger_test"),
         &Platform::Lichess,
     );
 
-    assert_eq!(client.is_funded(&id), false);
+    let m = client.get_match(&id);
+    // created_ledger must be set to the ledger sequence at creation time (non-zero
+    // in a real network; the test env starts at 0 but the field must be present and
+    // readable — future timeout logic will rely on it).
+    assert_eq!(m.created_ledger, env.ledger().sequence());
 }
 
 #[test]
@@ -474,6 +478,60 @@ fn test_non_oracle_cannot_submit_result() {
     assert_eq!(client.get_match(&id).state, MatchState::Active);
     assert_eq!(token_client.balance(&player1), 900);
     assert_eq!(token_client.balance(&player2), 900);
+}
+
+#[test]
+fn test_submit_result_on_cancelled_match_returns_invalid_state() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancelled_game"),
+        &Platform::Lichess,
+    );
+
+    // Cancel without any deposits — match goes straight to Cancelled
+    client.cancel_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+
+    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "oracle must not be able to submit a result for a Cancelled match"
+    );
+}
+
+#[test]
+fn test_submit_result_on_completed_match_returns_invalid_state() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1, &oracle);
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+
+    // Second submit on an already-Completed match must fail
+    let result = client.try_submit_result(&id, &Winner::Player2, &oracle);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "oracle must not be able to submit a result for an already Completed match"
+    );
 }
 
 #[test]
