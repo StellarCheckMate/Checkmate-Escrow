@@ -876,3 +876,32 @@ fn test_unpause_emits_event() {
         "unpaused event not emitted"
     );
 }
+
+// ── get_escrow_balance at each deposit stage ─────────────────────────────────
+
+#[test]
+fn test_get_escrow_balance_stages() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let stake = 100_i128;
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake,
+        &token,
+        &String::from_str(&env, "balance_stages"),
+        &Platform::Lichess,
+    );
+
+    // Before any deposit: balance must be 0
+    assert_eq!(client.get_escrow_balance(&id), 0);
+
+    // After player1 deposits: balance must equal stake_amount
+    client.deposit(&id, &player1);
+    assert_eq!(client.get_escrow_balance(&id), stake);
+
+    // After player2 deposits: balance must equal 2 * stake_amount
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_escrow_balance(&id), 2 * stake);
+}
