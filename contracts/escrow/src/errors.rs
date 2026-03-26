@@ -15,4 +15,6 @@ pub enum Error {
     InvalidAmount = 10,
     MatchCancelled = 11,
     MatchCompleted = 12,
+    MatchNotExpired = 13,
+    InvalidGameId = 14,
 }
