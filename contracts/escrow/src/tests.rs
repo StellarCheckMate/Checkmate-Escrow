@@ -1199,6 +1199,29 @@ fn test_deposit_blocked_when_paused() {
     );
 }
 
+#[test]
+fn test_deposit_by_non_player_returns_unauthorized() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "non_player_deposit"),
+        &Platform::Lichess,
+    );
+
+    let third_party = Address::generate(&env);
+    let result = client.try_deposit(&id, &third_party);
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
+        "deposit by non-player address must return Unauthorized"
+    );
+}
+
 // ── submit_result blocked when contract is paused ────────────────────────────
 
 #[test]
