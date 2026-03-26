@@ -85,6 +85,40 @@ oracle_client.submit_result(&match_id, &game_id, &MatchResult::Player1Wins);
 
 ---
 
+## has_result vs has_result_admin
+
+The oracle contract exposes two ways to check whether a result has been
+submitted for a given `match_id`.
+
+### `has_result` — public, unauthenticated
+
+```rust
+oracle_client.has_result(&match_id); // → bool
+```
+
+This is a read-only probe that returns `true` once a result has been stored.
+It requires **no authentication** and can be called by anyone.
+
+This is intentional: the function exposes only the *existence* of a result,
+not its content. For the majority of public tournament contexts this is
+acceptable — knowing that *a* result exists leaks no information about *who*
+won.
+
+### `has_result_admin` — admin-gated
+
+```rust
+oracle_client.has_result_admin(&match_id); // → Result<bool, Error>
+```
+
+For private tournaments where even the existence of a result must remain
+confidential until an official announcement, use this variant instead. It
+requires the stored admin to authorise the call, preventing third-party
+probing.
+
+Returns `Error::Unauthorized` if the caller is not the current admin.
+
+---
+
 ## Example: Full Match Lifecycle
 
 ```
