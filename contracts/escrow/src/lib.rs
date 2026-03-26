@@ -387,6 +387,14 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Return the admin address set at initialization.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)
+    }
+
     /// Read a match by ID.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
         env.storage()
