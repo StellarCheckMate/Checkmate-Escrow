@@ -1296,7 +1296,7 @@ fn test_deposit_blocked_when_paused() {
 
 #[test]
 fn test_expire_active_match_fails() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
