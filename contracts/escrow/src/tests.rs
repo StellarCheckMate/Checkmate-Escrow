@@ -728,6 +728,28 @@ fn test_ttl_extended_on_cancel() {
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
 
+#[test]
+fn test_ttl_extended_on_cancel_after_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_game5"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.cancel_match(&id, &player1);
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+}
+
 // ── Task 1: non-admin cannot call pause / unpause ────────────────────────────
 
 #[test]
