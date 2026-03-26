@@ -1,7 +1,7 @@
 #![no_std]
 
-mod errors;
-mod types;
+pub mod errors;
+pub mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
