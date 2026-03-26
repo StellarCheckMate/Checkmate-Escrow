@@ -1508,3 +1508,13 @@ fn test_draw_refunds_exact_stake_and_zeroes_escrow_balance() {
     // Match state must be Completed
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 }
+
+// ── get_admin ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_get_admin_returns_initialized_admin() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.get_admin(), admin);
+}
