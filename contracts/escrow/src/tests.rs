@@ -1451,3 +1451,60 @@ fn test_is_funded_false_after_only_player1_deposits() {
         "is_funded must be true after both players deposit"
     );
 }
+
+// ── Draw result: exact stake refund and zero escrow balance ──────────────────
+
+/// Submit Winner::Draw and verify:
+///   1. Each player receives exactly their original stake_amount back.
+///   2. The contract escrow balance for the match is 0 after payout.
+#[test]
+fn test_draw_refunds_exact_stake_and_zeroes_escrow_balance() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let stake: i128 = 100;
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake,
+        &token,
+        &String::from_str(&env, "draw_escrow_zero"),
+        &Platform::Lichess,
+    );
+
+    // Both players deposit — escrow holds 2 * stake
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_escrow_balance(&id), 2 * stake);
+
+    // Record balances right before result submission
+    let p1_before = token_client.balance(&player1);
+    let p2_before = token_client.balance(&player2);
+
+    // Oracle submits Draw result
+    client.submit_result(&id, &Winner::Draw, &oracle);
+
+    // Each player must receive exactly stake_amount back
+    assert_eq!(
+        token_client.balance(&player1),
+        p1_before + stake,
+        "player1 must receive exactly stake_amount on draw"
+    );
+    assert_eq!(
+        token_client.balance(&player2),
+        p2_before + stake,
+        "player2 must receive exactly stake_amount on draw"
+    );
+
+    // Contract escrow balance must be zero — no funds left behind
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        0,
+        "escrow balance must be 0 after draw payout"
+    );
+
+    // Match state must be Completed
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+}
