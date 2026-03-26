@@ -1451,3 +1451,16 @@ fn test_is_funded_false_after_only_player1_deposits() {
         "is_funded must be true after both players deposit"
     );
 }
+#[test]
+fn test_payout_player2_wins() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+    let id = client.create_match(&player1, &player2, &100, &token, &String::from_str(&env, "player2_wins_game"), &Platform::Lichess);
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player2, &oracle);
+    assert_eq!(token_client.balance(&player2), 1100);
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+}
