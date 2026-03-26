@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use super::*;
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Events},
@@ -1222,4 +1220,31 @@ fn test_submit_result_blocked_when_paused() {
 
     let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
+
+#[test]
+fn test_is_funded_false_after_only_player1_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "partial_funded_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    assert!(
+        !client.is_funded(&id),
+        "is_funded must be false after only player1 deposits"
+    );
+
+    client.deposit(&id, &player2);
+    assert!(
+        client.is_funded(&id),
+        "is_funded must be true after both players deposit"
+    );
 }
