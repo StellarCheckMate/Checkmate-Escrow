@@ -1452,6 +1452,45 @@ fn test_is_funded_false_after_only_player1_deposits() {
     );
 }
 
+// ── Deposit flag assertions ───────────────────────────────────────────────────
+
+/// Verifies that `player1_deposited` and `player2_deposited` flags on the
+/// `Match` struct are set correctly after each individual deposit.
+///
+/// After player1 deposits:  player1_deposited == true,  player2_deposited == false
+/// After player2 deposits:  player1_deposited == true,  player2_deposited == true
+#[test]
+fn test_deposit_flags_set_correctly_after_each_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "deposit_flags_test"),
+        &Platform::Lichess,
+    );
+
+    // Before any deposit: both flags must be false
+    let m = client.get_match(&id);
+    assert!(!m.player1_deposited, "player1_deposited must be false before any deposit");
+    assert!(!m.player2_deposited, "player2_deposited must be false before any deposit");
+
+    // After player1 deposits: only player1_deposited flips to true
+    client.deposit(&id, &player1);
+    let m = client.get_match(&id);
+    assert!(m.player1_deposited, "player1_deposited must be true after player1 deposits");
+    assert!(!m.player2_deposited, "player2_deposited must still be false after only player1 deposits");
+
+    // After player2 deposits: both flags must be true
+    client.deposit(&id, &player2);
+    let m = client.get_match(&id);
+    assert!(m.player1_deposited, "player1_deposited must remain true after player2 deposits");
+    assert!(m.player2_deposited, "player2_deposited must be true after player2 deposits");
+}
+
 // ── Draw result: exact stake refund and zero escrow balance ──────────────────
 
 /// Submit Winner::Draw and verify:
