@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 7,
+    "address": 6,
     "nonce": 0
   },
   "auth": [
@@ -100,7 +100,7 @@
                   "address": "CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG"
                 },
                 {
-                  "string": "game_unauthorized"
+                  "string": "unique_game_123"
                 },
                 {
                   "vec": [
@@ -298,7 +298,7 @@
                   "symbol": "GameId"
                 },
                 {
-                  "string": "game_unauthorized"
+                  "string": "unique_game_123"
                 }
               ]
             },
@@ -318,7 +318,7 @@
                       "symbol": "GameId"
                     },
                     {
-                      "string": "game_unauthorized"
+                      "string": "unique_game_123"
                     }
                   ]
                 },
@@ -383,7 +383,7 @@
                         "symbol": "game_id"
                       },
                       "val": {
-                        "string": "game_unauthorized"
+                        "string": "unique_game_123"
                       }
                     },
                     {
