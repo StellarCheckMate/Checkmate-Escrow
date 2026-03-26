@@ -14,5 +14,5 @@ pub enum Error {
     ContractPaused = 9,
     InvalidAmount = 10,
     MatchNotExpired = 11,
-    InvalidGameId = 11,
+    InvalidGameId = 12,
 }

@@ -1094,6 +1094,39 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_refund"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    let balance_before = token_client.balance(&player1);
+
+    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+    env.as_contract(&token, || {
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+    env.ledger().set_sequence_number(new_seq);
+
+    client.expire_match(&id);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Cancelled);
+    assert_eq!(token_client.balance(&player1), balance_before + 100);
+}
+
 // ── get_escrow_balance at each deposit stage ─────────────────────────────────
 
 #[test]
@@ -1149,32 +1182,6 @@ fn test_submit_result_returns_not_funded_when_deposits_missing() {
         &player1,
         &player2,
         &100,
-        &token,
-        &String::from_str(&env, "expire_refund"),
-        &Platform::Lichess,
-    );
-
-    client.deposit(&id, &player1);
-    let balance_before = token_client.balance(&player1);
-
-    // Advance ledger past the timeout window; keep instance storage alive
-    let new_seq = env.ledger().sequence() + MATCH_TIMEOUT_LEDGERS;
-    env.as_contract(&contract_id, || {
-        env.storage()
-            .instance()
-            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    });
-    env.ledger().set_sequence_number(new_seq);
-
-    client.expire_match(&id);
-
-    let m = client.get_match(&id);
-    assert_eq!(m.state, MatchState::Cancelled);
-    assert_eq!(token_client.balance(&player1), balance_before + 100);
-}
-
-#[test]
-fn test_expire_match_emits_expired_event() {
         &token_addr,
         &String::from_str(&env, "not_funded_game"),
         &Platform::Lichess,
@@ -1194,6 +1201,43 @@ fn test_expire_match_emits_expired_event() {
         result,
         Err(Ok(Error::NotFunded)),
         "submit_result must return NotFunded when deposits are missing despite Active state"
+    );
+}
+
+#[test]
+fn test_expire_match_emits_expired_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_event"),
+        &Platform::Lichess,
+    );
+
+    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+    env.ledger().set_sequence_number(new_seq);
+    client.expire_match(&id);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("expired").into_val(&env),
+    ];
+    assert!(
+        events
+            .iter()
+            .any(|(_, topics, _)| topics == expected_topics),
+        "expired event not emitted"
     );
 }
 
@@ -1238,36 +1282,6 @@ fn test_deposit_blocked_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "expire_event"),
-        &Platform::Lichess,
-    );
-
-    let new_seq = env.ledger().sequence() + MATCH_TIMEOUT_LEDGERS;
-    env.as_contract(&contract_id, || {
-        env.storage()
-            .instance()
-            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    });
-    env.ledger().set_sequence_number(new_seq);
-    client.expire_match(&id);
-
-    let events = env.events().all();
-    let expected_topics = vec![
-        &env,
-        Symbol::new(&env, "match").into_val(&env),
-        soroban_sdk::symbol_short!("expired").into_val(&env),
-    ];
-    assert!(
-        events
-            .iter()
-            .any(|(_, topics, _)| topics == expected_topics),
-        "expired event not emitted"
-    );
-}
-
-#[test]
-fn test_expire_active_match_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
         &String::from_str(&env, "paused_deposit_game"),
         &Platform::Lichess,
     );
@@ -1282,6 +1296,35 @@ fn test_expire_active_match_fails() {
     );
 }
 
+#[test]
+fn test_expire_active_match_fails() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_active"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+    env.ledger().set_sequence_number(new_seq);
+
+    let result = client.try_expire_match(&id);
+    assert_eq!(result, Err(Ok(Error::InvalidState)));
+}
+
 // ── submit_result blocked when contract is paused ────────────────────────────
 
 #[test]
@@ -1294,7 +1337,6 @@ fn test_submit_result_blocked_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "expire_active"),
         &String::from_str(&env, "paused_submit_game"),
         &Platform::Lichess,
     );
@@ -1302,16 +1344,6 @@ fn test_submit_result_blocked_when_paused() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    let new_seq = env.ledger().sequence() + MATCH_TIMEOUT_LEDGERS;
-    env.as_contract(&contract_id, || {
-        env.storage()
-            .instance()
-            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    });
-    env.ledger().set_sequence_number(new_seq);
-
-    let result = client.try_expire_match(&id);
-    assert_eq!(result, Err(Ok(Error::InvalidState)));
     client.pause();
 
     let result = client.try_submit_result(&id, &Winner::Player1, &oracle);

@@ -324,7 +324,7 @@ impl EscrowContract {
 
         let elapsed = env.ledger().sequence().saturating_sub(m.created_ledger);
 
-        if elapsed < MATCH_TIMEOUT_LEDGERS {
+        if elapsed < MATCH_TTL_LEDGERS {
             return Err(Error::MatchNotExpired);
         }
 
