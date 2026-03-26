@@ -1451,3 +1451,22 @@ fn test_is_funded_false_after_only_player1_deposits() {
         "is_funded must be true after both players deposit"
     );
 }
+
+#[test]
+fn test_unauthorized_cancel_returns_error_code() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "unauth_cancel_code"),
+        &Platform::Lichess,
+    );
+
+    let third_party = Address::generate(&env);
+    let result = client.try_cancel_match(&id, &third_party);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
