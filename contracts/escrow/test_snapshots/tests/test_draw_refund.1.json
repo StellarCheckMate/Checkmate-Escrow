@@ -100,12 +100,12 @@
                   "address": "CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG"
                 },
                 {
-                  "string": "completed_cancel_game"
+                  "string": "game2"
                 },
                 {
                   "vec": [
                     {
-                      "symbol": "Lichess"
+                      "symbol": "ChessDotCom"
                     }
                   ]
                 }
@@ -223,7 +223,7 @@
                 {
                   "vec": [
                     {
-                      "symbol": "Player1"
+                      "symbol": "Draw"
                     }
                   ]
                 },
@@ -237,11 +237,6 @@
         }
       ]
     ],
-    [],
-    [],
-    [],
-    [],
-    [],
     [],
     []
   ],
@@ -524,7 +519,7 @@
                   "symbol": "GameId"
                 },
                 {
-                  "string": "game1"
+                  "string": "game2"
                 }
               ]
             },
@@ -544,7 +539,7 @@
                       "symbol": "GameId"
                     },
                     {
-                      "string": "game1"
+                      "string": "game2"
                     }
                   ]
                 },
@@ -609,7 +604,7 @@
                         "symbol": "game_id"
                       },
                       "val": {
-                        "string": "completed_cancel_game"
+                        "string": "game2"
                       }
                     },
                     {
@@ -627,7 +622,7 @@
                       "val": {
                         "vec": [
                           {
-                            "symbol": "Lichess"
+                            "symbol": "ChessDotCom"
                           }
                         ]
                       }
@@ -829,7 +824,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 1100
+                          "lo": 1000
                         }
                       }
                     },
@@ -902,7 +897,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 900
+                          "lo": 1000
                         }
                       }
                     },
