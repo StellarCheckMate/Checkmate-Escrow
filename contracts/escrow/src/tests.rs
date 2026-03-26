@@ -172,8 +172,8 @@ fn test_deposit_into_cancelled_match_returns_invalid_state() {
     let result = client.try_deposit(&id, &player1);
     assert_eq!(
         result,
-        Err(Ok(Error::InvalidState)),
-        "deposit into cancelled match must return InvalidState"
+        Err(Ok(Error::MatchCancelled)),
+        "deposit into cancelled match must return MatchCancelled"
     );
 }
 
@@ -1033,8 +1033,8 @@ fn test_deposit_into_completed_match_returns_invalid_state() {
     let result = client.try_deposit(&id, &player1);
     assert_eq!(
         result,
-        Err(Ok(Error::InvalidState)),
-        "deposit into a Completed match must return InvalidState"
+        Err(Ok(Error::MatchCompleted)),
+        "deposit into a Completed match must return MatchCompleted"
     );
 
     // Balances must be untouched after the failed deposit
@@ -1085,6 +1085,61 @@ fn test_unpause_emits_event() {
             .any(|(_, topics, _)| topics == expected_topics),
         "unpaused event not emitted"
     );
+}
+
+#[test]
+fn test_duplicate_game_id_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "unique_game_123");
+
+    client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+
+    let result = client.try_create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+    assert_eq!(result, Err(Ok(Error::DuplicateGameId)));
+}
+
+#[test]
+fn test_deposit_into_cancelled_match_returns_match_cancelled() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancelled_deposit"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id, &player1);
+
+    let result = client.try_deposit(&id, &player2);
+    assert_eq!(result, Err(Ok(Error::MatchCancelled)));
+}
+
+#[test]
+fn test_deposit_into_completed_match_returns_match_completed() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_deposit"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1, &oracle);
+
+    let result = client.try_deposit(&id, &player2);
+    assert_eq!(result, Err(Ok(Error::MatchCompleted)));
 }
 
 #[test]
