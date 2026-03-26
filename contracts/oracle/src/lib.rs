@@ -74,6 +74,18 @@ impl OracleContract {
     pub fn has_result(env: Env, match_id: u64) -> bool {
         env.storage().persistent().has(&DataKey::Result(match_id))
     }
+
+    /// Rotate the admin to a new address. Requires current admin auth.
+    pub fn update_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let current_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        current_admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -92,6 +104,16 @@ mod tests {
         let client = OracleContractClient::new(&env, &contract_id);
         client.initialize(&admin);
         (env, contract_id)
+    }
+
+    #[test]
+    fn test_has_result_returns_false_before_submission() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // On a fresh oracle contract, has_result should return false for any match_id
+        assert!(!client.has_result(&0u64));
+        assert!(!client.has_result(&999u64));
     }
 
     #[test]
@@ -179,5 +201,58 @@ mod tests {
             env.storage().persistent().get_ttl(&DataKey::Result(0u64))
         });
         assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+    }
+
+    #[test]
+    fn test_admin_rotation() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+        let new_admin = Address::generate(&env);
+
+        client.update_admin(&new_admin);
+
+        // new admin can submit a result without error
+        client.submit_result(
+            &1u64,
+            &String::from_str(&env, "game_new"),
+            &MatchResult::Player2Wins,
+        );
+        assert!(client.has_result(&1u64));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_old_admin_cannot_act_after_rotation() {
+        let env = Env::default();
+        let old_admin = Address::generate(&env);
+        let new_admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // initialize with old_admin, rotate to new_admin
+        env.mock_all_auths();
+        client.initialize(&old_admin);
+        client.update_admin(&new_admin);
+
+        // now only allow auth for old_admin — should panic because stored admin is new_admin
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &old_admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "submit_result",
+                args: (
+                    1u64,
+                    String::from_str(&env, "game_old"),
+                    MatchResult::Player1Wins,
+                )
+                    .into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.submit_result(
+            &1u64,
+            &String::from_str(&env, "game_old"),
+            &MatchResult::Player1Wins,
+        );
     }
 }

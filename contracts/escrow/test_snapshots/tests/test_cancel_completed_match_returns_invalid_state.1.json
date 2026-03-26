@@ -100,7 +100,7 @@
                   "address": "CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG"
                 },
                 {
-                  "string": "completed_game"
+                  "string": "completed_cancel_game"
                 },
                 {
                   "vec": [
@@ -237,6 +237,11 @@
         }
       ]
     ],
+    [],
+    [],
+    [],
+    [],
+    [],
     [],
     []
   ],
@@ -519,7 +524,7 @@
                   "symbol": "GameId"
                 },
                 {
-                  "string": "completed_game"
+                  "string": "game1"
                 }
               ]
             },
@@ -539,7 +544,7 @@
                       "symbol": "GameId"
                     },
                     {
-                      "string": "completed_game"
+                      "string": "game1"
                     }
                   ]
                 },
@@ -604,7 +609,7 @@
                         "symbol": "game_id"
                       },
                       "val": {
-                        "string": "completed_game"
+                        "string": "completed_cancel_game"
                       }
                     },
                     {
