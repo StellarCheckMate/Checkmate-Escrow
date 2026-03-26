@@ -220,8 +220,8 @@ mod tests {
         let (env, contract_id, _escrow_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        assert!(!client.has_result_admin(&0u64).unwrap());
-        assert!(!client.has_result_admin(&999u64).unwrap());
+        assert!(!client.has_result_admin(&0u64));
+        assert!(!client.has_result_admin(&999u64));
     }
 
     /// has_result_admin returns true after a result is submitted.
@@ -237,7 +237,7 @@ mod tests {
             &escrow_id,
         );
 
-        assert!(client.has_result_admin(&0u64).unwrap());
+        assert!(client.has_result_admin(&0u64));
     }
 
     /// Non-admin callers must not be able to call has_result_admin.
@@ -264,7 +264,7 @@ mod tests {
                 sub_invokes: &[],
             },
         }]);
-        client.has_result_admin(&0u64).unwrap();
+        client.has_result_admin(&0u64);
     }
 
     #[test]
