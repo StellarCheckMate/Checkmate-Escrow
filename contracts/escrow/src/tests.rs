@@ -55,6 +55,34 @@ fn test_create_match() {
 }
 
 #[test]
+fn test_get_match_count() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.get_match_count(), 0);
+
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game1"),
+        &Platform::Lichess,
+    );
+    assert_eq!(client.get_match_count(), 1);
+
+    client.create_match(
+        &player1,
+        &player2,
+        &200,
+        &token,
+        &String::from_str(&env, "game2"),
+        &Platform::ChessDotCom,
+    );
+    assert_eq!(client.get_match_count(), 2);
+}
+
+#[test]
 fn test_create_match_sets_created_ledger() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
