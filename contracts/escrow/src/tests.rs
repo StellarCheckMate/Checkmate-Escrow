@@ -421,6 +421,37 @@ fn test_double_initialize_fails() {
 }
 
 #[test]
+fn test_initialize_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = Address::generate(&env);
+    let admin = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.initialize(&oracle, &admin);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("init").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "initialized event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (emitted_oracle, emitted_admin): (Address, Address) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(emitted_oracle, oracle);
+    assert_eq!(emitted_admin, admin);
+}
+
+#[test]
 fn test_admin_pause_blocks_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
