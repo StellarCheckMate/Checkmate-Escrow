@@ -776,11 +776,14 @@ fn test_ttl_refreshed_on_get_match() {
         &Platform::Lichess,
     );
 
-    // Let some time pass (set partial TTL)
-    let half_ttl = crate::MATCH_TTL_LEDGERS / 2;
-    let partial_ttl = crate::MATCH_TTL_LEDGERS - half_ttl;
+    // Let some time pass (advance ledger small amount to simulate partial TTL without archiving)
+    let ledgers_elapsed = 1000u32;
+    let current_ledger = env.ledger().sequence();
+    env.ledger().set_sequence_number(current_ledger + ledgers_elapsed);
+
+    // Extend instance TTLs to prevent archiving during test
     env.as_contract(&contract_id, || {
-        env.storage().persistent().set_ttl(&DataKey::Match(id), partial_ttl);
+        env.storage().instance().extend_ttl(crate::MATCH_TTL_LEDGERS, crate::MATCH_TTL_LEDGERS);
     });
 
     // TTL should be partial
