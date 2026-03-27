@@ -60,7 +60,6 @@ jobs:
       - name: Build contracts
         run: |
           cd contracts/escrow && cargo build --target wasm32-unknown-unknown --release
-          cd contracts/oracle && cargo build --target wasm32-unknown-unknown --release
 
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v4
