@@ -1611,3 +1611,56 @@ fn test_match_count_increments_and_get_match_returns_correct_data() {
         assert_eq!(m.state, MatchState::Pending, "match.state must be Pending for id {i}");
     }
 }
+
+#[test]
+fn test_player_matches_indexing() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // 1. Initially, players should have no matches.
+    assert_eq!(client.get_player_matches(&player1).len(), 0);
+    assert_eq!(client.get_player_matches(&player2).len(), 0);
+
+    // 2. Create the first match.
+    let id1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match1"),
+        &Platform::Lichess,
+    );
+
+    // Both players should now have match1.
+    let p1_matches = client.get_player_matches(&player1);
+    let p2_matches = client.get_player_matches(&player2);
+    assert_eq!(p1_matches.len(), 1);
+    assert_eq!(p1_matches.get(0).unwrap(), id1);
+    assert_eq!(p2_matches.len(), 1);
+    assert_eq!(p2_matches.get(0).unwrap(), id1);
+
+    // 3. Create a second match with a different player.
+    let player3 = Address::generate(&env);
+    let id2 = client.create_match(
+        &player1,
+        &player3,
+        &100,
+        &token,
+        &String::from_str(&env, "match2"),
+        &Platform::Lichess,
+    );
+
+    // player1 should have both id1 and id2.
+    let p1_matches_updated = client.get_player_matches(&player1);
+    assert_eq!(p1_matches_updated.len(), 2);
+    assert_eq!(p1_matches_updated.get(0).unwrap(), id1);
+    assert_eq!(p1_matches_updated.get(1).unwrap(), id2);
+
+    // player2 should still only have id1.
+    assert_eq!(client.get_player_matches(&player2).len(), 1);
+
+    // player3 should have id2.
+    let p3_matches = client.get_player_matches(&player3);
+    assert_eq!(p3_matches.len(), 1);
+    assert_eq!(p3_matches.get(0).unwrap(), id2);
+}

@@ -144,6 +144,24 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
         env.storage().persistent().set(&DataKey::GameId(m.game_id.clone()), &true);
 
+        // Update player matches index
+        for player in [m.player1.clone(), m.player2.clone()] {
+            let matches: soroban_sdk::Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PlayerMatches(player.clone()))
+                .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+            let updated_matches = matches.push_back(id);
+            env.storage()
+                .persistent()
+                .set(&DataKey::PlayerMatches(player.clone()), &updated_matches);
+            env.storage().persistent().extend_ttl(
+                &DataKey::PlayerMatches(player),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
             (id, m.player1, m.player2, stake_amount),
@@ -427,6 +445,14 @@ impl EscrowContract {
         let depositors: i128 = if m.player1_deposited { 1 } else { 0 }
             + if m.player2_deposited { 1 } else { 0 };
         Ok(depositors * m.stake_amount)
+    }
+
+    /// Return all match IDs associated with the player.
+    pub fn get_player_matches(env: Env, player: Address) -> soroban_sdk::Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player))
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
     }
 }
 
