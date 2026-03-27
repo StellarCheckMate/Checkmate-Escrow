@@ -355,14 +355,6 @@ impl EscrowContract {
         Ok(())
     }
 
-
-
-
-
-
-
-    }
-
     /// Check whether both players have deposited.
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
         let m: Match = env
@@ -373,7 +365,7 @@ impl EscrowContract {
         Ok(m.player1_deposited && m.player2_deposited)
     }
 
-    /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
+    /// Return the total escrowed balance for a match (0, 1x, or 2x stake)
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
         let m: Match = env
             .storage()
