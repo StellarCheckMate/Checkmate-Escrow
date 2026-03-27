@@ -397,10 +397,16 @@ impl EscrowContract {
 
     /// Read a match by ID.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
-        env.storage()
+        let m = env.storage()
             .persistent()
             .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)
+            .ok_or(Error::MatchNotFound)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        Ok(m)
     }
 
     /// Check whether both players have deposited.
@@ -432,3 +438,4 @@ impl EscrowContract {
 
 #[cfg(test)]
 mod tests;
+

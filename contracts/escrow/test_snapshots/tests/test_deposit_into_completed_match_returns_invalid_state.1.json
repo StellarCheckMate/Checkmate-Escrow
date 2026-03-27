@@ -523,7 +523,7 @@
                   "symbol": "GameId"
                 },
                 {
-                  "string": "completed_game"
+                  "string": "completed_deposit_game"
                 }
               ]
             },
@@ -543,7 +543,7 @@
                       "symbol": "GameId"
                     },
                     {
-                      "string": "completed_game"
+                      "string": "completed_deposit_game"
                     }
                   ]
                 },
