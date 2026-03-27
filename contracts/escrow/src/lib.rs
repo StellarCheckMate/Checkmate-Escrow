@@ -1,7 +1,7 @@
 #![no_std]
 
-mod errors;
-mod types;
+pub mod errors;
+pub mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
@@ -11,6 +11,12 @@ use types::{DataKey, Match, MatchState, Platform, Winner};
 const MATCH_TTL_LEDGERS: u32 = 518_400;
 
 /// Maximum allowed byte length for a game_id string.
+///
+/// Platform-specific formats:
+/// - Lichess:      8 alphanumeric characters (e.g. `"abcd1234"`)
+/// - Chess.com:    numeric string, typically 7–12 digits (e.g. `"123456789"`)
+///
+/// Both formats fit well within this limit.
 const MAX_GAME_ID_LEN: u32 = 64;
 
 #[contract]
@@ -58,6 +64,21 @@ impl EscrowContract {
     }
 
     /// Create a new match. Both players must call `deposit` before the game starts.
+    ///
+    /// # Parameters
+    /// - `game_id`: The platform-specific game identifier. Must be ≤ 64 bytes.
+    ///   - **Lichess**: 8-character alphanumeric string (e.g. `"abcd1234"`).
+    ///     Taken from the game URL: `https://lichess.org/<game_id>`
+    ///   - **Chess.com**: numeric string, typically 7–12 digits (e.g. `"123456789"`).
+    ///     Taken from the game URL: `https://www.chess.com/game/live/<game_id>`
+    ///   Passing an ID from the wrong platform or a malformed ID will not be
+    ///   rejected on-chain, but the oracle will fail to verify the result.
+    /// - `platform`: Must match the platform the `game_id` was issued by.
+    ///   Use `Platform::Lichess` or `Platform::ChessDotCom` accordingly.
+    ///
+    /// # Errors
+    /// Returns `Error::InvalidGameId` if `game_id` exceeds `MAX_GAME_ID_LEN` (64 bytes).
+    /// Returns `Error::DuplicateGameId` if the same `game_id` has already been used.
     pub fn create_match(
         env: Env,
         player1: Address,
@@ -82,6 +103,10 @@ impl EscrowContract {
         }
         if game_id.len() > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
+        }
+
+        if env.storage().persistent().has(&DataKey::GameId(game_id.clone())) {
+            return Err(Error::DuplicateGameId);
         }
 
         let id: u64 = env
@@ -117,6 +142,7 @@ impl EscrowContract {
         // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
+        env.storage().persistent().set(&DataKey::GameId(m.game_id.clone()), &true);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -145,6 +171,12 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
+        if m.state == MatchState::Cancelled {
+            return Err(Error::MatchCancelled);
+        }
+        if m.state == MatchState::Completed {
+            return Err(Error::MatchCompleted);
+        }
         if m.state != MatchState::Pending {
             return Err(Error::InvalidState);
         }
@@ -355,6 +387,28 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Return the admin address set at initialization.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)
+    }
+
+    /// Read a match by ID.
+    pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
+        let m = env.storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        Ok(m)
+    }
+
     /// Check whether both players have deposited.
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
         let m: Match = env
@@ -365,7 +419,7 @@ impl EscrowContract {
         Ok(m.player1_deposited && m.player2_deposited)
     }
 
-    /// Return the total escrowed balance for a match (0, 1x, or 2x stake)
+    /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
         let m: Match = env
             .storage()
@@ -375,10 +429,13 @@ impl EscrowContract {
         if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
             return Ok(0);
         }
-        let deposited = m.player1_deposited as i128 + m.player2_deposited as i128;
-        Ok(deposited * m.stake_amount)
+        // Count depositors explicitly — avoids fragile bool-to-integer casting.
+        let depositors: i128 = if m.player1_deposited { 1 } else { 0 }
+            + if m.player2_deposited { 1 } else { 0 };
+        Ok(depositors * m.stake_amount)
     }
 }
 
 #[cfg(test)]
 mod tests;
+

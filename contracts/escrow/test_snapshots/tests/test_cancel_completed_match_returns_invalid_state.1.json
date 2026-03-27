@@ -524,7 +524,7 @@
                   "symbol": "GameId"
                 },
                 {
-                  "string": "game1"
+                  "string": "completed_cancel_game"
                 }
               ]
             },
@@ -544,7 +544,7 @@
                       "symbol": "GameId"
                     },
                     {
-                      "string": "game1"
+                      "string": "completed_cancel_game"
                     }
                   ]
                 },
