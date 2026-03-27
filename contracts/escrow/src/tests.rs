@@ -1512,6 +1512,46 @@ fn test_submit_result_blocked_when_paused() {
 }
 
 #[test]
+fn test_oracle_rotation_flow() {
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let intermediate_oracle = Address::generate(&env);
+    let final_oracle = Address::generate(&env);
+    let attacker = Address::generate(&env);
+
+    // Current oracle may rotate itself first.
+    client.update_oracle(&intermediate_oracle, &oracle);
+    // Admin can also rotate the oracle.
+    client.update_oracle(&final_oracle, &admin);
+
+    assert_eq!(
+        client.try_update_oracle(&final_oracle, &attacker),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "oracle_rotation"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    assert_eq!(
+        client.try_submit_result(&id, &Winner::Player1, &intermediate_oracle),
+        Err(Ok(Error::Unauthorized))
+    );
+
+    client.submit_result(&id, &Winner::Player2, &final_oracle);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+}
+
+#[test]
 fn test_is_funded_false_after_only_player1_deposits() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
