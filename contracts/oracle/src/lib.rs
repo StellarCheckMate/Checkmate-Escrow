@@ -21,6 +21,10 @@ impl OracleContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("init")),
+            admin,
+        );
     }
 
     /// Admin submits a verified match result on-chain.
@@ -90,8 +94,36 @@ impl OracleContract {
     }
 
     /// Check whether a result has been submitted for a match.
+    ///
+    /// # Access
+    /// This function is intentionally **public and unauthenticated**. It is a
+    /// read-only probe that returns a boolean — no result data is exposed.
+    ///
+    /// For most tournament contexts this is acceptable: knowing that *a* result
+    /// exists leaks no information about *who* won. If your use-case requires
+    /// keeping result existence private until an official announcement, use
+    /// [`has_result_admin`] instead, which requires admin authorisation.
     pub fn has_result(env: Env, match_id: u64) -> bool {
         env.storage().persistent().has(&DataKey::Result(match_id))
+    }
+
+    /// Admin-gated variant of [`has_result`] for private-tournament contexts.
+    ///
+    /// Identical in behaviour to `has_result` but requires the stored admin to
+    /// authorise the call, preventing any third party from probing whether a
+    /// result has been submitted before the official announcement.
+    ///
+    /// # Errors
+    /// Returns [`Error::Unauthorized`] if the contract has not been initialised
+    /// or if the caller is not the current admin.
+    pub fn has_result_admin(env: Env, match_id: u64) -> Result<bool, Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        Ok(env.storage().persistent().has(&DataKey::Result(match_id)))
     }
 
     /// Rotate the admin to a new address. Requires current admin auth.
@@ -158,13 +190,85 @@ mod tests {
         (env, oracle_id, escrow_id, oracle_admin, player1, player2, token_addr)
     }
 
+    // ── has_result (public, unauthenticated) ─────────────────────────────────
+
+    /// Confirms that any caller can invoke has_result without authentication.
+    /// Returns false before a result is submitted and true afterwards.
     #[test]
-    fn test_has_result_returns_false_before_submission() {
+    fn test_has_result_is_public_and_unauthenticated() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Before submission — any caller can probe, no auth required
+        assert!(!client.has_result(&0u64));
+        assert!(!client.has_result(&999u64));
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player1Wins,
+            &escrow_id,
+        );
+
+        // After submission — still public, now returns true
+        assert!(client.has_result(&0u64));
+        // Unrelated match_id still false
+        assert!(!client.has_result(&999u64));
+    }
+
+    // ── has_result_admin (admin-gated) ────────────────────────────────────────
+
+    /// Admin can probe result existence via the gated variant.
+    #[test]
+    fn test_has_result_admin_returns_false_before_submission() {
         let (env, contract_id, _escrow_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        assert!(!client.has_result(&0u64));
-        assert!(!client.has_result(&999u64));
+        assert!(!client.has_result_admin(&0u64));
+        assert!(!client.has_result_admin(&999u64));
+    }
+
+    /// has_result_admin returns true after a result is submitted.
+    #[test]
+    fn test_has_result_admin_returns_true_after_submission() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player1Wins,
+            &escrow_id,
+        );
+
+        assert!(client.has_result_admin(&0u64));
+    }
+
+    /// Non-admin callers must not be able to call has_result_admin.
+    #[test]
+    #[should_panic]
+    fn test_has_result_admin_rejects_non_admin() {
+        let env = Env::default();
+        // Do NOT mock all auths — we want auth to actually be enforced
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        env.mock_all_auths();
+        client.initialize(&admin);
+
+        // Only authorise non_admin — should fail
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &non_admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "has_result_admin",
+                args: (0u64,).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.has_result_admin(&0u64);
     }
 
     #[test]
@@ -335,5 +439,63 @@ mod tests {
 
         // Nothing should have been stored
         assert!(!client.has_result(&999u64));
+    }
+
+    #[test]
+    fn test_initialize_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "oracle").into_val(&env),
+            symbol_short!("init").into_val(&env),
+        ];
+        let matched = events
+            .iter()
+            .find(|(_, topics, _)| *topics == expected_topics);
+        assert!(matched.is_some(), "oracle initialized event not emitted");
+
+        let (_, _, data) = matched.unwrap();
+        let emitted_admin: Address = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(emitted_admin, admin);
+    }
+
+    #[test]
+    fn test_submit_draw_result_stores_correctly() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Draw,
+            &escrow_id,
+        );
+
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.result, MatchResult::Draw);
+    }
+
+    #[test]
+    fn test_submit_player2wins_result_stores_correctly() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player2Wins,
+            &escrow_id,
+        );
+
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.result, MatchResult::Player2Wins);
     }
 }
