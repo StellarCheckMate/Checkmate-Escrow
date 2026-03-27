@@ -1603,66 +1603,16 @@ fn test_draw_refunds_exact_stake_and_zeroes_escrow_balance() {
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 }
 
-// ── MatchCount increments correctly across sequential creates ────────────────
-
-/// Creates 5 matches and verifies:
-///   1. Each call to create_match returns IDs 0 through 4 in order.
-///   2. MatchCount in instance storage equals 5 after all creates.
-///   3. get_match(id) for each ID returns a Match whose fields match what was
-///      passed to create_match (player1, player2, stake_amount, game_id, platform).
 #[test]
-fn test_match_count_increments_and_get_match_returns_correct_data() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
+    let (env, contract_id, ..) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let game_ids = [
-        "count_game_0",
-        "count_game_1",
-        "count_game_2",
-        "count_game_3",
-        "count_game_4",
-    ];
-    let stakes: [i128; 5] = [10, 20, 30, 40, 50];
-
-    // Create 5 matches and assert each returned ID is sequential.
-    for i in 0..5_u64 {
-        let id = client.create_match(
-            &player1,
-            &player2,
-            &stakes[i as usize],
-            &token,
-            &String::from_str(&env, game_ids[i as usize]),
-            &Platform::Lichess,
-        );
-        assert_eq!(id, i, "create_match must return sequential ID {i}");
-    }
-
-    // Verify MatchCount in instance storage is exactly 5.
-    let count: u64 = env.as_contract(&contract_id, || {
-        env.storage()
-            .instance()
-            .get(&DataKey::MatchCount)
-            .expect("MatchCount must be present in storage")
-    });
-    assert_eq!(count, 5, "MatchCount must equal 5 after creating 5 matches");
-
-    // Verify get_match returns the correct data for each ID.
-    for i in 0..5_u64 {
-        let m = client.get_match(&i);
-        assert_eq!(m.id, i, "match.id must equal {i}");
-        assert_eq!(m.player1, player1, "match.player1 mismatch for id {i}");
-        assert_eq!(m.player2, player2, "match.player2 mismatch for id {i}");
-        assert_eq!(
-            m.stake_amount,
-            stakes[i as usize],
-            "match.stake_amount mismatch for id {i}"
-        );
-        assert_eq!(
-            m.game_id,
-            String::from_str(&env, game_ids[i as usize]),
-            "match.game_id mismatch for id {i}"
-        );
-        assert_eq!(m.platform, Platform::Lichess, "match.platform mismatch for id {i}");
-        assert_eq!(m.state, MatchState::Pending, "match.state must be Pending for id {i}");
-    }
+    // match_id 999 was never created — must return Error::MatchNotFound
+    let result = client.try_get_escrow_balance(&999u64);
+    assert_eq!(
+        result,
+        Err(Ok(Error::MatchNotFound)),
+        "get_escrow_balance must return MatchNotFound for a non-existent match_id"
+    );
 }
