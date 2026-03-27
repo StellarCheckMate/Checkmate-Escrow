@@ -762,6 +762,52 @@ fn test_ttl_extended_on_cancel_after_deposit() {
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
 
+#[test]
+fn test_ttl_refreshed_on_get_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_read_refresh"),
+        &Platform::Lichess,
+    );
+
+    // Let some time pass (advance ledger small amount to simulate partial TTL without archiving)
+    let ledgers_elapsed = 1000u32;
+    let current_ledger = env.ledger().sequence();
+    env.ledger().set_sequence_number(current_ledger + ledgers_elapsed);
+
+    // Extend instance TTLs to prevent archiving during test
+    env.as_contract(&contract_id, || {
+        env.storage().instance().extend_ttl(crate::MATCH_TTL_LEDGERS, crate::MATCH_TTL_LEDGERS);
+    });
+
+    // TTL should be partial
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert!(ttl_before < crate::MATCH_TTL_LEDGERS);
+
+    // get_match refreshes TTL
+    let _m = client.get_match(&id);
+
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert_eq!(ttl_after, crate::MATCH_TTL_LEDGERS);
+
+    // Multiple reads keep it full
+    client.get_match(&id);
+    let ttl_final = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert_eq!(ttl_final, crate::MATCH_TTL_LEDGERS);
+}
+
 // ── Task 1: non-admin cannot call pause / unpause ────────────────────────────
 
 #[test]
