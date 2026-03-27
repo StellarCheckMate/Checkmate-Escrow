@@ -286,6 +286,7 @@ mod tests {
         assert!(client.has_result(&0u64));
         let entry = client.get_result(&0u64);
         assert_eq!(entry.result, MatchResult::Player1Wins);
+        assert_eq!(entry.game_id, String::from_str(&env, "test_game"));
     }
 
     #[test]
