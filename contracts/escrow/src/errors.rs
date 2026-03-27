@@ -18,4 +18,5 @@ pub enum Error {
     DuplicateGameId = 13,
     MatchNotExpired = 14,
     InvalidGameId = 15,
+    ResultNotFound = 16,
 }

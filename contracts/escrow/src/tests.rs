@@ -1,4 +1,5 @@
 use super::*;
+use oracle::{MatchResult, OracleContract, OracleContractClient};
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Events, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
@@ -10,7 +11,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
-    let oracle = Address::generate(&env);
+    let oracle_admin = Address::generate(&env);
     let player1 = Address::generate(&env);
     let player2 = Address::generate(&env);
 
@@ -22,17 +23,47 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin);
+
+    let oracle_contract_id = env.register(OracleContract, ());
+    let oracle_client = OracleContractClient::new(&env, &oracle_contract_id);
+    oracle_client.initialize(&oracle_admin);
+
+    client.initialize(&oracle_contract_id, &admin);
 
     (
         env,
         contract_id,
-        oracle,
+        oracle_contract_id,
         player1,
         player2,
         token_addr,
         admin,
     )
+}
+
+fn winner_to_match_result(winner: Winner) -> MatchResult {
+    match winner {
+        Winner::Player1 => MatchResult::Player1Wins,
+        Winner::Player2 => MatchResult::Player2Wins,
+        Winner::Draw => MatchResult::Draw,
+    }
+}
+
+fn seed_oracle_result(
+    env: &Env,
+    oracle_contract: &Address,
+    match_id: u64,
+    game_id: &String,
+    winner: Winner,
+    escrow_contract: &Address,
+) {
+    let client = OracleContractClient::new(env, oracle_contract);
+    client.submit_result(
+        &match_id,
+        game_id,
+        &winner_to_match_result(winner),
+        escrow_contract,
+    );
 }
 
 #[test]
@@ -223,18 +254,20 @@ fn test_payout_winner() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
+    let game_id = String::from_str(&env, "game1");
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game1"),
+        &game_id,
         &Platform::Lichess,
     );
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1, &oracle);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
+    client.submit_result(&id, &oracle);
 
     assert_eq!(token_client.balance(&player1), 1100);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
@@ -246,18 +279,20 @@ fn test_draw_refund() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
+    let game_id = String::from_str(&env, "game2");
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game2"),
+        &game_id,
         &Platform::ChessDotCom,
     );
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Draw, &oracle);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Draw, &contract_id);
+    client.submit_result(&id, &oracle);
 
     assert_eq!(token_client.balance(&player1), 1000);
     assert_eq!(token_client.balance(&player2), 1000);
@@ -324,18 +359,20 @@ fn test_submit_result_emits_event() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
+    let game_id = String::from_str(&env, "game_evt");
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_evt"),
+        &game_id,
         &Platform::Lichess,
     );
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1, &oracle);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
+    client.submit_result(&id, &oracle);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -461,7 +498,7 @@ fn test_admin_pause_blocks_submit_result() {
     client.pause();
 
     // Attempt to submit result on paused contract
-    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
+    let result = client.try_submit_result(&id, &oracle);
     assert_eq!(
         result,
         Err(Ok(Error::ContractPaused)),
@@ -566,7 +603,7 @@ fn test_non_oracle_cannot_submit_result() {
     client.deposit(&id, &player2);
 
     let impostor = Address::generate(&env);
-    let result = client.try_submit_result(&id, &Winner::Player1, &impostor);
+    let result = client.try_submit_result(&id, &impostor);
     assert_eq!(
         result,
         Err(Ok(Error::Unauthorized)),
@@ -596,7 +633,7 @@ fn test_submit_result_on_cancelled_match_returns_invalid_state() {
     client.cancel_match(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 
-    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
+    let result = client.try_submit_result(&id, &oracle);
     assert_eq!(
         result,
         Err(Ok(Error::InvalidState)),
@@ -609,22 +646,24 @@ fn test_submit_result_on_completed_match_returns_invalid_state() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
+    let game_id = String::from_str(&env, "completed_game");
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "completed_game"),
+        &game_id,
         &Platform::Lichess,
     );
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1, &oracle);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
+    client.submit_result(&id, &oracle);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 
     // Second submit on an already-Completed match must fail
-    let result = client.try_submit_result(&id, &Winner::Player2, &oracle);
+    let result = client.try_submit_result(&id, &oracle);
     assert_eq!(
         result,
         Err(Ok(Error::InvalidState)),
@@ -729,17 +768,19 @@ fn test_ttl_extended_on_submit_result() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
+    let game_id = String::from_str(&env, "ttl_game3");
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_game3"),
+        &game_id,
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player2, &oracle);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player2, &contract_id);
+    client.submit_result(&id, &oracle);
 
     let ttl = env.as_contract(&contract_id, || {
         env.storage().persistent().get_ttl(&DataKey::Match(id))
@@ -1052,18 +1093,20 @@ fn test_cancel_completed_match_returns_invalid_state() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
+    let game_id = String::from_str(&env, "completed_cancel_game");
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "completed_cancel_game"),
+        &game_id,
         &Platform::Lichess,
     );
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1, &oracle);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
+    client.submit_result(&id, &oracle);
 
     // Sanity-check: match is now Completed and payout has happened
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
@@ -1096,12 +1139,13 @@ fn test_deposit_into_completed_match_returns_invalid_state() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
+    let game_id = String::from_str(&env, "completed_deposit_game");
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "completed_deposit_game"),
+        &game_id,
         &Platform::Lichess,
     );
 
@@ -1110,7 +1154,8 @@ fn test_deposit_into_completed_match_returns_invalid_state() {
     client.deposit(&id, &player2);
 
     // Oracle submits result → match transitions to Completed, payout executed
-    client.submit_result(&id, &Winner::Player1, &oracle);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
+    client.submit_result(&id, &oracle);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
     assert_eq!(token_client.balance(&player1), 1100);
     assert_eq!(token_client.balance(&player2), 900);
@@ -1211,18 +1256,20 @@ fn test_deposit_into_completed_match_returns_match_completed() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
+    let game_id = String::from_str(&env, "completed_deposit");
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "completed_deposit"),
+        &game_id,
         &Platform::Lichess,
     );
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1, &oracle);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
+    client.submit_result(&id, &oracle);
 
     let result = client.try_deposit(&id, &player2);
     assert_eq!(result, Err(Ok(Error::MatchCompleted)));
@@ -1321,43 +1368,28 @@ fn test_get_escrow_balance_stages() {
 
 #[test]
 fn test_submit_result_returns_not_funded_when_deposits_missing() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let admin = Address::generate(&env);
-    let oracle = Address::generate(&env);
-    let player1 = Address::generate(&env);
-    let player2 = Address::generate(&env);
-
-    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
-    let token_addr = token_id.address();
-    let asset_client = StellarAssetClient::new(&env, &token_addr);
-    asset_client.mint(&player1, &1000);
-    asset_client.mint(&player2, &1000);
-
-    let contract_id = env.register(EscrowContract, ());
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin);
 
+    let game_id = String::from_str(&env, "not_funded_game");
     let id = client.create_match(
         &player1,
         &player2,
         &100,
-        &token_addr,
-        &String::from_str(&env, "not_funded_game"),
+        &token,
+        &game_id,
         &Platform::Lichess,
     );
 
-    // Manually force the match into Active state without going through deposit,
-    // simulating a state inconsistency where state == Active but deposits are missing.
+    // Force the match into Active state without deposits.
     env.as_contract(&contract_id, || {
         let mut m: Match = env.storage().persistent().get(&DataKey::Match(id)).unwrap();
         m.state = MatchState::Active;
-        // player1_deposited and player2_deposited remain false
         env.storage().persistent().set(&DataKey::Match(id), &m);
     });
 
-    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
+    let result = client.try_submit_result(&id, &oracle);
     assert_eq!(
         result,
         Err(Ok(Error::NotFunded)),
@@ -1507,7 +1539,7 @@ fn test_submit_result_blocked_when_paused() {
 
     client.pause();
 
-    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
+    let result = client.try_submit_result(&id, &oracle);
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
@@ -1516,8 +1548,16 @@ fn test_oracle_rotation_flow() {
     let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let intermediate_oracle = Address::generate(&env);
-    let final_oracle = Address::generate(&env);
+    let intermediate_oracle = env.register(OracleContract, ());
+    let intermediate_admin = Address::generate(&env);
+    let intermediate_client = OracleContractClient::new(&env, &intermediate_oracle);
+    intermediate_client.initialize(&intermediate_admin);
+
+    let final_oracle = env.register(OracleContract, ());
+    let final_admin = Address::generate(&env);
+    let final_client = OracleContractClient::new(&env, &final_oracle);
+    final_client.initialize(&final_admin);
+
     let attacker = Address::generate(&env);
 
     // Current oracle may rotate itself first.
@@ -1530,23 +1570,25 @@ fn test_oracle_rotation_flow() {
         Err(Ok(Error::Unauthorized))
     );
 
+    let game_id = String::from_str(&env, "oracle_rotation");
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "oracle_rotation"),
+        &game_id,
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
     assert_eq!(
-        client.try_submit_result(&id, &Winner::Player1, &intermediate_oracle),
+        client.try_submit_result(&id, &intermediate_oracle),
         Err(Ok(Error::Unauthorized))
     );
 
-    client.submit_result(&id, &Winner::Player2, &final_oracle);
+    seed_oracle_result(&env, &final_oracle, id, &game_id, Winner::Player2, &contract_id);
+    client.submit_result(&id, &final_oracle);
 
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 }
@@ -1630,12 +1672,13 @@ fn test_draw_refunds_exact_stake_and_zeroes_escrow_balance() {
 
     let stake: i128 = 100;
 
+    let game_id = String::from_str(&env, "draw_escrow_zero");
     let id = client.create_match(
         &player1,
         &player2,
         &stake,
         &token,
-        &String::from_str(&env, "draw_escrow_zero"),
+        &game_id,
         &Platform::Lichess,
     );
 
@@ -1649,7 +1692,8 @@ fn test_draw_refunds_exact_stake_and_zeroes_escrow_balance() {
     let p2_before = token_client.balance(&player2);
 
     // Oracle submits Draw result
-    client.submit_result(&id, &Winner::Draw, &oracle);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Draw, &contract_id);
+    client.submit_result(&id, &oracle);
 
     // Each player must receive exactly stake_amount back
     assert_eq!(
@@ -1671,6 +1715,56 @@ fn test_draw_refunds_exact_stake_and_zeroes_escrow_balance() {
     );
 
     // Match state must be Completed
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+}
+
+#[test]
+fn test_oracle_result_drives_escrow_settlement() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let oracle_client = OracleContractClient::new(&env, &oracle);
+
+    let game_id = String::from_str(&env, "integration_flow");
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    seed_oracle_result(
+        &env,
+        &oracle,
+        id,
+        &game_id,
+        Winner::Player2,
+        &contract_id,
+    );
+
+    let stored = oracle_client.get_result(&id);
+    assert_eq!(stored.game_id, game_id);
+    assert_eq!(stored.result, MatchResult::Player2Wins);
+
+    client.submit_result(&id, &oracle);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("completed").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics)
+        .expect("match completed event must fire");
+    let (_, _, data) = matched;
+    let decoded: (u64, Winner) = <(u64, Winner)>::try_from_val(&env, &data).unwrap();
+    assert_eq!(decoded, (id, Winner::Player2));
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 }
 
