@@ -21,10 +21,39 @@ impl OracleContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Paused, &false);
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("init")),
             admin,
         );
+    }
+
+    /// Pause the oracle — admin only. Blocks submit_result.
+    pub fn pause(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events()
+            .publish((Symbol::new(&env, "oracle"), symbol_short!("paused")), ());
+        Ok(())
+    }
+
+    /// Unpause the oracle — admin only.
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events()
+            .publish((Symbol::new(&env, "oracle"), symbol_short!("unpaused")), ());
+        Ok(())
     }
 
     /// Admin submits a verified match result on-chain.
@@ -40,6 +69,15 @@ impl OracleContract {
         result: MatchResult,
         escrow: Address,
     ) -> Result<(), Error> {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
         let admin: Address = env
             .storage()
             .instance()
@@ -497,5 +535,135 @@ mod tests {
 
         let entry = client.get_result(&0u64);
         assert_eq!(entry.result, MatchResult::Player2Wins);
+    }
+
+    // ── Pause / Unpause ───────────────────────────────────────────────────────
+
+    /// submit_result must fail with ContractPaused when the oracle is paused.
+    #[test]
+    fn test_submit_result_blocked_when_paused() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.pause();
+
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player1Wins,
+            &escrow_id,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+        assert!(!client.has_result(&0u64));
+    }
+
+    /// After unpause, submit_result should succeed again.
+    #[test]
+    fn test_submit_result_allowed_after_unpause() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.pause();
+        client.unpause();
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player1Wins,
+            &escrow_id,
+        );
+        assert!(client.has_result(&0u64));
+    }
+
+    /// pause() must emit an "oracle"/"paused" event.
+    #[test]
+    fn test_pause_emits_event() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.pause();
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "oracle").into_val(&env),
+            symbol_short!("paused").into_val(&env),
+        ];
+        assert!(
+            events.iter().any(|(_, topics, _)| topics == expected_topics),
+            "oracle paused event not emitted"
+        );
+    }
+
+    /// unpause() must emit an "oracle"/"unpaused" event.
+    #[test]
+    fn test_unpause_emits_event() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.pause();
+        client.unpause();
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "oracle").into_val(&env),
+            symbol_short!("unpaused").into_val(&env),
+        ];
+        assert!(
+            events.iter().any(|(_, topics, _)| topics == expected_topics),
+            "oracle unpaused event not emitted"
+        );
+    }
+
+    /// Non-admin must not be able to call pause().
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_pause() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        env.mock_all_auths();
+        client.initialize(&admin);
+
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &non_admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "pause",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.pause();
+    }
+
+    /// Non-admin must not be able to call unpause().
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_unpause() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        env.mock_all_auths();
+        client.initialize(&admin);
+        client.pause();
+
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &non_admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "unpause",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.unpause();
     }
 }
