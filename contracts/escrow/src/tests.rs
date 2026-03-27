@@ -325,6 +325,7 @@ fn test_submit_result_emits_event() {
     assert_eq!(decoded, (id, Winner::Player1));
 }
 
+/// Regression test (Issue #142): cancel with zero deposits must still emit the event.
 #[test]
 fn test_cancel_match_emits_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -350,11 +351,60 @@ fn test_cancel_match_emits_event() {
     let matched = events
         .iter()
         .find(|(_, topics, _)| *topics == expected_topics);
-    assert!(matched.is_some(), "match cancelled event not emitted");
+    assert!(matched.is_some(), "match cancelled event not emitted (zero-deposit path)");
 
     let (_, _, data) = matched.unwrap();
     let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_id, id);
+}
+
+/// Issue #142: cancel_match must emit ("match", "cancelled", match_id) even when
+/// a deposit has already been made (partial-deposit path).
+#[test]
+fn test_cancel_match_emits_event_after_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_cancel_after_deposit"),
+        &Platform::Lichess,
+    );
+
+    // player1 deposits — match stays Pending (only one deposit)
+    client.deposit(&id, &player1);
+
+    client.cancel_match(&id, &player1);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("cancelled").into_val(&env),
+    ];
+
+    // Verify the cancelled event is present and carries the correct match_id
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(
+        matched.is_some(),
+        "match cancelled event not emitted after partial deposit (Issue #142)"
+    );
+
+    let (_, _, data) = matched.unwrap();
+    let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id, "cancelled event must carry the correct match_id");
+
+    // Confirm the event sequence: last event in the list must be the cancelled one
+    let last = events.last().unwrap();
+    assert_eq!(
+        last.1, expected_topics,
+        "cancelled must be the last event emitted"
+    );
 }
 
 #[test]
