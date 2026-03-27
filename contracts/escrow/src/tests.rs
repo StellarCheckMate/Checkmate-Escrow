@@ -86,6 +86,18 @@ fn test_get_match_returns_match_not_found_for_unknown_id() {
 }
 
 #[test]
+fn test_get_match_returns_correct_game_id() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "game_xyz_42");
+    let id = client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.game_id, game_id);
+}
+
+#[test]
 fn test_deposit_and_activate() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
