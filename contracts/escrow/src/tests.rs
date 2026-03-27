@@ -1508,3 +1508,17 @@ fn test_draw_refunds_exact_stake_and_zeroes_escrow_balance() {
     // Match state must be Completed
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 }
+
+#[test]
+fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // match_id 999 was never created — must return Error::MatchNotFound
+    let result = client.try_get_escrow_balance(&999u64);
+    assert_eq!(
+        result,
+        Err(Ok(Error::MatchNotFound)),
+        "get_escrow_balance must return MatchNotFound for a non-existent match_id"
+    );
+}
