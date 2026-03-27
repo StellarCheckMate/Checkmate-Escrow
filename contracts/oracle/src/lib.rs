@@ -21,6 +21,10 @@ impl OracleContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("init")),
+            admin,
+        );
     }
 
     /// Admin submits a verified match result on-chain.
@@ -435,5 +439,63 @@ mod tests {
 
         // Nothing should have been stored
         assert!(!client.has_result(&999u64));
+    }
+
+    #[test]
+    fn test_initialize_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin);
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "oracle").into_val(&env),
+            symbol_short!("init").into_val(&env),
+        ];
+        let matched = events
+            .iter()
+            .find(|(_, topics, _)| *topics == expected_topics);
+        assert!(matched.is_some(), "oracle initialized event not emitted");
+
+        let (_, _, data) = matched.unwrap();
+        let emitted_admin: Address = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(emitted_admin, admin);
+    }
+
+    #[test]
+    fn test_submit_draw_result_stores_correctly() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Draw,
+            &escrow_id,
+        );
+
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.result, MatchResult::Draw);
+    }
+
+    #[test]
+    fn test_submit_player2wins_result_stores_correctly() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player2Wins,
+            &escrow_id,
+        );
+
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.result, MatchResult::Player2Wins);
     }
 }
