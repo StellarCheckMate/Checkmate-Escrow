@@ -126,6 +126,24 @@ fn test_get_match_returns_correct_game_id() {
 }
 
 #[test]
+fn test_get_match_returns_correct_platform() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_platform_test"),
+        &Platform::ChessDotCom,
+    );
+
+    let m = client.get_match(&id);
+    assert_eq!(m.platform, Platform::ChessDotCom);
+}
+
+#[test]
 fn test_deposit_and_activate() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
