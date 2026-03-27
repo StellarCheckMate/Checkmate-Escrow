@@ -1647,3 +1647,20 @@ fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
         "get_escrow_balance must return MatchNotFound for a non-existent match_id"
     );
 }
+
+#[test]
+fn test_is_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert!(!client.is_initialized(), "should return false before initialize");
+
+    let oracle = Address::generate(&env);
+    let admin = Address::generate(&env);
+    client.initialize(&oracle, &admin);
+
+    assert!(client.is_initialized(), "should return true after initialize");
+}

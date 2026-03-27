@@ -435,6 +435,11 @@ impl EscrowContract {
         Ok(depositors * m.stake_amount)
     }
 
+    /// Return true if the contract has been initialized.
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&DataKey::Oracle)
+    }
+
     /// Return the total number of matches created.
     pub fn get_match_count(env: Env) -> u64 {
         env.storage()
