@@ -1647,3 +1647,16 @@ fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
         "get_escrow_balance must return MatchNotFound for a non-existent match_id"
     );
 }
+
+#[test]
+fn test_submit_result_returns_match_not_found_for_nonexistent_id() {
+    let (env, contract_id, oracle, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_submit_result(&999u64, &Winner::Player1, &oracle);
+    assert_eq!(
+        result,
+        Err(Ok(Error::MatchNotFound)),
+        "submit_result must return MatchNotFound for a non-existent match_id"
+    );
+}
