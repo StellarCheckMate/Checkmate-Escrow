@@ -434,6 +434,14 @@ impl EscrowContract {
             + if m.player2_deposited { 1 } else { 0 };
         Ok(depositors * m.stake_amount)
     }
+
+    /// Return the total number of matches created.
+    pub fn get_match_count(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]
