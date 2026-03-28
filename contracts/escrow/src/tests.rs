@@ -26,9 +26,9 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
 
     let oracle_contract_id = env.register(OracleContract, ());
     let oracle_client = OracleContractClient::new(&env, &oracle_contract_id);
-    oracle_client.initialize(&oracle_admin);
+    oracle_client.initialize(&oracle_admin, &oracle_admin);
 
-    client.initialize(&oracle_contract_id, &admin);
+    client.initialize(&oracle_contract_id, &admin, &admin);
 
     (
         env,
@@ -161,6 +161,24 @@ fn test_get_match_returns_correct_game_id() {
 
     let m = client.get_match(&id);
     assert_eq!(m.game_id, game_id);
+}
+
+#[test]
+fn test_get_match_returns_correct_platform() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_platform_test"),
+        &Platform::ChessDotCom,
+    );
+
+    let m = client.get_match(&id);
+    assert_eq!(m.platform, Platform::ChessDotCom);
 }
 
 #[test]
@@ -495,8 +513,72 @@ fn test_double_initialize_fails() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.initialize(&oracle1, &admin);
-    client.initialize(&oracle2, &admin);
+    client.initialize(&oracle1, &admin, &admin);
+    client.initialize(&oracle2, &admin, &admin);
+}
+
+// ── #216: initialize front-run guard ─────────────────────────────────────────
+
+/// A non-deployer must not be able to call initialize on the escrow contract.
+#[test]
+fn test_escrow_initialize_rejects_unauthorized_caller() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let deployer = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let admin = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Only authorize attacker — deployer.require_auth() must fail
+    use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+    env.set_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "initialize",
+            args: (&oracle, &admin, &deployer).into_val(&env),
+            sub_invokes: &[],
+        },
+    }
+    .into()]);
+
+    let result = client.try_initialize(&oracle, &admin, &deployer);
+    assert!(result.is_err(), "initialize must reject a non-deployer caller");
+}
+
+#[test]
+fn test_initialize_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = Address::generate(&env);
+    let admin = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.initialize(&oracle, &admin);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("init").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "initialized event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (emitted_oracle, emitted_admin): (Address, Address) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(emitted_oracle, oracle);
+    assert_eq!(emitted_admin, admin);
 }
 
 #[test]
@@ -953,7 +1035,7 @@ fn test_non_admin_cannot_pause() {
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin);
+    client.initialize(&oracle, &admin, &admin);
 
     // Replace mock_all_auths with a targeted mock that only authorises non_admin,
     // so admin.require_auth() inside pause() will not find a matching authorisation
@@ -989,7 +1071,7 @@ fn test_non_admin_cannot_unpause() {
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&oracle, &admin);
+    client.initialize(&oracle, &admin, &admin);
     // Pause first (admin is mocked via mock_all_auths at this point)
     client.pause();
 
@@ -1122,9 +1204,10 @@ fn test_cancel_only_player2_deposited_refunds_player2() {
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 }
 
-/// Cancel match immediately after creation with no deposits — escrow balance must be 0.
+/// Cancel match immediately after creation with no deposits — get_escrow_balance
+/// must return Err(MatchCancelled) for a cancelled match.
 #[test]
-fn test_get_escrow_balance_returns_zero_after_cancel_with_no_deposits() {
+fn test_get_escrow_balance_returns_cancelled_after_cancel_with_no_deposits() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -1140,8 +1223,11 @@ fn test_get_escrow_balance_returns_zero_after_cancel_with_no_deposits() {
     // Cancel immediately without any deposits
     client.cancel_match(&id, &player1);
 
-    // Escrow balance should be 0 (no deposits were made)
-    assert_eq!(client.get_escrow_balance(&id), 0);
+    // get_escrow_balance must return MatchCancelled for a cancelled match
+    assert_eq!(
+        client.try_get_escrow_balance(&id),
+        Err(Ok(Error::MatchCancelled))
+    );
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 }
 
@@ -1408,7 +1494,7 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     client.expire_match(&id);
 
     let m = client.get_match(&id);
-    assert_eq!(m.state, MatchState::Cancelled);
+    assert_eq!(m.state, MatchState::Expired);
     assert_eq!(token_client.balance(&player1), balance_before + 100);
 }
 
@@ -1628,12 +1714,12 @@ fn test_oracle_rotation_flow() {
     let intermediate_oracle = env.register(OracleContract, ());
     let intermediate_admin = Address::generate(&env);
     let intermediate_client = OracleContractClient::new(&env, &intermediate_oracle);
-    intermediate_client.initialize(&intermediate_admin);
+    intermediate_client.initialize(&intermediate_admin, &intermediate_admin);
 
     let final_oracle = env.register(OracleContract, ());
     let final_admin = Address::generate(&env);
     let final_client = OracleContractClient::new(&env, &final_oracle);
-    final_client.initialize(&final_admin);
+    final_client.initialize(&final_admin, &final_admin);
 
     let attacker = Address::generate(&env);
 
@@ -1809,11 +1895,11 @@ fn test_draw_refunds_exact_stake_and_zeroes_escrow_balance() {
         "player2 must receive exactly stake_amount on draw"
     );
 
-    // Contract escrow balance must be zero — no funds left behind
+    // Contract escrow balance must return MatchCompleted — no funds left behind
     assert_eq!(
-        client.get_escrow_balance(&id),
-        0,
-        "escrow balance must be 0 after draw payout"
+        client.try_get_escrow_balance(&id),
+        Err(Ok(Error::MatchCompleted)),
+        "get_escrow_balance must return MatchCompleted after draw payout"
     );
 
     // Match state must be Completed
