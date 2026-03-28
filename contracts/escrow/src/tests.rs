@@ -1381,7 +1381,7 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     client.expire_match(&id);
 
     let m = client.get_match(&id);
-    assert_eq!(m.state, MatchState::Cancelled);
+    assert_eq!(m.state, MatchState::Expired);
     assert_eq!(token_client.balance(&player1), balance_before + 100);
 }
 
@@ -1830,4 +1830,117 @@ fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
         Err(Ok(Error::MatchNotFound)),
         "get_escrow_balance must return MatchNotFound for a non-existent match_id"
     );
+}
+
+// ── Issue #185: winner stored after completion ────────────────────────────────
+
+#[test]
+fn test_get_match_returns_correct_winner_after_completion() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "winner_stored_game");
+    let id = client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+
+    // winner must be None before completion
+    assert_eq!(client.get_match(&id).winner, None);
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
+    client.submit_result(&id, &oracle);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Completed);
+    assert_eq!(m.winner, Some(Winner::Player1));
+}
+
+#[test]
+fn test_get_match_returns_player2_winner_after_completion() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "winner_p2_game");
+    let id = client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player2, &contract_id);
+    client.submit_result(&id, &oracle);
+
+    assert_eq!(client.get_match(&id).winner, Some(Winner::Player2));
+}
+
+#[test]
+fn test_get_match_returns_draw_winner_after_completion() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "winner_draw_game");
+    let id = client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Draw, &contract_id);
+    client.submit_result(&id, &oracle);
+
+    assert_eq!(client.get_match(&id).winner, Some(Winner::Draw));
+}
+
+// ── Issue #192: oracle admin submits results for multiple match IDs ───────────
+
+#[test]
+fn test_oracle_admin_submits_results_for_multiple_match_ids() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let oracle_client = OracleContractClient::new(&env, &oracle);
+
+    // Create and fund 3 matches with distinct game IDs
+    let game_ids = [
+        String::from_str(&env, "multi_game_0"),
+        String::from_str(&env, "multi_game_1"),
+        String::from_str(&env, "multi_game_2"),
+    ];
+    let outcomes = [MatchResult::Player1Wins, MatchResult::Player2Wins, MatchResult::Draw];
+
+    for (i, game_id) in game_ids.iter().enumerate() {
+        let id = client.create_match(&player1, &player2, &100, &token, game_id, &Platform::Lichess);
+        assert_eq!(id, i as u64);
+        client.deposit(&id, &player1);
+        client.deposit(&id, &player2);
+    }
+
+    // Submit results for each match independently
+    oracle_client.submit_result(&0u64, &game_ids[0], &outcomes[0], &contract_id);
+    oracle_client.submit_result(&1u64, &game_ids[1], &outcomes[1], &contract_id);
+    oracle_client.submit_result(&2u64, &game_ids[2], &outcomes[2], &contract_id);
+
+    // Each result must be stored independently and correctly
+    assert_eq!(oracle_client.get_result(&0u64).result, outcomes[0]);
+    assert_eq!(oracle_client.get_result(&1u64).result, outcomes[1]);
+    assert_eq!(oracle_client.get_result(&2u64).result, outcomes[2]);
+}
+
+// ── Issue #226: expire_match sets Expired state, emits "expired" event ────────
+
+#[test]
+fn test_expire_match_sets_expired_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1, &player2, &100, &token,
+        &String::from_str(&env, "expire_state_check"),
+        &Platform::Lichess,
+    );
+
+    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    env.as_contract(&contract_id, || {
+        env.storage().instance().extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+    env.ledger().set_sequence_number(new_seq);
+
+    client.expire_match(&id);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Expired);
 }
