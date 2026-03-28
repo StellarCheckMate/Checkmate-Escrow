@@ -145,6 +145,14 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
         Ok(())
     }
 
+    /// Returns true if the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
     /// Unpause the contract — admin only.
     pub fn unpause(env: Env) -> Result<(), Error> {
         let admin: Address = env

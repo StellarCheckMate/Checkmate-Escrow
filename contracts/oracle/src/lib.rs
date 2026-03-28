@@ -656,4 +656,63 @@ mod tests {
             "oracle initialize must reject a non-deployer caller"
         );
     }
+
+    // ── pause / unpause ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_pause_blocks_submit_result() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.pause();
+
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player1Wins,
+            &escrow_id,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+    }
+
+    #[test]
+    fn test_unpause_allows_submit_result() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.pause();
+        client.unpause();
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player1Wins,
+            &escrow_id,
+        );
+        assert!(client.has_result(&0u64));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_non_admin_cannot_pause() {
+        let env = Env::default();
+        let admin = Address::generate(&env);
+        let non_admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        env.mock_all_auths();
+        client.initialize(&admin, &admin);
+
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &non_admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "pause",
+                args: ().into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.pause();
+    }
 }
