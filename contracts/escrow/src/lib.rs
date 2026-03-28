@@ -28,7 +28,12 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     /// Initialize the contract with a trusted oracle address and an admin.
-    pub fn initialize(env: Env, oracle: Address, admin: Address) {
+    ///
+    /// Must be called by the deployer immediately after deployment.
+    /// The deployer address is passed as `deployer` and must authorize this call,
+    /// preventing any third party from front-running initialization.
+    pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) {
+        deployer.require_auth();
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
         }
