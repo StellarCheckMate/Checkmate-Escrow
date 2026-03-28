@@ -149,6 +149,22 @@ impl EscrowContract {
             return Err(Error::DuplicateGameId);
         }
 
+        // Validate that `token` implements the token interface by probing `balance`.
+        // An invalid address will cause try_invoke_contract to return Err, which we
+        // map to Error::InvalidToken rather than letting it panic at deposit time.
+        {
+            use soroban_sdk::IntoVal;
+            let args = vec![&env, env.current_contract_address().into_val(&env)];
+            let probe: Result<_, _> = env.try_invoke_contract::<soroban_sdk::Val, _>(
+                &token,
+                &Symbol::new(&env, "balance"),
+                args,
+            );
+            if probe.is_err() {
+                return Err(Error::InvalidToken);
+            }
+        }
+
         let id: u64 = env
             .storage()
             .instance()

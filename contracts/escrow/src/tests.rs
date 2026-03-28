@@ -1976,3 +1976,31 @@ fn test_ttl_extended_on_get_escrow_balance() {
     });
     assert_eq!(ttl_after, MATCH_TTL_LEDGERS, "get_escrow_balance must refresh TTL to full");
 }
+
+// ── #230: invalid token address rejected at create_match ─────────────────────
+
+/// Passing an arbitrary non-token address to create_match must return
+/// Err(Error::InvalidToken) rather than panicking at deposit time.
+#[test]
+fn test_create_match_with_invalid_token_returns_invalid_token() {
+    let (env, contract_id, _oracle, player1, player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // A freshly generated address has no contract code — not a token.
+    let invalid_token = Address::generate(&env);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &invalid_token,
+        &String::from_str(&env, "invalid_token_game"),
+        &Platform::Lichess,
+    );
+
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidToken)),
+        "create_match must return InvalidToken for a non-token address"
+    );
+}
