@@ -1647,3 +1647,15 @@ fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
         "get_escrow_balance must return MatchNotFound for a non-existent match_id"
     );
 }
+
+#[test]
+fn test_is_paused_returns_true_after_pause_and_false_after_unpause() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert!(!client.is_paused());
+    client.pause();
+    assert!(client.is_paused());
+    client.unpause();
+    assert!(!client.is_paused());
+}

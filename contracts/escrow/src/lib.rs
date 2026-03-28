@@ -63,6 +63,14 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns true if the contract is currently paused, false otherwise.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
     /// Create a new match. Both players must call `deposit` before the game starts.
     ///
     /// # Parameters
