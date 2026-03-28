@@ -9,7 +9,7 @@ pub enum MatchResult {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResultEntry {
     pub game_id: String,
     pub result: MatchResult,

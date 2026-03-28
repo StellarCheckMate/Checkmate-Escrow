@@ -5,10 +5,12 @@ pub mod types;
 
 use errors::Error;
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, token, vec, Vec, Address, Env, IntoVal, String, Symbol,
-    TryFromVal,
+    contract, contractimpl, symbol_short, token, vec, Address, Env, IntoVal, String, Symbol,
+    TryFromVal, Vec,
 };
-use types::{DataKey, Match, MatchState, OracleMatchResult, OracleResultEntry, Platform, Winner};
+use types::{
+    DataKey, Match, MatchState, MatchWinner, OracleMatchResult, OracleResultEntry, Platform, Winner,
+};
 
 /// ~30 days at 5s/ledger. Storage TTL only — controls how long match data is kept on-chain.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -81,6 +83,52 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
             (Symbol::new(&env, "admin"), symbol_short!("init")),
             (oracle, admin),
         );
+    }
+
+    /// Add a token to the allowlist — admin only.
+    pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::AllowedToken(token.clone()))
+        {
+            return Err(Error::TokenAlreadyAllowed);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(token), &true);
+        Ok(())
+    }
+
+    /// Remove a token from the allowlist — admin only.
+    pub fn remove_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::AllowedToken(token));
+        Ok(())
+    }
+
+    /// Check if a token is allowed.
+    pub fn is_token_allowed(env: Env, token: Address) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::AllowedToken(token))
+            .unwrap_or(false)
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
@@ -180,7 +228,7 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
+        if game_id.is_empty() || game_id.len() > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
         }
 
@@ -198,11 +246,10 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
         {
             use soroban_sdk::IntoVal;
             let args = vec![&env, env.current_contract_address().into_val(&env)];
-            let probe: Result<_, _> = env.try_invoke_contract::<soroban_sdk::Val, _>(
-                &token,
-                &Symbol::new(&env, "balance"),
-                args,
-            );
+            let probe: Result<
+                Result<soroban_sdk::Val, soroban_sdk::ConversionError>,
+                Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
+            > = env.try_invoke_contract(&token, &Symbol::new(&env, "balance"), args);
             if probe.is_err() {
                 return Err(Error::InvalidToken);
             }
@@ -240,7 +287,7 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
             player1_deposited: false,
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
-            winner: None,
+            winner: MatchWinner::Pending,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -263,10 +310,10 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
                 .persistent()
                 .get(&DataKey::PlayerMatches(player.clone()))
                 .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
-            let updated_matches = matches.push_back(id);
+            matches.push_back(id);
             env.storage()
                 .persistent()
-                .set(&DataKey::PlayerMatches(player.clone()), &updated_matches);
+                .set(&DataKey::PlayerMatches(player.clone()), &matches);
             env.storage().persistent().extend_ttl(
                 &DataKey::PlayerMatches(player),
                 MATCH_TTL_LEDGERS,
@@ -286,7 +333,9 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
             .get(&DataKey::ActiveMatches)
             .unwrap_or(Vec::new(&env));
         active.push_back(id);
-        env.storage().persistent().set(&DataKey::ActiveMatches, &active);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveMatches, &active);
 
         Ok(id)
     }
@@ -364,15 +413,6 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
 
     /// Oracle submits the verified match result and triggers payout.
     pub fn submit_result(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
-        if env
-            .storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            return Err(Error::ContractPaused);
-        }
-
         let oracle: Address = env
             .storage()
             .instance()
@@ -385,7 +425,12 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
         // require the oracle's signature before any other checks (e.g. paused)
         oracle.require_auth();
 
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             return Err(Error::ContractPaused);
         }
 
@@ -413,7 +458,7 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
         }
 
         m.state = MatchState::Completed;
-        m.winner = Some(winner.clone());
+        m.winner = MatchWinner::Decided(winner.clone());
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -442,7 +487,9 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
             }
             i += 1;
         }
-        env.storage().persistent().set(&DataKey::ActiveMatches, &new_active);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveMatches, &new_active);
 
         Ok(())
     }
@@ -544,7 +591,9 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
             }
             i += 1;
         }
-        env.storage().persistent().set(&DataKey::ActiveMatches, &new_active);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveMatches, &new_active);
 
         Ok(())
     }
@@ -607,11 +656,7 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
     ///   persistent storage entry has been evicted (TTL elapsed). The match
     ///   existed on-chain but is no longer accessible.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
-        let m = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)?;
+        let m = load_match(&env, match_id)?;
         env.storage().persistent().extend_ttl(
             &DataKey::Match(match_id),
             MATCH_TTL_LEDGERS,
@@ -622,11 +667,7 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
 
     /// Check whether both players have deposited.
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
-        let m: Match = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)?;
+        let m: Match = load_match(&env, match_id)?;
         env.storage().persistent().extend_ttl(
             &DataKey::Match(match_id),
             MATCH_TTL_LEDGERS,
@@ -640,11 +681,7 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
     /// Returns `Err(Error::MatchCompleted)` or `Err(Error::MatchCancelled)` for
     /// terminal states so callers can distinguish them from an unfunded match.
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
-        let m: Match = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)?;
+        let m: Match = load_match(&env, match_id)?;
         env.storage().persistent().extend_ttl(
             &DataKey::Match(match_id),
             MATCH_TTL_LEDGERS,
@@ -674,7 +711,6 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
             .get(&DataKey::MatchCount)
             .unwrap_or(0)
     }
-
 }
 
 #[cfg(test)]
