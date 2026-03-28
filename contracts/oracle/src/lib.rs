@@ -2,10 +2,11 @@
 
 mod errors;
 mod types;
+pub use types::MatchResult;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol};
-use types::{DataKey, MatchResult, ResultEntry};
+use types::{DataKey, ResultEntry};
 
 /// ~30 days at 5s/ledger.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -16,11 +17,18 @@ pub struct OracleContract;
 #[contractimpl]
 impl OracleContract {
     /// Initialize with a trusted admin (the off-chain oracle service).
-    pub fn initialize(env: Env, admin: Address) {
+    ///
+    /// Must be called by the deployer immediately after deployment.
+    /// The deployer address is passed as `deployer` and must authorize this call,
+    /// preventing any third party from front-running initialization.
+    pub fn initialize(env: Env, admin: Address, deployer: Address) {
+        deployer.require_auth();
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.events()
+            .publish((Symbol::new(&env, "oracle"), symbol_short!("init")), admin);
     }
 
     /// Admin submits a verified match result on-chain.
@@ -166,7 +174,7 @@ mod tests {
         // Register escrow contract and create + fund a match (id=0)
         let escrow_id = env.register(EscrowContract, ());
         let escrow_client = EscrowContractClient::new(&env, &escrow_id);
-        escrow_client.initialize(&oracle_admin, &admin);
+        escrow_client.initialize(&oracle_admin, &admin, &admin);
         escrow_client.create_match(
             &player1,
             &player2,
@@ -181,9 +189,17 @@ mod tests {
         // Register oracle contract
         let oracle_id = env.register(OracleContract, ());
         let oracle_client = OracleContractClient::new(&env, &oracle_id);
-        oracle_client.initialize(&oracle_admin);
+        oracle_client.initialize(&oracle_admin, &oracle_admin);
 
-        (env, oracle_id, escrow_id, oracle_admin, player1, player2, token_addr)
+        (
+            env,
+            oracle_id,
+            escrow_id,
+            oracle_admin,
+            player1,
+            player2,
+            token_addr,
+        )
     }
 
     // ── has_result (public, unauthenticated) ─────────────────────────────────
@@ -252,7 +268,7 @@ mod tests {
         let client = OracleContractClient::new(&env, &contract_id);
 
         env.mock_all_auths();
-        client.initialize(&admin);
+        client.initialize(&admin, &admin);
 
         // Only authorise non_admin — should fail
         env.mock_auths(&[soroban_sdk::testutils::MockAuth {
@@ -282,6 +298,7 @@ mod tests {
         assert!(client.has_result(&0u64));
         let entry = client.get_result(&0u64);
         assert_eq!(entry.result, MatchResult::Player1Wins);
+        assert_eq!(entry.game_id, String::from_str(&env, "test_game"));
     }
 
     #[test]
@@ -320,9 +337,19 @@ mod tests {
         let (env, contract_id, escrow_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(&0u64, &String::from_str(&env, "test_game"), &MatchResult::Draw, &escrow_id);
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Draw,
+            &escrow_id,
+        );
         // second submit should panic
-        client.submit_result(&0u64, &String::from_str(&env, "test_game"), &MatchResult::Draw, &escrow_id);
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Draw,
+            &escrow_id,
+        );
     }
 
     #[test]
@@ -334,8 +361,8 @@ mod tests {
         let contract_id = env.register(OracleContract, ());
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.initialize(&admin);
-        client.initialize(&admin);
+        client.initialize(&admin, &admin);
+        client.initialize(&admin, &admin);
     }
 
     #[test]
@@ -384,7 +411,7 @@ mod tests {
         let escrow_id = env.register(EscrowContract, ());
 
         env.mock_all_auths();
-        client.initialize(&old_admin);
+        client.initialize(&old_admin, &old_admin);
         client.update_admin(&new_admin);
 
         env.mock_auths(&[soroban_sdk::testutils::MockAuth {
@@ -435,5 +462,94 @@ mod tests {
 
         // Nothing should have been stored
         assert!(!client.has_result(&999u64));
+    }
+
+    #[test]
+    fn test_initialize_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.initialize(&admin, &admin);
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "oracle").into_val(&env),
+            symbol_short!("init").into_val(&env),
+        ];
+        let matched = events
+            .iter()
+            .find(|(_, topics, _)| *topics == expected_topics);
+        assert!(matched.is_some(), "oracle initialized event not emitted");
+
+        let (_, _, data) = matched.unwrap();
+        let emitted_admin: Address = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(emitted_admin, admin);
+    }
+
+    #[test]
+    fn test_submit_draw_result_stores_correctly() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Draw,
+            &escrow_id,
+        );
+
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.result, MatchResult::Draw);
+    }
+
+    #[test]
+    fn test_submit_player2wins_result_stores_correctly() {
+        let (env, contract_id, escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player2Wins,
+            &escrow_id,
+        );
+
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.result, MatchResult::Player2Wins);
+    }
+
+    // ── #216: oracle initialize front-run guard ───────────────────────────────
+
+    /// A non-deployer must not be able to call initialize on the oracle contract.
+    #[test]
+    fn test_oracle_initialize_rejects_unauthorized_caller() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let deployer = Address::generate(&env);
+        let attacker = Address::generate(&env);
+        let admin = Address::generate(&env);
+
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+        env.set_auths(&[MockAuth {
+            address: &attacker,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "initialize",
+                args: (&admin, &deployer).into_val(&env),
+                sub_invokes: &[],
+            },
+        }
+        .into()]);
+
+        let result = client.try_initialize(&admin, &deployer);
+        assert!(result.is_err(), "oracle initialize must reject a non-deployer caller");
     }
 }
