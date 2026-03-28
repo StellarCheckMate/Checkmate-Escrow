@@ -1647,3 +1647,65 @@ fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
         "get_escrow_balance must return MatchNotFound for a non-existent match_id"
     );
 }
+
+// ── Issue #138: Active → Completed state transition for all winner variants ──
+
+#[test]
+fn test_state_is_completed_after_submit_result_player1_wins() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_p1"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1, &oracle);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+}
+
+#[test]
+fn test_state_is_completed_after_submit_result_player2_wins() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_p2"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player2, &oracle);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+}
+
+#[test]
+fn test_state_is_completed_after_submit_result_draw() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_draw"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Draw, &oracle);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+}
