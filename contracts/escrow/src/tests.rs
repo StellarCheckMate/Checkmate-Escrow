@@ -2257,3 +2257,17 @@ fn test_cancel_match_rejects_contract_as_caller() {
     // Match must remain Pending — no state change from the rejected call
     assert_eq!(client.get_match(&id).state, MatchState::Pending);
 }
+
+// ── get_oracle returns the address set at initialize ─────────────────────────
+
+#[test]
+fn test_get_oracle_returns_address_set_at_initialize() {
+    let (env, contract_id, oracle_contract_id, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert_eq!(
+        client.get_oracle(),
+        oracle_contract_id,
+        "get_oracle must return the oracle address passed to initialize"
+    );
+}

@@ -648,6 +648,17 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)
     }
 
+    /// Return the trusted oracle address stored at initialization.
+    ///
+    /// # Errors
+    /// - `Error::Unauthorized` — the contract has not been initialized yet.
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)
+    }
+
     /// Read a match by ID.
     ///
     /// # Errors
