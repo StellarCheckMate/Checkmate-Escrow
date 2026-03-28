@@ -10,8 +10,12 @@ use soroban_sdk::{
 };
 use types::{DataKey, Match, MatchState, OracleMatchResult, OracleResultEntry, Platform, Winner};
 
-/// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
+/// ~30 days at 5s/ledger. Storage TTL only — controls how long match data is kept on-chain.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
+
+/// ~7 days at 5s/ledger. Business timeout — how long a Pending match may wait
+/// for both deposits before anyone can call `expire_match`.
+const MATCH_TIMEOUT_LEDGERS: u32 = 120_960;
 
 /// Maximum allowed byte length for a game_id string.
 ///
@@ -422,7 +426,7 @@ impl EscrowContract {
 
         let elapsed = env.ledger().sequence().saturating_sub(m.created_ledger);
 
-        if elapsed < MATCH_TTL_LEDGERS {
+        if elapsed < MATCH_TIMEOUT_LEDGERS {
             return Err(Error::MatchNotExpired);
         }
 

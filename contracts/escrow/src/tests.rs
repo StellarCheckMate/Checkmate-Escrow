@@ -1392,7 +1392,7 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     client.deposit(&id, &player1);
     let balance_before = token_client.balance(&player1);
 
-    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    let new_seq = env.ledger().sequence() + MATCH_TIMEOUT_LEDGERS;
     env.as_contract(&contract_id, || {
         env.storage()
             .instance()
@@ -1488,7 +1488,7 @@ fn test_expire_match_emits_expired_event() {
         &Platform::Lichess,
     );
 
-    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    let new_seq = env.ledger().sequence() + MATCH_TIMEOUT_LEDGERS;
     env.as_contract(&contract_id, || {
         env.storage()
             .instance()
@@ -1583,7 +1583,7 @@ fn test_expire_active_match_fails() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    let new_seq = env.ledger().sequence() + MATCH_TIMEOUT_LEDGERS;
     env.as_contract(&contract_id, || {
         env.storage()
             .instance()
@@ -1910,5 +1910,54 @@ fn test_submit_result_overflow_stake_returns_overflow() {
         result,
         Err(Ok(Error::Overflow)),
         "submit_result must return Overflow for stake_amount near i128::MAX / 2"
+    );
+}
+
+/// Issue #217: MATCH_TIMEOUT_LEDGERS (business rule) and MATCH_TTL_LEDGERS
+/// (storage TTL) must be independent values that can differ without affecting
+/// each other's behaviour.
+#[test]
+fn test_timeout_and_ttl_constants_are_independent() {
+    // The two constants must be distinct so a change to one cannot silently
+    // alter the other's behaviour.
+    assert_ne!(
+        crate::MATCH_TIMEOUT_LEDGERS,
+        crate::MATCH_TTL_LEDGERS,
+        "MATCH_TIMEOUT_LEDGERS and MATCH_TTL_LEDGERS must be different values"
+    );
+
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "timeout_ttl_independence"),
+        &Platform::Lichess,
+    );
+
+    // Advance exactly to MATCH_TIMEOUT_LEDGERS — expire_match must succeed.
+    let new_seq = env.ledger().sequence() + crate::MATCH_TIMEOUT_LEDGERS;
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .extend_ttl(crate::MATCH_TTL_LEDGERS, crate::MATCH_TTL_LEDGERS);
+    });
+    env.ledger().set_sequence_number(new_seq);
+
+    client.expire_match(&id);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+
+    // Storage TTL must still be the full MATCH_TTL_LEDGERS — unaffected by the
+    // business-rule timeout.
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert_eq!(
+        ttl,
+        crate::MATCH_TTL_LEDGERS,
+        "storage TTL must equal MATCH_TTL_LEDGERS regardless of MATCH_TIMEOUT_LEDGERS"
     );
 }
