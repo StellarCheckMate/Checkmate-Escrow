@@ -70,7 +70,7 @@ impl EscrowContract {
     /// Must be called by the deployer immediately after deployment.
     /// The deployer address is passed as `deployer` and must authorize this call,
     /// preventing any third party from front-running initialization.
-pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) {
+    pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) {
         deployer.require_auth();
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
@@ -301,7 +301,12 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
         env.storage()
             .persistent()
-            .set(&DataKey::GameId(m.game_id.clone()), &true);
+            .set(&DataKey::GameId(m.game_id.clone()), &id);
+        env.storage().persistent().extend_ttl(
+            &DataKey::GameId(m.game_id.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
 
         // Update player matches index
         for player in [m.player1.clone(), m.player2.clone()] {
@@ -657,6 +662,38 @@ pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) 
     ///   existed on-chain but is no longer accessible.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
         let m = load_match(&env, match_id)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        Ok(m)
+    }
+
+    /// Read a match by its platform game ID.
+    ///
+    /// # Errors
+    /// - `Error::InvalidGameId` — the provided `game_id` is empty or exceeds
+    ///   `MAX_GAME_ID_LEN`.
+    /// - `Error::MatchNotFound` — no match has been indexed for this `game_id`.
+    /// - `Error::MatchStorageExpired` — the `game_id` still resolves to a
+    ///   previously allocated `match_id`, but that match entry has been evicted.
+    pub fn get_match_by_game_id(env: Env, game_id: String) -> Result<Match, Error> {
+        if game_id.is_empty() || game_id.len() > MAX_GAME_ID_LEN {
+            return Err(Error::InvalidGameId);
+        }
+
+        let match_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::GameId(game_id.clone()))
+            .ok_or(Error::MatchNotFound)?;
+        let m = load_match(&env, match_id)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::GameId(game_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         env.storage().persistent().extend_ttl(
             &DataKey::Match(match_id),
             MATCH_TTL_LEDGERS,

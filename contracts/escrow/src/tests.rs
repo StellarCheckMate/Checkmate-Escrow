@@ -183,6 +183,61 @@ fn test_get_match_returns_correct_platform() {
 }
 
 #[test]
+fn test_create_match_indexes_game_id_to_match_id() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "indexed_game_id");
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+
+    let indexed_id: u64 = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::GameId(game_id))
+            .expect("game_id index should be stored")
+    });
+    assert_eq!(indexed_id, id);
+}
+
+#[test]
+fn test_get_match_by_game_id_returns_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "lookup_game_id");
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+
+    let m = client.get_match_by_game_id(&game_id);
+    assert_eq!(m.id, id);
+    assert_eq!(m.game_id, game_id);
+    assert_eq!(m.state, MatchState::Pending);
+}
+
+#[test]
+fn test_get_match_by_game_id_returns_match_not_found_for_unknown_game_id() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_get_match_by_game_id(&String::from_str(&env, "missing_game_id"));
+
+    assert!(matches!(result, Err(Ok(Error::MatchNotFound))));
+}
+
+#[test]
 fn test_deposit_and_activate() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -686,7 +741,7 @@ fn test_create_match_with_same_player_fails() {
         &Platform::Lichess,
     );
 
-    assert_eq!(result, Err(Ok(Error::SamePlayer)));
+    assert_eq!(result, Err(Ok(Error::InvalidPlayers)));
 }
 
 #[test]
