@@ -31,6 +31,34 @@ impl OracleContract {
             .publish((Symbol::new(&env, "oracle"), symbol_short!("init")), admin);
     }
 
+    /// Pause the oracle — admin only. Blocks submit_result.
+    pub fn pause(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events()
+            .publish((Symbol::new(&env, "oracle"), symbol_short!("paused")), ());
+        Ok(())
+    }
+
+    /// Unpause the oracle — admin only.
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events()
+            .publish((Symbol::new(&env, "oracle"), symbol_short!("unpaused")), ());
+        Ok(())
+    }
+
     /// Admin submits a verified match result on-chain.
     ///
     /// `escrow` is the deployed escrow contract address. `match_id` must
@@ -44,6 +72,15 @@ impl OracleContract {
         result: MatchResult,
         escrow: Address,
     ) -> Result<(), Error> {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
         let admin: Address = env
             .storage()
             .instance()
