@@ -20,4 +20,5 @@ pub enum Error {
     /// Code 5 — The match ID referenced does not exist in the escrow contract.
     MatchNotFound = 5,
     ContractPaused = 6,
+    GameIdMismatch = 7,
 }

@@ -584,13 +584,13 @@
                 },
                 "durability": "persistent",
                 "val": {
-                  "bool": true
+                  "u64": 0
                 }
               }
             },
             "ext": "v0"
           },
-          4095
+          518400
         ]
       ],
       [
