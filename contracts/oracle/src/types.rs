@@ -18,5 +18,6 @@ pub struct ResultEntry {
 #[contracttype]
 pub enum DataKey {
     Admin,
+    Paused,
     Result(u64), // keyed by match_id
 }
