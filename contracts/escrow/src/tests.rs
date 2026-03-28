@@ -1910,3 +1910,69 @@ fn test_get_escrow_balance_returns_match_cancelled_for_cancelled_match() {
         "get_escrow_balance must return MatchCancelled for a cancelled match"
     );
 }
+
+// ── #225: TTL extension on is_funded and get_escrow_balance reads ─────────────
+
+/// is_funded must extend the TTL of the match entry on read.
+#[test]
+fn test_ttl_extended_on_is_funded() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1, &player2, &100, &token,
+        &String::from_str(&env, "ttl_is_funded"),
+        &Platform::Lichess,
+    );
+
+    let elapsed = 1000u32;
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + elapsed);
+    env.as_contract(&contract_id, || {
+        env.storage().instance().extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert!(ttl_before < MATCH_TTL_LEDGERS);
+
+    client.is_funded(&id);
+
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert_eq!(ttl_after, MATCH_TTL_LEDGERS, "is_funded must refresh TTL to full");
+}
+
+/// get_escrow_balance must extend the TTL of the match entry on read.
+#[test]
+fn test_ttl_extended_on_get_escrow_balance() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1, &player2, &100, &token,
+        &String::from_str(&env, "ttl_get_balance"),
+        &Platform::Lichess,
+    );
+
+    let elapsed = 1000u32;
+    let current = env.ledger().sequence();
+    env.ledger().set_sequence_number(current + elapsed);
+    env.as_contract(&contract_id, || {
+        env.storage().instance().extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert!(ttl_before < MATCH_TTL_LEDGERS);
+
+    client.get_escrow_balance(&id);
+
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert_eq!(ttl_after, MATCH_TTL_LEDGERS, "get_escrow_balance must refresh TTL to full");
+}
