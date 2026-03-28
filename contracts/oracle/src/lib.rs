@@ -2,10 +2,11 @@
 
 mod errors;
 mod types;
+pub use types::MatchResult;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol};
-use types::{DataKey, MatchResult, ResultEntry};
+use types::{DataKey, ResultEntry};
 
 /// ~30 days at 5s/ledger.
 const MATCH_TTL_LEDGERS: u32 = 518_400;

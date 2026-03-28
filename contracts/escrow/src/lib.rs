@@ -4,8 +4,11 @@ pub mod errors;
 pub mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
-use types::{DataKey, Match, MatchState, Platform, Winner};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, token, Address, Env, IntoVal, String, Symbol, TryFromVal,
+    vec,
+};
+use types::{DataKey, Match, MatchState, OracleMatchResult, OracleResultEntry, Platform, Winner};
 
 /// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -60,6 +63,38 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events()
             .publish((Symbol::new(&env, "admin"), symbol_short!("unpaused")), ());
+        Ok(())
+    }
+
+    /// Rotate the oracle address. Requires authorization from the current oracle or the admin.
+    pub fn update_oracle(
+        env: Env,
+        new_oracle: Address,
+        caller: Address,
+    ) -> Result<(), Error> {
+        let current_oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+
+        if caller != current_oracle && caller != admin {
+            return Err(Error::Unauthorized);
+        }
+        caller.require_auth();
+
+        env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
+            (current_oracle, new_oracle),
+        );
+
         Ok(())
     }
 
@@ -223,12 +258,7 @@ impl EscrowContract {
     }
 
     /// Oracle submits the verified match result and triggers payout.
-    pub fn submit_result(
-        env: Env,
-        match_id: u64,
-        winner: Winner,
-        caller: Address,
-    ) -> Result<(), Error> {
+    pub fn submit_result(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
         if env
             .storage()
             .instance()
@@ -263,6 +293,7 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
+        let winner = Self::fetch_oracle_result(&env, &oracle, match_id, &m.game_id)?;
         let client = token::Client::new(&env, &m.token);
         let pot = m.stake_amount * 2;
 
@@ -289,6 +320,39 @@ impl EscrowContract {
         env.events().publish(topics, (match_id, winner));
 
         Ok(())
+    }
+
+    fn fetch_oracle_result(
+        env: &Env,
+        oracle: &Address,
+        match_id: u64,
+        expected_game_id: &String,
+    ) -> Result<Winner, Error> {
+        let args = vec![&env, match_id.into_val(env)];
+        let symbol = Symbol::new(env, "get_result");
+        let call_result: Result<
+            Result<soroban_sdk::Val, soroban_sdk::ConversionError>,
+            Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
+        > = env.try_invoke_contract(oracle, &symbol, args);
+
+        let value = match call_result {
+            Ok(Ok(val)) => val,
+            _ => return Err(Error::ResultNotFound),
+        };
+
+        let entry: OracleResultEntry =
+            OracleResultEntry::try_from_val(env, &value).map_err(|_| Error::ResultNotFound)?;
+
+        if entry.game_id != *expected_game_id {
+            return Err(Error::InvalidGameId);
+        }
+
+        let resolved = match entry.result {
+            OracleMatchResult::Player1Wins => Winner::Player1,
+            OracleMatchResult::Player2Wins => Winner::Player2,
+            OracleMatchResult::Draw => Winner::Draw,
+        };
+        Ok(resolved)
     }
 
     /// Cancel a pending match and refund any deposits.
@@ -446,4 +510,3 @@ impl EscrowContract {
 
 #[cfg(test)]
 mod tests;
-
