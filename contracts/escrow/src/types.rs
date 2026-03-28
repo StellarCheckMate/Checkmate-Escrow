@@ -7,6 +7,7 @@ pub enum MatchState {
     Active,    // both players deposited, game in progress
     Completed, // result submitted, payout executed
     Cancelled, // cancelled before activation
+    Expired,   // timed out before both players deposited
 }
 
 #[contracttype]
@@ -39,6 +40,8 @@ pub struct Match {
     pub player2_deposited: bool,
     /// Ledger sequence number at match creation. Used for timeout and ordering logic.
     pub created_ledger: u32,
+    /// Set when the match reaches Completed state.
+    pub winner: Option<Winner>,
 }
 
 #[contracttype]
