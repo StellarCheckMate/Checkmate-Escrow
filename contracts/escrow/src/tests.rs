@@ -1427,6 +1427,18 @@ fn test_unpause_emits_event() {
     );
 }
 
+#[test]
+fn test_is_paused_reflects_state() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert!(!client.is_paused());
+    client.pause();
+    assert!(client.is_paused());
+    client.unpause();
+    assert!(!client.is_paused());
+}
+
 // ── Issue #65: player cannot deposit twice for the same match ─────────────────
 
 #[test]
