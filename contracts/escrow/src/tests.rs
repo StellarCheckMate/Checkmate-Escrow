@@ -294,9 +294,10 @@ fn test_payout_winner() {
     seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
     client.submit_result(&id, &oracle);
 
+    assert_eq!(token_client.balance(&contract_id), 0);
     assert_eq!(token_client.balance(&player1), 1100);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
-}
+
 
 #[test]
 fn test_draw_refund() {
