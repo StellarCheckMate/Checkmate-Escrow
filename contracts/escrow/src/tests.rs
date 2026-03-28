@@ -1831,3 +1831,12 @@ fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
         "get_escrow_balance must return MatchNotFound for a non-existent match_id"
     );
 }
+
+#[test]
+fn test_cancel_match_nonexistent_returns_match_not_found() {
+    let (env, contract_id, _oracle, player1, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_cancel_match(&999u64, &player1);
+    assert_eq!(result, Err(Ok(Error::MatchNotFound)));
+}
