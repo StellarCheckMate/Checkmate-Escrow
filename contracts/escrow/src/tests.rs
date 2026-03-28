@@ -1479,7 +1479,7 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     client.deposit(&id, &player1);
     let balance_before = token_client.balance(&player1);
 
-    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    let new_seq = env.ledger().sequence() + MATCH_TIMEOUT_LEDGERS;
     env.as_contract(&contract_id, || {
         env.storage()
             .instance()
@@ -1575,7 +1575,7 @@ fn test_expire_match_emits_expired_event() {
         &Platform::Lichess,
     );
 
-    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    let new_seq = env.ledger().sequence() + MATCH_TIMEOUT_LEDGERS;
     env.as_contract(&contract_id, || {
         env.storage()
             .instance()
@@ -1691,7 +1691,7 @@ fn test_expire_active_match_fails() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    let new_seq = env.ledger().sequence() + MATCH_TIMEOUT_LEDGERS;
     env.as_contract(&contract_id, || {
         env.storage()
             .instance()
