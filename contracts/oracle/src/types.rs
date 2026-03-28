@@ -20,4 +20,5 @@ pub enum DataKey {
     Admin,
     Paused,
     Result(u64), // keyed by match_id
+    Paused,
 }
