@@ -50,3 +50,18 @@ pub enum DataKey {
     Paused,
     GameId(String),
 }
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OracleMatchResult {
+    Player1Wins,
+    Player2Wins,
+    Draw,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OracleResultEntry {
+    pub game_id: String,
+    pub result: OracleMatchResult,
+}
