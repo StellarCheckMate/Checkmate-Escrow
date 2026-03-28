@@ -1418,7 +1418,7 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     client.expire_match(&id);
 
     let m = client.get_match(&id);
-    assert_eq!(m.state, MatchState::Cancelled);
+    assert_eq!(m.state, MatchState::Expired);
     assert_eq!(token_client.balance(&player1), balance_before + 100);
 }
 

@@ -187,6 +187,7 @@ impl EscrowContract {
             player1_deposited: false,
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
+            winner: None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -328,6 +329,7 @@ impl EscrowContract {
         }
 
         m.state = MatchState::Completed;
+        m.winner = Some(winner.clone());
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -454,7 +456,7 @@ impl EscrowContract {
             client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
         }
 
-        m.state = MatchState::Cancelled;
+        m.state = MatchState::Expired;
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
