@@ -1142,9 +1142,10 @@ fn test_cancel_only_player2_deposited_refunds_player2() {
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 }
 
-/// Cancel match immediately after creation with no deposits — escrow balance must be 0.
+/// Cancel match immediately after creation with no deposits — get_escrow_balance
+/// must return Err(MatchCancelled) for a cancelled match.
 #[test]
-fn test_get_escrow_balance_returns_zero_after_cancel_with_no_deposits() {
+fn test_get_escrow_balance_returns_cancelled_after_cancel_with_no_deposits() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -1160,8 +1161,11 @@ fn test_get_escrow_balance_returns_zero_after_cancel_with_no_deposits() {
     // Cancel immediately without any deposits
     client.cancel_match(&id, &player1);
 
-    // Escrow balance should be 0 (no deposits were made)
-    assert_eq!(client.get_escrow_balance(&id), 0);
+    // get_escrow_balance must return MatchCancelled for a cancelled match
+    assert_eq!(
+        client.try_get_escrow_balance(&id),
+        Err(Ok(Error::MatchCancelled))
+    );
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 }
 
@@ -1790,11 +1794,11 @@ fn test_draw_refunds_exact_stake_and_zeroes_escrow_balance() {
         "player2 must receive exactly stake_amount on draw"
     );
 
-    // Contract escrow balance must be zero — no funds left behind
+    // Contract escrow balance must return MatchCompleted — no funds left behind
     assert_eq!(
-        client.get_escrow_balance(&id),
-        0,
-        "escrow balance must be 0 after draw payout"
+        client.try_get_escrow_balance(&id),
+        Err(Ok(Error::MatchCompleted)),
+        "get_escrow_balance must return MatchCompleted after draw payout"
     );
 
     // Match state must be Completed
@@ -1862,5 +1866,47 @@ fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
         result,
         Err(Ok(Error::MatchNotFound)),
         "get_escrow_balance must return MatchNotFound for a non-existent match_id"
+    );
+}
+
+// ── #219: get_escrow_balance terminal state errors ────────────────────────────
+
+/// get_escrow_balance must return Err(MatchCompleted) for a completed match.
+#[test]
+fn test_get_escrow_balance_returns_match_completed_for_completed_match() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "completed_balance_check");
+    let id = client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
+    client.submit_result(&id, &oracle);
+
+    assert_eq!(
+        client.try_get_escrow_balance(&id),
+        Err(Ok(Error::MatchCompleted)),
+        "get_escrow_balance must return MatchCompleted for a completed match"
+    );
+}
+
+/// get_escrow_balance must return Err(MatchCancelled) for a cancelled match.
+#[test]
+fn test_get_escrow_balance_returns_match_cancelled_for_cancelled_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1, &player2, &100, &token,
+        &String::from_str(&env, "cancelled_balance_check"),
+        &Platform::Lichess,
+    );
+    client.cancel_match(&id, &player1);
+
+    assert_eq!(
+        client.try_get_escrow_balance(&id),
+        Err(Ok(Error::MatchCancelled)),
+        "get_escrow_balance must return MatchCancelled for a cancelled match"
     );
 }

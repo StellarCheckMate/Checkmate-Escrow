@@ -489,14 +489,20 @@ impl EscrowContract {
     }
 
     /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
+    ///
+    /// Returns `Err(Error::MatchCompleted)` or `Err(Error::MatchCancelled)` for
+    /// terminal states so callers can distinguish them from an unfunded match.
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
         let m: Match = env
             .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
-        if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
-            return Ok(0);
+        if m.state == MatchState::Completed {
+            return Err(Error::MatchCompleted);
+        }
+        if m.state == MatchState::Cancelled {
+            return Err(Error::MatchCancelled);
         }
         // Count depositors explicitly — avoids fragile bool-to-integer casting.
         let depositors: i128 = if m.player1_deposited { 1 } else { 0 }
