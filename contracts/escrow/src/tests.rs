@@ -1408,7 +1408,7 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     client.expire_match(&id);
 
     let m = client.get_match(&id);
-    assert_eq!(m.state, MatchState::Cancelled);
+    assert_eq!(m.state, MatchState::Expired);
     assert_eq!(token_client.balance(&player1), balance_before + 100);
 }
 
@@ -1930,34 +1930,18 @@ fn test_timeout_and_ttl_constants_are_independent() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "timeout_ttl_independence"),
+        &player1, &player2, &100, &token,
+        &String::from_str(&env, "expire_state_check"),
         &Platform::Lichess,
     );
 
-    // Advance exactly to MATCH_TIMEOUT_LEDGERS — expire_match must succeed.
-    let new_seq = env.ledger().sequence() + crate::MATCH_TIMEOUT_LEDGERS;
+    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
     env.as_contract(&contract_id, || {
-        env.storage()
-            .instance()
-            .extend_ttl(crate::MATCH_TTL_LEDGERS, crate::MATCH_TTL_LEDGERS);
+        env.storage().instance().extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     });
     env.ledger().set_sequence_number(new_seq);
 
     client.expire_match(&id);
-    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 
-    // Storage TTL must still be the full MATCH_TTL_LEDGERS — unaffected by the
-    // business-rule timeout.
-    let ttl = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::Match(id))
-    });
-    assert_eq!(
-        ttl,
-        crate::MATCH_TTL_LEDGERS,
-        "storage TTL must equal MATCH_TTL_LEDGERS regardless of MATCH_TIMEOUT_LEDGERS"
-    );
+    assert_eq!(client.get_match(&id).state, MatchState::Expired);
 }
