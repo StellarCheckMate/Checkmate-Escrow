@@ -314,6 +314,7 @@ fn test_draw_refund() {
 
     assert_eq!(token_client.balance(&player1), 1000);
     assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(token_client.balance(&contract_id), 0);
 }
 
 #[test]
@@ -1848,6 +1849,13 @@ fn test_draw_refunds_exact_stake_and_zeroes_escrow_balance() {
         client.try_get_escrow_balance(&id),
         Err(Ok(Error::MatchCompleted)),
         "get_escrow_balance must return MatchCompleted after draw payout"
+    );
+
+    // Contract's actual token balance must also be zero
+    assert_eq!(
+        token_client.balance(&contract_id),
+        0,
+        "contract token balance must be 0 after draw refunds"
     );
 
     // Match state must be Completed
