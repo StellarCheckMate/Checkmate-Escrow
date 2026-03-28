@@ -53,6 +53,8 @@ pub enum DataKey {
     Paused,
     GameId(String),
     PlayerMatches(Address),
+    AllowedToken(Address),
+    ActiveMatches,
 }
 
 #[contracttype]

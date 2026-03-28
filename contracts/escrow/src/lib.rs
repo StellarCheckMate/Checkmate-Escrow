@@ -5,7 +5,7 @@ pub mod types;
 
 use errors::Error;
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, token, vec, Address, Env, IntoVal, String, Symbol,
+    contract, contractimpl, symbol_short, token, vec, Vec, Address, Env, IntoVal, String, Symbol,
     TryFromVal,
 };
 use types::{DataKey, Match, MatchState, OracleMatchResult, OracleResultEntry, Platform, Winner};
@@ -68,7 +68,7 @@ impl EscrowContract {
     /// Must be called by the deployer immediately after deployment.
     /// The deployer address is passed as `deployer` and must authorize this call,
     /// preventing any third party from front-running initialization.
-    pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) {
+pub fn initialize(env: Env, oracle: Address, admin: Address, deployer: Address) {
         deployer.require_auth();
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
@@ -81,48 +81,6 @@ impl EscrowContract {
             (Symbol::new(&env, "admin"), symbol_short!("init")),
             (oracle, admin),
         );
-    }
-
-    /// Add a token to the allowlist — admin only.
-    pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
-
-        if env.storage().instance().has(&DataKey::AllowedToken(token.clone())) {
-            return Err(Error::TokenAlreadyAllowed);
-        }
-
-        env.storage()
-            .instance()
-            .set(&DataKey::AllowedToken(token), &true);
-        Ok(())
-    }
-
-    /// Remove a token from the allowlist — admin only.
-    pub fn remove_allowed_token(env: Env, token: Address) -> Result<(), Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
-
-        env.storage()
-            .instance()
-            .remove(&DataKey::AllowedToken(token));
-        Ok(())
-    }
-
-    /// Check if a token is allowed.
-    pub fn is_token_allowed(env: Env, token: Address) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::AllowedToken(token))
-            .unwrap_or(false)
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
@@ -717,41 +675,6 @@ impl EscrowContract {
             .unwrap_or(0)
     }
 
-    /// Add a token address to the allowlist — admin only.
-    pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&DataKey::AllowedToken(token), &true);
-        Ok(())
-    }
-
-    /// Remove a token address from the allowlist — admin only.
-    pub fn remove_allowed_token(env: Env, token: Address) -> Result<(), Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
-        env.storage()
-            .instance()
-            .remove(&DataKey::AllowedToken(token));
-        Ok(())
-    }
-
-    /// Check whether a token is on the allowlist.
-    pub fn is_allowed_token(env: Env, token: Address) -> bool {
-        env.storage()
-            .instance()
-            .get::<DataKey, bool>(&DataKey::AllowedToken(token))
-            .unwrap_or(false)
-    }
 }
 
 #[cfg(test)]
