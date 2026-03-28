@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, String, Vec};
+use soroban_sdk::{contracttype, Address, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,6 +26,13 @@ pub enum Winner {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MatchWinner {
+    Pending,
+    Decided(Winner),
+}
+
+#[contracttype]
 #[derive(Clone, Debug)]
 pub struct Match {
     pub id: u64,
@@ -40,8 +47,8 @@ pub struct Match {
     pub player2_deposited: bool,
     /// Ledger sequence number at match creation. Used for timeout and ordering logic.
     pub created_ledger: u32,
-    /// Set when the match reaches Completed state.
-    pub winner: Option<Winner>,
+    /// Pending until the match reaches Completed state and a verified winner is recorded.
+    pub winner: MatchWinner,
 }
 
 #[contracttype]
@@ -51,8 +58,10 @@ pub enum DataKey {
     Oracle,
     Admin,
     Paused,
+    AllowedToken(Address),
     GameId(String),
     PlayerMatches(Address),
+    ActiveMatches,
 }
 
 #[contracttype]

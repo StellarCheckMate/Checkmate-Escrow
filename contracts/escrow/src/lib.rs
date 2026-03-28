@@ -6,9 +6,11 @@ pub mod types;
 use errors::Error;
 use soroban_sdk::{
     contract, contractimpl, symbol_short, token, vec, Address, Env, IntoVal, String, Symbol,
-    TryFromVal,
+    TryFromVal, Vec,
 };
-use types::{DataKey, Match, MatchState, OracleMatchResult, OracleResultEntry, Platform, Winner};
+use types::{
+    DataKey, Match, MatchState, MatchWinner, OracleMatchResult, OracleResultEntry, Platform, Winner,
+};
 
 /// ~30 days at 5s/ledger. Storage TTL only — controls how long match data is kept on-chain.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -92,7 +94,11 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        if env.storage().instance().has(&DataKey::AllowedToken(token.clone())) {
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::AllowedToken(token.clone()))
+        {
             return Err(Error::TokenAlreadyAllowed);
         }
 
@@ -222,7 +228,7 @@ impl EscrowContract {
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
+        if game_id.is_empty() || game_id.len() > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
         }
 
@@ -240,11 +246,10 @@ impl EscrowContract {
         {
             use soroban_sdk::IntoVal;
             let args = vec![&env, env.current_contract_address().into_val(&env)];
-            let probe: Result<_, _> = env.try_invoke_contract::<soroban_sdk::Val, _>(
-                &token,
-                &Symbol::new(&env, "balance"),
-                args,
-            );
+            let probe: Result<
+                Result<soroban_sdk::Val, soroban_sdk::ConversionError>,
+                Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
+            > = env.try_invoke_contract(&token, &Symbol::new(&env, "balance"), args);
             if probe.is_err() {
                 return Err(Error::InvalidToken);
             }
@@ -282,7 +287,7 @@ impl EscrowContract {
             player1_deposited: false,
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
-            winner: None,
+            winner: MatchWinner::Pending,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -305,10 +310,10 @@ impl EscrowContract {
                 .persistent()
                 .get(&DataKey::PlayerMatches(player.clone()))
                 .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
-            let updated_matches = matches.push_back(id);
+            matches.push_back(id);
             env.storage()
                 .persistent()
-                .set(&DataKey::PlayerMatches(player.clone()), &updated_matches);
+                .set(&DataKey::PlayerMatches(player.clone()), &matches);
             env.storage().persistent().extend_ttl(
                 &DataKey::PlayerMatches(player),
                 MATCH_TTL_LEDGERS,
@@ -328,7 +333,9 @@ impl EscrowContract {
             .get(&DataKey::ActiveMatches)
             .unwrap_or(Vec::new(&env));
         active.push_back(id);
-        env.storage().persistent().set(&DataKey::ActiveMatches, &active);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveMatches, &active);
 
         Ok(id)
     }
@@ -406,15 +413,6 @@ impl EscrowContract {
 
     /// Oracle submits the verified match result and triggers payout.
     pub fn submit_result(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
-        if env
-            .storage()
-            .instance()
-            .get(&DataKey::Paused)
-            .unwrap_or(false)
-        {
-            return Err(Error::ContractPaused);
-        }
-
         let oracle: Address = env
             .storage()
             .instance()
@@ -427,7 +425,12 @@ impl EscrowContract {
         // require the oracle's signature before any other checks (e.g. paused)
         oracle.require_auth();
 
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             return Err(Error::ContractPaused);
         }
 
@@ -455,7 +458,7 @@ impl EscrowContract {
         }
 
         m.state = MatchState::Completed;
-        m.winner = Some(winner.clone());
+        m.winner = MatchWinner::Decided(winner.clone());
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -484,7 +487,9 @@ impl EscrowContract {
             }
             i += 1;
         }
-        env.storage().persistent().set(&DataKey::ActiveMatches, &new_active);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveMatches, &new_active);
 
         Ok(())
     }
@@ -586,7 +591,9 @@ impl EscrowContract {
             }
             i += 1;
         }
-        env.storage().persistent().set(&DataKey::ActiveMatches, &new_active);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveMatches, &new_active);
 
         Ok(())
     }
@@ -649,11 +656,7 @@ impl EscrowContract {
     ///   persistent storage entry has been evicted (TTL elapsed). The match
     ///   existed on-chain but is no longer accessible.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
-        let m = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)?;
+        let m = load_match(&env, match_id)?;
         env.storage().persistent().extend_ttl(
             &DataKey::Match(match_id),
             MATCH_TTL_LEDGERS,
@@ -664,11 +667,7 @@ impl EscrowContract {
 
     /// Check whether both players have deposited.
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
-        let m: Match = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)?;
+        let m: Match = load_match(&env, match_id)?;
         env.storage().persistent().extend_ttl(
             &DataKey::Match(match_id),
             MATCH_TTL_LEDGERS,
@@ -682,11 +681,7 @@ impl EscrowContract {
     /// Returns `Err(Error::MatchCompleted)` or `Err(Error::MatchCancelled)` for
     /// terminal states so callers can distinguish them from an unfunded match.
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
-        let m: Match = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)?;
+        let m: Match = load_match(&env, match_id)?;
         env.storage().persistent().extend_ttl(
             &DataKey::Match(match_id),
             MATCH_TTL_LEDGERS,
@@ -715,42 +710,6 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::MatchCount)
             .unwrap_or(0)
-    }
-
-    /// Add a token address to the allowlist — admin only.
-    pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&DataKey::AllowedToken(token), &true);
-        Ok(())
-    }
-
-    /// Remove a token address from the allowlist — admin only.
-    pub fn remove_allowed_token(env: Env, token: Address) -> Result<(), Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
-        env.storage()
-            .instance()
-            .remove(&DataKey::AllowedToken(token));
-        Ok(())
-    }
-
-    /// Check whether a token is on the allowlist.
-    pub fn is_allowed_token(env: Env, token: Address) -> bool {
-        env.storage()
-            .instance()
-            .get::<DataKey, bool>(&DataKey::AllowedToken(token))
-            .unwrap_or(false)
     }
 }
 

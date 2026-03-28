@@ -212,6 +212,7 @@ mod tests {
         let escrow_id = env.register(EscrowContract, ());
         let escrow_client = EscrowContractClient::new(&env, &escrow_id);
         escrow_client.initialize(&oracle_admin, &admin, &admin);
+        escrow_client.add_allowed_token(&token_addr);
         escrow_client.create_match(
             &player1,
             &player2,
@@ -404,7 +405,7 @@ mod tests {
 
     #[test]
     fn test_get_result_returns_not_found_for_unknown_match() {
-        let (env, contract_id) = setup();
+        let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
         // Calling get_result on a fresh contract with no submitted results
@@ -415,7 +416,7 @@ mod tests {
 
     #[test]
     fn test_get_result_non_existent_match_returns_not_found() {
-        let (env, contract_id) = setup();
+        let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
         let result = client.try_get_result(&999u64);
@@ -607,6 +608,9 @@ mod tests {
         .into()]);
 
         let result = client.try_initialize(&admin, &deployer);
-        assert!(result.is_err(), "oracle initialize must reject a non-deployer caller");
+        assert!(
+            result.is_err(),
+            "oracle initialize must reject a non-deployer caller"
+        );
     }
 }

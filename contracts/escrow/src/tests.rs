@@ -29,6 +29,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     oracle_client.initialize(&oracle_admin, &oracle_admin);
 
     client.initialize(&oracle_contract_id, &admin, &admin);
+    client.add_allowed_token(&token_addr);
 
     (
         env,
@@ -185,6 +186,7 @@ fn test_get_match_returns_correct_platform() {
 fn test_deposit_and_activate() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
 
     let id = client.create_match(
         &player1,
@@ -196,6 +198,7 @@ fn test_deposit_and_activate() {
     );
 
     client.deposit(&id, &player1);
+    assert_eq!(token_client.balance(&player1), 900);
     assert!(!client.is_funded(&id));
     client.deposit(&id, &player2);
     assert!(client.is_funded(&id));
@@ -548,7 +551,10 @@ fn test_escrow_initialize_rejects_unauthorized_caller() {
     .into()]);
 
     let result = client.try_initialize(&oracle, &admin, &deployer);
-    assert!(result.is_err(), "initialize must reject a non-deployer caller");
+    assert!(
+        result.is_err(),
+        "initialize must reject a non-deployer caller"
+    );
 }
 
 #[test]
@@ -558,11 +564,12 @@ fn test_initialize_emits_event() {
 
     let oracle = Address::generate(&env);
     let admin = Address::generate(&env);
+    let deployer = Address::generate(&env);
 
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.initialize(&oracle, &admin);
+    client.initialize(&oracle, &admin, &deployer);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -779,7 +786,7 @@ fn test_non_oracle_gets_unauthorized_even_when_paused() {
     client.pause();
 
     let impostor = Address::generate(&env);
-    let result = client.try_submit_result(&id, &Winner::Player1, &impostor);
+    let result = client.try_submit_result(&id, &impostor);
     assert_eq!(
         result,
         Err(Ok(Error::Unauthorized)),
@@ -1407,6 +1414,28 @@ fn test_unpause_emits_event() {
 
 #[test]
 fn test_player1_cannot_deposit_twice() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "double_deposit_p1"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::AlreadyFunded)),
+        "expected AlreadyFunded when player1 deposits a second time"
+    );
+}
+
 #[test]
 fn test_duplicate_game_id_rejected() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -1488,22 +1517,6 @@ fn test_expire_match_before_timeout_fails() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "double_deposit_p1"),
-        &Platform::Lichess,
-    );
-
-    client.deposit(&id, &player1);
-
-    let result = client.try_deposit(&id, &player1);
-    assert_eq!(
-        result,
-        Err(Ok(Error::AlreadyFunded)),
-        "expected AlreadyFunded when player1 deposits a second time"
-    );
-}
-
-#[test]
-fn test_player2_cannot_deposit_twice() {
         &String::from_str(&env, "expire_early"),
         &Platform::Lichess,
     );
@@ -1514,6 +1527,30 @@ fn test_player2_cannot_deposit_twice() {
     // Timeout has not elapsed yet — should fail
     let result = client.try_expire_match(&id);
     assert_eq!(result, Err(Ok(Error::MatchNotExpired)));
+}
+
+#[test]
+fn test_player2_cannot_deposit_twice() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "double_deposit_p2"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player2);
+
+    let result = client.try_deposit(&id, &player2);
+    assert_eq!(
+        result,
+        Err(Ok(Error::AlreadyFunded)),
+        "expected AlreadyFunded when player2 deposits a second time"
+    );
 }
 
 #[test]
@@ -1715,17 +1752,6 @@ fn test_deposit_blocked_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "double_deposit_p2"),
-        &Platform::Lichess,
-    );
-
-    client.deposit(&id, &player2);
-
-    let result = client.try_deposit(&id, &player2);
-    assert_eq!(
-        result,
-        Err(Ok(Error::AlreadyFunded)),
-        "expected AlreadyFunded when player2 deposits a second time"
         &String::from_str(&env, "paused_deposit_game"),
         &Platform::Lichess,
     );

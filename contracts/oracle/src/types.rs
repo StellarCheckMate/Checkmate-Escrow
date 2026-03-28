@@ -9,7 +9,7 @@ pub enum MatchResult {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResultEntry {
     pub game_id: String,
     pub result: MatchResult,
@@ -20,5 +20,4 @@ pub enum DataKey {
     Admin,
     Paused,
     Result(u64), // keyed by match_id
-    Paused,
 }
