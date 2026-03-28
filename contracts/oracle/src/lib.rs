@@ -22,10 +22,8 @@ impl OracleContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.events().publish(
-            (Symbol::new(&env, "oracle"), symbol_short!("init")),
-            admin,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "oracle"), symbol_short!("init")), admin);
     }
 
     /// Admin submits a verified match result on-chain.
@@ -188,7 +186,15 @@ mod tests {
         let oracle_client = OracleContractClient::new(&env, &oracle_id);
         oracle_client.initialize(&oracle_admin);
 
-        (env, oracle_id, escrow_id, oracle_admin, player1, player2, token_addr)
+        (
+            env,
+            oracle_id,
+            escrow_id,
+            oracle_admin,
+            player1,
+            player2,
+            token_addr,
+        )
     }
 
     // ── has_result (public, unauthenticated) ─────────────────────────────────
@@ -325,9 +331,19 @@ mod tests {
         let (env, contract_id, escrow_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(&0u64, &String::from_str(&env, "test_game"), &MatchResult::Draw, &escrow_id);
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Draw,
+            &escrow_id,
+        );
         // second submit should panic
-        client.submit_result(&0u64, &String::from_str(&env, "test_game"), &MatchResult::Draw, &escrow_id);
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Draw,
+            &escrow_id,
+        );
     }
 
     #[test]

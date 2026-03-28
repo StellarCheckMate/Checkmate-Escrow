@@ -5,8 +5,8 @@ pub mod types;
 
 use errors::Error;
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, token, Address, Env, IntoVal, String, Symbol, TryFromVal,
-    vec,
+    contract, contractimpl, symbol_short, token, vec, Address, Env, IntoVal, String, Symbol,
+    TryFromVal,
 };
 use types::{DataKey, Match, MatchState, OracleMatchResult, OracleResultEntry, Platform, Winner};
 
@@ -67,11 +67,7 @@ impl EscrowContract {
     }
 
     /// Rotate the oracle address. Requires authorization from the current oracle or the admin.
-    pub fn update_oracle(
-        env: Env,
-        new_oracle: Address,
-        caller: Address,
-    ) -> Result<(), Error> {
+    pub fn update_oracle(env: Env, new_oracle: Address, caller: Address) -> Result<(), Error> {
         let current_oracle: Address = env
             .storage()
             .instance()
@@ -140,7 +136,11 @@ impl EscrowContract {
             return Err(Error::InvalidGameId);
         }
 
-        if env.storage().persistent().has(&DataKey::GameId(game_id.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GameId(game_id.clone()))
+        {
             return Err(Error::DuplicateGameId);
         }
 
@@ -177,7 +177,9 @@ impl EscrowContract {
         // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
-        env.storage().persistent().set(&DataKey::GameId(m.game_id.clone()), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::GameId(m.game_id.clone()), &true);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -295,7 +297,7 @@ impl EscrowContract {
 
         let winner = Self::fetch_oracle_result(&env, &oracle, match_id, &m.game_id)?;
         let client = token::Client::new(&env, &m.token);
-        let pot = m.stake_amount * 2;
+        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
 
         match winner {
             Winner::Player1 => client.transfer(&env.current_contract_address(), &m.player1, &pot),
@@ -461,7 +463,8 @@ impl EscrowContract {
 
     /// Read a match by ID.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
-        let m = env.storage()
+        let m = env
+            .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
@@ -494,8 +497,8 @@ impl EscrowContract {
             return Ok(0);
         }
         // Count depositors explicitly — avoids fragile bool-to-integer casting.
-        let depositors: i128 = if m.player1_deposited { 1 } else { 0 }
-            + if m.player2_deposited { 1 } else { 0 };
+        let depositors: i128 =
+            if m.player1_deposited { 1 } else { 0 } + if m.player2_deposited { 1 } else { 0 };
         Ok(depositors * m.stake_amount)
     }
 

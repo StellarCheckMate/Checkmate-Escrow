@@ -150,7 +150,14 @@ fn test_get_match_returns_correct_game_id() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let game_id = String::from_str(&env, "game_xyz_42");
-    let id = client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
 
     let m = client.get_match(&id);
     assert_eq!(m.game_id, game_id);
@@ -416,7 +423,10 @@ fn test_cancel_match_emits_event() {
     let matched = events
         .iter()
         .find(|(_, topics, _)| *topics == expected_topics);
-    assert!(matched.is_some(), "match cancelled event not emitted (zero-deposit path)");
+    assert!(
+        matched.is_some(),
+        "match cancelled event not emitted (zero-deposit path)"
+    );
 
     let (_, _, data) = matched.unwrap();
     let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
@@ -898,11 +908,14 @@ fn test_ttl_refreshed_on_get_match() {
     // Let some time pass (advance ledger small amount to simulate partial TTL without archiving)
     let ledgers_elapsed = 1000u32;
     let current_ledger = env.ledger().sequence();
-    env.ledger().set_sequence_number(current_ledger + ledgers_elapsed);
+    env.ledger()
+        .set_sequence_number(current_ledger + ledgers_elapsed);
 
     // Extend instance TTLs to prevent archiving during test
     env.as_contract(&contract_id, || {
-        env.storage().instance().extend_ttl(crate::MATCH_TTL_LEDGERS, crate::MATCH_TTL_LEDGERS);
+        env.storage()
+            .instance()
+            .extend_ttl(crate::MATCH_TTL_LEDGERS, crate::MATCH_TTL_LEDGERS);
     });
 
     // TTL should be partial
@@ -1275,9 +1288,23 @@ fn test_duplicate_game_id_rejected() {
 
     let game_id = String::from_str(&env, "unique_game_123");
 
-    client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
 
-    let result = client.try_create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
     assert_eq!(result, Err(Ok(Error::DuplicateGameId)));
 }
 
@@ -1637,7 +1664,14 @@ fn test_oracle_rotation_flow() {
         Err(Ok(Error::Unauthorized))
     );
 
-    seed_oracle_result(&env, &final_oracle, id, &game_id, Winner::Player2, &contract_id);
+    seed_oracle_result(
+        &env,
+        &final_oracle,
+        id,
+        &game_id,
+        Winner::Player2,
+        &contract_id,
+    );
     client.submit_result(&id, &final_oracle);
 
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
@@ -1693,20 +1727,38 @@ fn test_deposit_flags_set_correctly_after_each_deposit() {
 
     // Before any deposit: both flags must be false
     let m = client.get_match(&id);
-    assert!(!m.player1_deposited, "player1_deposited must be false before any deposit");
-    assert!(!m.player2_deposited, "player2_deposited must be false before any deposit");
+    assert!(
+        !m.player1_deposited,
+        "player1_deposited must be false before any deposit"
+    );
+    assert!(
+        !m.player2_deposited,
+        "player2_deposited must be false before any deposit"
+    );
 
     // After player1 deposits: only player1_deposited flips to true
     client.deposit(&id, &player1);
     let m = client.get_match(&id);
-    assert!(m.player1_deposited, "player1_deposited must be true after player1 deposits");
-    assert!(!m.player2_deposited, "player2_deposited must still be false after only player1 deposits");
+    assert!(
+        m.player1_deposited,
+        "player1_deposited must be true after player1 deposits"
+    );
+    assert!(
+        !m.player2_deposited,
+        "player2_deposited must still be false after only player1 deposits"
+    );
 
     // After player2 deposits: both flags must be true
     client.deposit(&id, &player2);
     let m = client.get_match(&id);
-    assert!(m.player1_deposited, "player1_deposited must remain true after player2 deposits");
-    assert!(m.player2_deposited, "player2_deposited must be true after player2 deposits");
+    assert!(
+        m.player1_deposited,
+        "player1_deposited must remain true after player2 deposits"
+    );
+    assert!(
+        m.player2_deposited,
+        "player2_deposited must be true after player2 deposits"
+    );
 }
 
 // ── Draw result: exact stake refund and zero escrow balance ──────────────────
@@ -1787,14 +1839,7 @@ fn test_oracle_result_drives_escrow_settlement() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    seed_oracle_result(
-        &env,
-        &oracle,
-        id,
-        &game_id,
-        Winner::Player2,
-        &contract_id,
-    );
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player2, &contract_id);
 
     let stored = oracle_client.get_result(&id);
     assert_eq!(stored.game_id, game_id);
@@ -1829,5 +1874,41 @@ fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
         result,
         Err(Ok(Error::MatchNotFound)),
         "get_escrow_balance must return MatchNotFound for a non-existent match_id"
+    );
+}
+
+#[test]
+fn test_submit_result_overflow_stake_returns_overflow() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // stake_amount just above i128::MAX / 2 — doubling it overflows i128.
+    // Bypass real deposits (which would overflow the token contract) by
+    // injecting the match directly into storage in the Active + funded state.
+    let overflow_stake: i128 = i128::MAX / 2 + 1;
+
+    let game_id = String::from_str(&env, "overflow_stake_game");
+
+    // create_match validates stake_amount > 0 but does not cap it, so we
+    // create with a normal stake first, then overwrite the stored match.
+    let id = client.create_match(&player1, &player2, &1, &token, &game_id, &Platform::Lichess);
+
+    // Overwrite the match with the overflow stake in Active + fully-funded state.
+    env.as_contract(&contract_id, || {
+        let mut m: Match = env.storage().persistent().get(&DataKey::Match(id)).unwrap();
+        m.stake_amount = overflow_stake;
+        m.state = MatchState::Active;
+        m.player1_deposited = true;
+        m.player2_deposited = true;
+        env.storage().persistent().set(&DataKey::Match(id), &m);
+    });
+
+    seed_oracle_result(&env, &oracle, id, &game_id, Winner::Player1, &contract_id);
+
+    let result = client.try_submit_result(&id, &oracle);
+    assert_eq!(
+        result,
+        Err(Ok(Error::Overflow)),
+        "submit_result must return Overflow for stake_amount near i128::MAX / 2"
     );
 }
