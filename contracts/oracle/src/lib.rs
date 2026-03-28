@@ -126,6 +126,14 @@ impl OracleContract {
         Ok(env.storage().persistent().has(&DataKey::Result(match_id)))
     }
 
+    /// Return the admin address set at initialization.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)
+    }
+
     /// Rotate the admin to a new address. Requires current admin auth.
     pub fn update_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let current_admin: Address = env
@@ -497,5 +505,13 @@ mod tests {
 
         let entry = client.get_result(&0u64);
         assert_eq!(entry.result, MatchResult::Player2Wins);
+    }
+
+    #[test]
+    fn test_get_admin_returns_initialized_address() {
+        let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        assert_eq!(client.get_admin(), oracle_admin);
     }
 }
