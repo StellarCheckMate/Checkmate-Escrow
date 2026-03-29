@@ -21,15 +21,49 @@ impl OracleContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Paused, &false);
+    }
+
+    /// Pause the contract — admin only. Blocks submit_result.
+    /// Used as an emergency stop mechanism if the admin key is compromised
+    /// or if malicious results are being submitted.
+    pub fn pause(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &true);
+        Ok(())
+    }
+
+    /// Unpause the contract — admin only.
+    /// Restores normal operation after emergency pause is resolved.
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &false);
+        Ok(())
     }
 
     /// Admin submits a verified match result on-chain.
+    /// Invariant: No results can be submitted while the contract is paused.
     pub fn submit_result(
         env: Env,
         match_id: u64,
         game_id: String,
         result: MatchResult,
     ) -> Result<(), Error> {
+        // Check if contract is paused first
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            return Err(Error::ContractPaused);
+        }
+
         let admin: Address = env
             .storage()
             .instance()
@@ -194,5 +228,142 @@ mod tests {
 
         // Query a match_id that has never been submitted
         client.get_result(&9999u64);
+    }
+
+    /// Test that pause can only be called by admin.
+    #[test]
+    fn test_pause_admin_only() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Admin can pause
+        client.pause();
+
+        // Verify it's paused by trying to submit a result
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+    }
+
+    /// Test that unpause can only be called by admin.
+    #[test]
+    fn test_unpause_admin_only() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Pause first
+        client.pause();
+
+        // Admin can unpause
+        client.unpause();
+
+        // Verify it's unpaused by submitting a result
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+        assert!(client.has_result(&0u64));
+    }
+
+    /// Test that submit_result returns ContractPaused when paused.
+    #[test]
+    fn test_submit_result_blocked_when_paused() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Pause the contract
+        client.pause();
+
+        // Try to submit a result - should fail with ContractPaused
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+
+        // Verify no result was stored
+        assert!(!client.has_result(&0u64));
+    }
+
+    /// Test that submit_result works normally after unpause.
+    #[test]
+    fn test_submit_result_works_after_unpause() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Pause the contract
+        client.pause();
+
+        // Verify submit is blocked
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+
+        // Unpause
+        client.unpause();
+
+        // Now submit should work
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+        assert!(client.has_result(&0u64));
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.result, MatchResult::Player1Wins);
+    }
+
+    /// Test pause/unpause state transitions.
+    #[test]
+    fn test_pause_unpause_state_transitions() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Initially unpaused - submit should work
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+        assert!(client.has_result(&0u64));
+
+        // Pause
+        client.pause();
+
+        // Submit should fail
+        let result = client.try_submit_result(
+            &1u64,
+            &String::from_str(&env, "def456"),
+            &MatchResult::Player2Wins,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+
+        // Unpause
+        client.unpause();
+
+        // Submit should work again
+        client.submit_result(
+            &1u64,
+            &String::from_str(&env, "def456"),
+            &MatchResult::Player2Wins,
+        );
+        assert!(client.has_result(&1u64));
+
+        // Can pause again
+        client.pause();
+        let result = client.try_submit_result(
+            &2u64,
+            &String::from_str(&env, "ghi789"),
+            &MatchResult::Draw,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
     }
 }
