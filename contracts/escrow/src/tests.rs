@@ -292,6 +292,32 @@ fn test_admin_unpause_allows_create_match() {
     assert_eq!(id, 0);
 }
 
+/// Test that deposit is rejected when the contract is paused.
+/// This verifies the invariant: no deposits can be made while the contract is paused,
+/// preventing players from locking funds in a paused state.
+#[test]
+fn test_paused_contract_rejects_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create a match before pausing
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game123"),
+        &Platform::Lichess,
+    );
+
+    // Admin pauses the contract
+    client.pause();
+
+    // Attempt to deposit - should fail with ContractPaused
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #10)")]
 fn test_create_match_with_zero_stake_fails() {
