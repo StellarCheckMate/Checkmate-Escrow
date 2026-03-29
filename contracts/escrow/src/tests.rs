@@ -185,6 +185,7 @@ fn test_get_match_returns_correct_platform() {
 fn test_deposit_and_activate() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
 
     let id = client.create_match(
         &player1,
@@ -200,6 +201,7 @@ fn test_deposit_and_activate() {
     client.deposit(&id, &player2);
     assert!(client.is_funded(&id));
     assert_eq!(client.get_escrow_balance(&id), 200);
+    assert_eq!(token_client.balance(&contract_id), 200);
 }
 
 #[test]
@@ -1580,7 +1582,9 @@ fn test_get_escrow_balance_stages() {
 
     // After player2 deposits: balance must equal 2 * stake_amount
     client.deposit(&id, &player2);
+    let token_client = TokenClient::new(&env, &token);
     assert_eq!(client.get_escrow_balance(&id), 2 * stake);
+    assert_eq!(token_client.balance(&contract_id), 200);
 }
 
 // ── Defensive: submit_result with insufficient escrow balance ────────────────

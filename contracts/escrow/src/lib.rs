@@ -6,7 +6,7 @@ pub mod types;
 use errors::Error;
 use soroban_sdk::{
     contract, contractimpl, symbol_short, token, vec, Address, Env, IntoVal, String, Symbol,
-    TryFromVal,
+    TryFromVal, Vec,
 };
 use types::{DataKey, Match, MatchState, OracleMatchResult, OracleResultEntry, Platform, Winner};
 
@@ -81,48 +81,6 @@ impl EscrowContract {
             (Symbol::new(&env, "admin"), symbol_short!("init")),
             (oracle, admin),
         );
-    }
-
-    /// Add a token to the allowlist — admin only.
-    pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
-
-        if env.storage().instance().has(&DataKey::AllowedToken(token.clone())) {
-            return Err(Error::TokenAlreadyAllowed);
-        }
-
-        env.storage()
-            .instance()
-            .set(&DataKey::AllowedToken(token), &true);
-        Ok(())
-    }
-
-    /// Remove a token from the allowlist — admin only.
-    pub fn remove_allowed_token(env: Env, token: Address) -> Result<(), Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
-
-        env.storage()
-            .instance()
-            .remove(&DataKey::AllowedToken(token));
-        Ok(())
-    }
-
-    /// Check if a token is allowed.
-    pub fn is_token_allowed(env: Env, token: Address) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::AllowedToken(token))
-            .unwrap_or(false)
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
@@ -240,7 +198,7 @@ impl EscrowContract {
         {
             use soroban_sdk::IntoVal;
             let args = vec![&env, env.current_contract_address().into_val(&env)];
-            let probe: Result<_, _> = env.try_invoke_contract::<soroban_sdk::Val, _>(
+            let probe: Result<Result<soroban_sdk::Val, soroban_sdk::ConversionError>, Result<soroban_sdk::Error, soroban_sdk::InvokeError>> = env.try_invoke_contract(
                 &token,
                 &Symbol::new(&env, "balance"),
                 args,
@@ -717,41 +675,6 @@ impl EscrowContract {
             .unwrap_or(0)
     }
 
-    /// Add a token address to the allowlist — admin only.
-    pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
-        env.storage()
-            .instance()
-            .set(&DataKey::AllowedToken(token), &true);
-        Ok(())
-    }
-
-    /// Remove a token address from the allowlist — admin only.
-    pub fn remove_allowed_token(env: Env, token: Address) -> Result<(), Error> {
-        let admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
-        env.storage()
-            .instance()
-            .remove(&DataKey::AllowedToken(token));
-        Ok(())
-    }
-
-    /// Check whether a token is on the allowlist.
-    pub fn is_allowed_token(env: Env, token: Address) -> bool {
-        env.storage()
-            .instance()
-            .get::<DataKey, bool>(&DataKey::AllowedToken(token))
-            .unwrap_or(false)
-    }
 }
 
 #[cfg(test)]

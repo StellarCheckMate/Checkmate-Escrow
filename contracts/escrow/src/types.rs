@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, String, Vec};
+use soroban_sdk::{contracttype, Address, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +53,8 @@ pub enum DataKey {
     Paused,
     GameId(String),
     PlayerMatches(Address),
+    AllowedToken(Address),
+    ActiveMatches,
 }
 
 #[contracttype]
