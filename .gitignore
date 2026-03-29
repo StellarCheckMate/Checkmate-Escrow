@@ -1,4 +1,6 @@
-/target
+target/
 .env
+contracts/escrow/test_snapshots/
+contracts/oracle/test_snapshots/
 issues.md
 issues2.md
