@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{storage::Persistent as _, Address as _, Events},
+    testutils::{storage::Persistent as _, Address as _, Events, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
@@ -520,4 +520,74 @@ fn test_ttl_extended_on_cancel() {
         env.storage().persistent().get_ttl(&DataKey::Match(id))
     });
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+}
+
+// #287 — created_ledger is populated on create_match
+#[test]
+fn test_created_ledger_is_set() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Advance the ledger so sequence is non-zero
+    env.ledger().set_sequence_number(42);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ledger_game"),
+        &Platform::Lichess,
+    );
+
+    let m = client.get_match(&id);
+    assert_eq!(m.created_ledger, 42, "created_ledger should match ledger sequence at creation");
+}
+
+// #292 — MatchCount increments correctly across multiple matches
+#[test]
+fn test_match_count_increments_sequentially() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_ids = ["seq0", "seq1", "seq2", "seq3", "seq4"];
+    for (expected_id, game_id_str) in game_ids.iter().enumerate() {
+        let id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, game_id_str),
+            &Platform::Lichess,
+        );
+        assert_eq!(id, expected_id as u64);
+    }
+
+    let last = client.get_match(&4);
+    assert_eq!(last.id, 4);
+    assert_eq!(last.state, MatchState::Pending);
+}
+
+// #296 — get_escrow_balance returns 0 after draw payout
+#[test]
+fn test_escrow_balance_zero_after_draw() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "draw_balance_game"),
+        &Platform::ChessDotCom,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_escrow_balance(&id), 200);
+
+    client.submit_result(&id, &Winner::Draw);
+
+    assert_eq!(client.get_escrow_balance(&id), 0);
 }

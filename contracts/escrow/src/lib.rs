@@ -90,6 +90,7 @@ impl EscrowContract {
             state: MatchState::Pending,
             player1_deposited: false,
             player2_deposited: false,
+            created_ledger: env.ledger().sequence(),
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -293,6 +294,9 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+        if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
+            return Ok(0);
+        }
         let deposited = m.player1_deposited as i128 + m.player2_deposited as i128;
         Ok(deposited * m.stake_amount)
     }
