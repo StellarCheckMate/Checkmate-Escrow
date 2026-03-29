@@ -26,7 +26,19 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
 
-    (env, contract_id, oracle, player1, player2, token_addr, admin)
+    (
+        env,
+        contract_id,
+        oracle,
+        player1,
+        player2,
+        token_addr,
+        admin,
+    )
+}
+
+fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, amount: i128) {
+    asset_client.mint(player, &amount);
 }
 
 #[test]
@@ -236,6 +248,77 @@ fn test_cancel_match_emits_event() {
     let (_, _, data) = matched.unwrap();
     let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_id, id);
+}
+
+#[test]
+fn test_concurrent_matches_remain_isolated() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let player3 = Address::generate(&env);
+    let player4 = Address::generate(&env);
+
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_id.address();
+    let asset_client = StellarAssetClient::new(&env, &token);
+    let token_client = TokenClient::new(&env, &token);
+
+    for player in [&player1, &player2, &player3, &player4] {
+        mint_player_balance(&asset_client, player, 1000);
+    }
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    let match_one = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "concurrent_match_one"),
+        &Platform::Lichess,
+    );
+    let match_two = client.create_match(
+        &player3,
+        &player4,
+        &60,
+        &token,
+        &String::from_str(&env, "concurrent_match_two"),
+        &Platform::ChessDotCom,
+    );
+
+    client.deposit(&match_one, &player1);
+    client.deposit(&match_two, &player3);
+    assert_eq!(client.get_match(&match_one).state, MatchState::Pending);
+    assert_eq!(client.get_match(&match_two).state, MatchState::Pending);
+    assert_eq!(client.get_escrow_balance(&match_one), 100);
+    assert_eq!(client.get_escrow_balance(&match_two), 60);
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(token_client.balance(&player3), 940);
+    assert_eq!(token_client.balance(&player4), 1000);
+
+    client.deposit(&match_one, &player2);
+    client.deposit(&match_two, &player4);
+    assert_eq!(client.get_match(&match_one).state, MatchState::Active);
+    assert_eq!(client.get_match(&match_two).state, MatchState::Active);
+    assert_eq!(client.get_escrow_balance(&match_one), 200);
+    assert_eq!(client.get_escrow_balance(&match_two), 120);
+
+    client.submit_result(&match_one, &Winner::Player1);
+    client.submit_result(&match_two, &Winner::Draw);
+
+    assert_eq!(client.get_match(&match_one).state, MatchState::Completed);
+    assert_eq!(client.get_match(&match_two).state, MatchState::Completed);
+    assert_eq!(token_client.balance(&player1), 1100);
+    assert_eq!(token_client.balance(&player2), 900);
+    assert_eq!(token_client.balance(&player3), 1000);
+    assert_eq!(token_client.balance(&player4), 1000);
 }
 
 #[test]
