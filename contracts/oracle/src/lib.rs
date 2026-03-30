@@ -182,4 +182,17 @@ mod tests {
         });
         assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
     }
+
+    /// Test that get_result returns ResultNotFound for non-existent match IDs.
+    /// This verifies the invariant: querying an unknown match_id must always
+    /// return Error::ResultNotFound rather than panicking or returning invalid data.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn test_get_result_not_found() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Query a match_id that has never been submitted
+        client.get_result(&9999u64);
+    }
 }
