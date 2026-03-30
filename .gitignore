@@ -1,6 +1,28 @@
+# Build artifacts
 target/
+
+# Environment secrets
 .env
+
+# Test snapshots
 contracts/escrow/test_snapshots/
 contracts/oracle/test_snapshots/
-issues.md
-issues2.md
+**/*.snap
+
+# IDE / editor
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Wasm build output
+*.wasm
+
+# Lock file (optional — remove if you want to commit it)
+# Cargo.lock

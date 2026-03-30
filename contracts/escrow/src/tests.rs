@@ -760,3 +760,63 @@ fn test_ttl_extended_on_cancel() {
     });
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
+
+#[test]
+fn test_concurrent_independent_matches() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+    let asset_client = StellarAssetClient::new(&env, &token);
+
+    let player3 = Address::generate(&env);
+    let player4 = Address::generate(&env);
+    asset_client.mint(&player3, &1000);
+    asset_client.mint(&player4, &1000);
+
+    // Create both matches concurrently
+    let match_a = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_a"),
+        &Platform::Lichess,
+    );
+    let match_b = client.create_match(
+        &player3,
+        &player4,
+        &200,
+        &token,
+        &String::from_str(&env, "game_b"),
+        &Platform::Lichess,
+    );
+
+    // Both matches deposit independently
+    client.deposit(&match_a, &player1);
+    client.deposit(&match_b, &player3);
+    client.deposit(&match_a, &player2);
+    client.deposit(&match_b, &player4);
+
+    // Both matches are now Active and isolated
+    assert_eq!(client.get_match(&match_a).state, MatchState::Active);
+    assert_eq!(client.get_match(&match_b).state, MatchState::Active);
+    assert_eq!(client.get_escrow_balance(&match_a), 200);
+    assert_eq!(client.get_escrow_balance(&match_b), 400);
+
+    // Resolve match A: player1 wins
+    client.submit_result(&match_a, &Winner::Player1);
+    // Resolve match B: draw
+    client.submit_result(&match_b, &Winner::Draw);
+
+    // Match A: player1 gets full pot, player2 gets nothing extra
+    assert_eq!(token_client.balance(&player1), 1000 - 100 + 200); // 1100
+    assert_eq!(token_client.balance(&player2), 1000 - 100);       // 900
+
+    // Match B: both players get their stake back
+    assert_eq!(token_client.balance(&player3), 1000);
+    assert_eq!(token_client.balance(&player4), 1000);
+
+    // Final states are isolated — each match completed independently
+    assert_eq!(client.get_match(&match_a).state, MatchState::Completed);
+    assert_eq!(client.get_match(&match_b).state, MatchState::Completed);
+}
