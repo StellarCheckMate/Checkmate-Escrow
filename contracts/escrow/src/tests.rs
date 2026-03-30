@@ -912,3 +912,29 @@ fn test_escrow_balance_zero_after_draw() {
 
     assert_eq!(client.get_escrow_balance(&id), 0);
 }
+
+#[test]
+fn test_get_oracle_returns_initialized_address() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    assert_eq!(client.get_oracle(), oracle);
+}
+
+#[test]
+fn test_get_match_returns_correct_players() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "players_test"),
+        &Platform::Lichess,
+    );
+
+    let m = client.get_match(&id);
+    assert_eq!(m.player1, player1);
+    assert_eq!(m.player2, player2);
+}
