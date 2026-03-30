@@ -221,11 +221,17 @@
                   "u64": 0
                 },
                 {
+                  "string": "game2"
+                },
+                {
                   "vec": [
                     {
                       "symbol": "Draw"
                     }
                   ]
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 }
               ]
             }

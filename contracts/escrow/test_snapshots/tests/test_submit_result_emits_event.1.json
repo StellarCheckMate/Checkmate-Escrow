@@ -221,11 +221,17 @@
                   "u64": 0
                 },
                 {
+                  "string": "game_evt"
+                },
+                {
                   "vec": [
                     {
                       "symbol": "Player1"
                     }
                   ]
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 }
               ]
             }
