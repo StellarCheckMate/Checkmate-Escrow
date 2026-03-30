@@ -935,6 +935,7 @@ fn test_escrow_balance_zero_after_draw() {
 }
 
 #[test]
+<<<<<<< fix/match-expiry-timeout
 fn test_expire_match_refunds_depositor_after_timeout() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -975,11 +976,25 @@ fn test_expire_match_fails_before_timeout() {
 
     env.ledger().set_sequence_number(100);
 
+=======
+fn test_get_oracle_returns_initialized_address() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    assert_eq!(client.get_oracle(), oracle);
+}
+
+#[test]
+fn test_get_match_returns_correct_players() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+>>>>>>> main
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
+<<<<<<< fix/match-expiry-timeout
         &String::from_str(&env, "early_expire"),
         &Platform::Lichess,
     );
@@ -991,4 +1006,13 @@ fn test_expire_match_fails_before_timeout() {
 
     let result = client.try_expire_match(&id);
     assert_eq!(result, Err(Ok(Error::MatchNotExpired)));
+=======
+        &String::from_str(&env, "players_test"),
+        &Platform::Lichess,
+    );
+
+    let m = client.get_match(&id);
+    assert_eq!(m.player1, player1);
+    assert_eq!(m.player2, player2);
+>>>>>>> main
 }
