@@ -61,6 +61,31 @@ fn test_create_match() {
 }
 
 #[test]
+fn test_get_match_returns_stake_and_token() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let stake_amount = 200i128;
+    let game_id = String::from_str(&env, "test_stake_token");
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+
+    assert_eq!(id, 0u64);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.stake_amount, stake_amount);
+    assert_eq!(m.token, token);
+    assert_eq!(m.state, MatchState::Pending);
+}
+
+#[test]
 fn test_deposit_and_activate() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
