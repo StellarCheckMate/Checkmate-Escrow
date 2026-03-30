@@ -16,6 +16,10 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     /// Initialize the contract with a trusted oracle address and an admin.
+    ///
+    /// The `oracle` address must be a valid generated address for the current
+    /// environment. Callers should not use placeholder or otherwise invalid
+    /// oracle values.
     pub fn initialize(env: Env, oracle: Address, admin: Address) {
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
@@ -62,7 +66,12 @@ impl EscrowContract {
     ) -> Result<u64, Error> {
         player1.require_auth();
 
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             return Err(Error::ContractPaused);
         }
         if stake_amount <= 0 {
@@ -90,6 +99,7 @@ impl EscrowContract {
             state: MatchState::Pending,
             player1_deposited: false,
             player2_deposited: false,
+            created_ledger: env.ledger().sequence(),
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -100,9 +110,7 @@ impl EscrowContract {
         );
         // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
-        env.storage()
-            .instance()
-            .set(&DataKey::MatchCount, &next_id);
+        env.storage().instance().set(&DataKey::MatchCount, &next_id);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -116,7 +124,12 @@ impl EscrowContract {
     pub fn deposit(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
         player.require_auth();
 
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             return Err(Error::ContractPaused);
         }
 
@@ -169,6 +182,15 @@ impl EscrowContract {
 
     /// Oracle submits the verified match result and triggers payout.
     pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
         let oracle: Address = env
             .storage()
             .instance()
@@ -293,6 +315,9 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+        if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
+            return Ok(0);
+        }
         let deposited = m.player1_deposited as i128 + m.player2_deposited as i128;
         Ok(deposited * m.stake_amount)
     }
