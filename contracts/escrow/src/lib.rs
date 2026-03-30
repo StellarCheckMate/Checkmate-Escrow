@@ -66,12 +66,8 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Rotate the oracle address. Requires authorization from the current oracle or the admin.
-    pub fn update_oracle(
-        env: Env,
-        new_oracle: Address,
-        caller: Address,
-    ) -> Result<(), Error> {
+    /// Rotate the oracle address. Requires authorization from the admin.
+    pub fn update_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
         let current_oracle: Address = env
             .storage()
             .instance()
@@ -83,16 +79,13 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
 
-        if caller != current_oracle && caller != admin {
-            return Err(Error::Unauthorized);
-        }
-        caller.require_auth();
+        admin.require_auth();
 
         env.storage().instance().set(&DataKey::Oracle, &new_oracle);
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
-            (current_oracle, new_oracle),
+            (current_oracle, new_oracle.clone()),
         );
 
         Ok(())

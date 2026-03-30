@@ -1544,31 +1544,50 @@ fn test_submit_result_blocked_when_paused() {
 }
 
 #[test]
-fn test_oracle_rotation_flow() {
-    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
+fn test_admin_can_rotate_oracle() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let intermediate_oracle = env.register(OracleContract, ());
-    let intermediate_admin = Address::generate(&env);
-    let intermediate_client = OracleContractClient::new(&env, &intermediate_oracle);
-    intermediate_client.initialize(&intermediate_admin);
+    let next_oracle = env.register(OracleContract, ());
+    let next_admin = Address::generate(&env);
+    OracleContractClient::new(&env, &next_oracle).initialize(&next_admin);
 
-    let final_oracle = env.register(OracleContract, ());
-    let final_admin = Address::generate(&env);
-    let final_client = OracleContractClient::new(&env, &final_oracle);
-    final_client.initialize(&final_admin);
+    client.update_oracle(&next_oracle);
 
     let attacker = Address::generate(&env);
+    let attacker_oracle = env.register(OracleContract, ());
+    let attacker_admin = Address::generate(&env);
+    OracleContractClient::new(&env, &attacker_oracle).initialize(&attacker_admin);
 
-    // Current oracle may rotate itself first.
-    client.update_oracle(&intermediate_oracle, &oracle);
-    // Admin can also rotate the oracle.
-    client.update_oracle(&final_oracle, &admin);
+    use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
 
-    assert_eq!(
-        client.try_update_oracle(&final_oracle, &attacker),
-        Err(Ok(Error::Unauthorized))
-    );
+    let mut args = soroban_sdk::Vec::new(&env);
+    args.push_back(attacker_oracle.clone().into_val(&env));
+
+    env.set_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "update_oracle",
+            args,
+            sub_invokes: &[],
+        },
+    }
+    .into()]);
+
+    assert!(client.try_update_oracle(&attacker_oracle).is_err());
+}
+
+#[test]
+fn test_old_oracle_rejected_after_rotation() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_oracle = env.register(OracleContract, ());
+    let oracle_admin = Address::generate(&env);
+    OracleContractClient::new(&env, &new_oracle).initialize(&oracle_admin);
+
+    client.update_oracle(&new_oracle);
 
     let game_id = String::from_str(&env, "oracle_rotation");
     let id = client.create_match(
@@ -1583,12 +1602,12 @@ fn test_oracle_rotation_flow() {
     client.deposit(&id, &player2);
 
     assert_eq!(
-        client.try_submit_result(&id, &intermediate_oracle),
+        client.try_submit_result(&id, &oracle),
         Err(Ok(Error::Unauthorized))
     );
 
-    seed_oracle_result(&env, &final_oracle, id, &game_id, Winner::Player2, &contract_id);
-    client.submit_result(&id, &final_oracle);
+    seed_oracle_result(&env, &new_oracle, id, &game_id, Winner::Player2, &contract_id);
+    client.submit_result(&id, &new_oracle);
 
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 }
