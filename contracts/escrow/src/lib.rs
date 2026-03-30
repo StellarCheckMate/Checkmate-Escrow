@@ -198,6 +198,10 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         oracle.require_auth();
 
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            return Err(Error::ContractPaused);
+        }
+
         let mut m: Match = env
             .storage()
             .persistent()
