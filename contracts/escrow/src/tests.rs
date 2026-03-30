@@ -332,6 +332,24 @@ fn test_submit_result_emits_event() {
 }
 
 #[test]
+fn test_initialize_accepts_valid_generated_oracle_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let oracle = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.initialize(&oracle, &admin);
+
+    let stored_oracle: Address = env.as_contract(&contract_id, || {
+        env.storage().instance().get(&DataKey::Oracle).unwrap()
+    });
+    assert_eq!(stored_oracle, oracle);
+}
+
+#[test]
 fn test_cancel_match_emits_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
