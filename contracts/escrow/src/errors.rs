@@ -15,4 +15,5 @@ pub enum Error {
     InvalidAmount = 10,
     MatchAlreadyActive = 11,
     MatchNotExpired = 12,
+    InvalidAddress = 13,
 }
