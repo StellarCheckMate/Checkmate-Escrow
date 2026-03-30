@@ -308,6 +308,14 @@ impl EscrowContract {
         Ok(m.player1_deposited && m.player2_deposited)
     }
 
+    /// Return the oracle address set at initialization.
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)
+    }
+
     /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
         let m: Match = env
