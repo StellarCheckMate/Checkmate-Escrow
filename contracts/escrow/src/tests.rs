@@ -191,6 +191,44 @@ fn test_full_match_lifecycle_winner_and_draw_scenarios() {
 }
 
 #[test]
+fn test_full_match_lifecycle() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    // Step 1: create_match → Pending
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "lifecycle_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(client.get_match(&id).state, MatchState::Pending);
+    assert_eq!(client.get_escrow_balance(&id), 0);
+
+    // Step 2: player1 deposits → still Pending
+    client.deposit(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Pending);
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(client.get_escrow_balance(&id), 100);
+
+    // Step 3: player2 deposits → Active
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+    assert_eq!(token_client.balance(&player2), 900);
+    assert_eq!(client.get_escrow_balance(&id), 200);
+
+    // Step 4: submit_result → Completed, winner paid, escrow zeroed
+    client.submit_result(&id, &Winner::Player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+    assert_eq!(token_client.balance(&player1), 1100); // won the pot
+    assert_eq!(token_client.balance(&player2), 900);  // lost stake
+    assert_eq!(client.get_escrow_balance(&id), 0);
+}
+
+#[test]
 fn test_payout_winner() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -367,6 +405,20 @@ fn test_initialize_accepts_valid_generated_oracle_address() {
         env.storage().instance().get(&DataKey::Oracle).unwrap()
     });
     assert_eq!(stored_oracle, oracle);
+}
+
+#[test]
+fn test_initialize_rejects_contract_address_as_oracle() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Passing the contract's own address as oracle must be rejected
+    let result = client.try_initialize(&contract_id, &admin);
+    assert_eq!(result, Err(Ok(Error::InvalidAddress)));
 }
 
 #[test]
