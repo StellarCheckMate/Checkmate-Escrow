@@ -37,6 +37,10 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     )
 }
 
+fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, amount: i128) {
+    asset_client.mint(player, &amount);
+}
+
 #[test]
 fn test_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -75,6 +79,95 @@ fn test_deposit_and_activate() {
     client.deposit(&id, &player2);
     assert!(client.is_funded(&id));
     assert_eq!(client.get_escrow_balance(&id), 200);
+}
+
+#[test]
+fn test_full_match_lifecycle_winner_and_draw_scenarios() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+    let asset_client = StellarAssetClient::new(&env, &token);
+    let player3 = Address::generate(&env);
+    let player4 = Address::generate(&env);
+
+    mint_player_balance(&asset_client, &player3, 1000);
+    mint_player_balance(&asset_client, &player4, 1000);
+
+    let winner_match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "full_lifecycle_winner"),
+        &Platform::Lichess,
+    );
+
+    let winner_match = client.get_match(&winner_match_id);
+    assert_eq!(winner_match.state, MatchState::Pending);
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(client.get_escrow_balance(&winner_match_id), 0);
+
+    client.deposit(&winner_match_id, &player1);
+    let winner_match = client.get_match(&winner_match_id);
+    assert_eq!(winner_match.state, MatchState::Pending);
+    assert!(winner_match.player1_deposited);
+    assert!(!winner_match.player2_deposited);
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(client.get_escrow_balance(&winner_match_id), 100);
+
+    client.deposit(&winner_match_id, &player2);
+    let winner_match = client.get_match(&winner_match_id);
+    assert_eq!(winner_match.state, MatchState::Active);
+    assert!(winner_match.player1_deposited);
+    assert!(winner_match.player2_deposited);
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 900);
+    assert_eq!(client.get_escrow_balance(&winner_match_id), 200);
+
+    client.submit_result(&winner_match_id, &Winner::Player1);
+    let winner_match = client.get_match(&winner_match_id);
+    assert_eq!(winner_match.state, MatchState::Completed);
+    assert_eq!(token_client.balance(&player1), 1100);
+    assert_eq!(token_client.balance(&player2), 900);
+    assert_eq!(client.get_escrow_balance(&winner_match_id), 200);
+
+    let draw_match_id = client.create_match(
+        &player3,
+        &player4,
+        &75,
+        &token,
+        &String::from_str(&env, "full_lifecycle_draw"),
+        &Platform::ChessDotCom,
+    );
+
+    let draw_match = client.get_match(&draw_match_id);
+    assert_eq!(draw_match.state, MatchState::Pending);
+    assert_eq!(token_client.balance(&player3), 1000);
+    assert_eq!(token_client.balance(&player4), 1000);
+    assert_eq!(client.get_escrow_balance(&draw_match_id), 0);
+
+    client.deposit(&draw_match_id, &player3);
+    let draw_match = client.get_match(&draw_match_id);
+    assert_eq!(draw_match.state, MatchState::Pending);
+    assert_eq!(token_client.balance(&player3), 925);
+    assert_eq!(token_client.balance(&player4), 1000);
+    assert_eq!(client.get_escrow_balance(&draw_match_id), 75);
+
+    client.deposit(&draw_match_id, &player4);
+    let draw_match = client.get_match(&draw_match_id);
+    assert_eq!(draw_match.state, MatchState::Active);
+    assert_eq!(token_client.balance(&player3), 925);
+    assert_eq!(token_client.balance(&player4), 925);
+    assert_eq!(client.get_escrow_balance(&draw_match_id), 150);
+
+    client.submit_result(&draw_match_id, &Winner::Draw);
+    let draw_match = client.get_match(&draw_match_id);
+    assert_eq!(draw_match.state, MatchState::Completed);
+    assert_eq!(token_client.balance(&player3), 1000);
+    assert_eq!(token_client.balance(&player4), 1000);
+    assert_eq!(client.get_escrow_balance(&draw_match_id), 150);
 }
 
 #[test]
@@ -268,6 +361,77 @@ fn test_cancel_match_emits_event() {
     let (_, _, data) = matched.unwrap();
     let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_id, id);
+}
+
+#[test]
+fn test_concurrent_matches_remain_isolated() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let player3 = Address::generate(&env);
+    let player4 = Address::generate(&env);
+
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_id.address();
+    let asset_client = StellarAssetClient::new(&env, &token);
+    let token_client = TokenClient::new(&env, &token);
+
+    for player in [&player1, &player2, &player3, &player4] {
+        mint_player_balance(&asset_client, player, 1000);
+    }
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    let match_one = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "concurrent_match_one"),
+        &Platform::Lichess,
+    );
+    let match_two = client.create_match(
+        &player3,
+        &player4,
+        &60,
+        &token,
+        &String::from_str(&env, "concurrent_match_two"),
+        &Platform::ChessDotCom,
+    );
+
+    client.deposit(&match_one, &player1);
+    client.deposit(&match_two, &player3);
+    assert_eq!(client.get_match(&match_one).state, MatchState::Pending);
+    assert_eq!(client.get_match(&match_two).state, MatchState::Pending);
+    assert_eq!(client.get_escrow_balance(&match_one), 100);
+    assert_eq!(client.get_escrow_balance(&match_two), 60);
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(token_client.balance(&player3), 940);
+    assert_eq!(token_client.balance(&player4), 1000);
+
+    client.deposit(&match_one, &player2);
+    client.deposit(&match_two, &player4);
+    assert_eq!(client.get_match(&match_one).state, MatchState::Active);
+    assert_eq!(client.get_match(&match_two).state, MatchState::Active);
+    assert_eq!(client.get_escrow_balance(&match_one), 200);
+    assert_eq!(client.get_escrow_balance(&match_two), 120);
+
+    client.submit_result(&match_one, &Winner::Player1);
+    client.submit_result(&match_two, &Winner::Draw);
+
+    assert_eq!(client.get_match(&match_one).state, MatchState::Completed);
+    assert_eq!(client.get_match(&match_two).state, MatchState::Completed);
+    assert_eq!(token_client.balance(&player1), 1100);
+    assert_eq!(token_client.balance(&player2), 900);
+    assert_eq!(token_client.balance(&player3), 1000);
+    assert_eq!(token_client.balance(&player4), 1000);
 }
 
 #[test]
