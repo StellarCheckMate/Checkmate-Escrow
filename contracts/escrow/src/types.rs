@@ -37,6 +37,7 @@ pub struct Match {
     pub state: MatchState,
     pub player1_deposited: bool,
     pub player2_deposited: bool,
+    pub created_ledger: u32,
 }
 
 #[contracttype]

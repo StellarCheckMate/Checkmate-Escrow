@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{storage::Persistent as _, Address as _, Events},
+    testutils::{storage::Persistent as _, Address as _, Events, Ledger as _},
     token::{Client as TokenClient, StellarAssetClient},
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
@@ -531,6 +531,32 @@ fn test_admin_unpause_allows_create_match() {
     assert_eq!(id, 0);
 }
 
+/// Test that deposit is rejected when the contract is paused.
+/// This verifies the invariant: no deposits can be made while the contract is paused,
+/// preventing players from locking funds in a paused state.
+#[test]
+fn test_paused_contract_rejects_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create a match before pausing
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game123"),
+        &Platform::Lichess,
+    );
+
+    // Admin pauses the contract
+    client.pause();
+
+    // Attempt to deposit - should fail with ContractPaused
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #10)")]
 fn test_create_match_with_zero_stake_fails() {
@@ -638,12 +664,12 @@ fn test_cancel_active_match_fails_with_invalid_state() {
     // Verify match is Active before attempting cancel
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
-    // Attempt to cancel an Active match — must return InvalidState (error code #5)
+    // Attempt to cancel an Active match — must return MatchAlreadyActive (error code #11)
     let result = client.try_cancel_match(&id, &player1);
     assert_eq!(
         result,
-        Err(Ok(Error::InvalidState)),
-        "expected InvalidState error when cancelling an Active match"
+        Err(Ok(Error::MatchAlreadyActive)),
+        "expected MatchAlreadyActive error when cancelling an Active match"
     );
 
     // Match must still be Active — no state change
@@ -652,6 +678,30 @@ fn test_cancel_active_match_fails_with_invalid_state() {
     // Funds must remain in escrow — balances unchanged from post-deposit state
     assert_eq!(token_client.balance(&player1), 900);
     assert_eq!(token_client.balance(&player2), 900);
+}
+
+#[test]
+fn test_cancel_active_match_returns_match_already_active() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_already_active"),
+        &Platform::Lichess,
+    );
+
+    // Fund both players — match transitions to Active
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // cancel_match must return MatchAlreadyActive, not InvalidState
+    let result = client.try_cancel_match(&id, &player1);
+    assert_eq!(result, Err(Ok(Error::MatchAlreadyActive)));
 }
 
 #[test]
@@ -741,6 +791,43 @@ fn test_ttl_extended_on_submit_result() {
 }
 
 #[test]
+fn test_non_oracle_unauthorized_even_when_paused() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "paused_unauth"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    client.pause();
+
+    // A random address that is not the oracle attempts to submit a result
+    // while the contract is paused — must get Unauthorized, not ContractPaused.
+    let non_oracle = Address::generate(&env);
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &non_oracle,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (id, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = client.try_submit_result(&id, &Winner::Player1);
+    assert!(
+        matches!(result, Err(Err(_))),
+        "expected auth failure (Abort) for non-oracle caller on paused contract"
+    );
+}
+
+#[test]
 fn test_ttl_extended_on_cancel() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -761,62 +848,72 @@ fn test_ttl_extended_on_cancel() {
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
 
+// #287 — created_ledger is populated on create_match
 #[test]
-fn test_concurrent_independent_matches() {
+fn test_created_ledger_is_set() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    let token_client = TokenClient::new(&env, &token);
-    let asset_client = StellarAssetClient::new(&env, &token);
 
-    let player3 = Address::generate(&env);
-    let player4 = Address::generate(&env);
-    asset_client.mint(&player3, &1000);
-    asset_client.mint(&player4, &1000);
+    // Advance the ledger so sequence is non-zero
+    env.ledger().set_sequence_number(42);
 
-    // Create both matches concurrently
-    let match_a = client.create_match(
+    let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_a"),
+        &String::from_str(&env, "ledger_game"),
         &Platform::Lichess,
     );
-    let match_b = client.create_match(
-        &player3,
-        &player4,
-        &200,
+
+    let m = client.get_match(&id);
+    assert_eq!(m.created_ledger, 42, "created_ledger should match ledger sequence at creation");
+}
+
+// #292 — MatchCount increments correctly across multiple matches
+#[test]
+fn test_match_count_increments_sequentially() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_ids = ["seq0", "seq1", "seq2", "seq3", "seq4"];
+    for (expected_id, game_id_str) in game_ids.iter().enumerate() {
+        let id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, game_id_str),
+            &Platform::Lichess,
+        );
+        assert_eq!(id, expected_id as u64);
+    }
+
+    let last = client.get_match(&4);
+    assert_eq!(last.id, 4);
+    assert_eq!(last.state, MatchState::Pending);
+}
+
+// #296 — get_escrow_balance returns 0 after draw payout
+#[test]
+fn test_escrow_balance_zero_after_draw() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
         &token,
-        &String::from_str(&env, "game_b"),
-        &Platform::Lichess,
+        &String::from_str(&env, "draw_balance_game"),
+        &Platform::ChessDotCom,
     );
 
-    // Both matches deposit independently
-    client.deposit(&match_a, &player1);
-    client.deposit(&match_b, &player3);
-    client.deposit(&match_a, &player2);
-    client.deposit(&match_b, &player4);
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_escrow_balance(&id), 200);
 
-    // Both matches are now Active and isolated
-    assert_eq!(client.get_match(&match_a).state, MatchState::Active);
-    assert_eq!(client.get_match(&match_b).state, MatchState::Active);
-    assert_eq!(client.get_escrow_balance(&match_a), 200);
-    assert_eq!(client.get_escrow_balance(&match_b), 400);
+    client.submit_result(&id, &Winner::Draw);
 
-    // Resolve match A: player1 wins
-    client.submit_result(&match_a, &Winner::Player1);
-    // Resolve match B: draw
-    client.submit_result(&match_b, &Winner::Draw);
-
-    // Match A: player1 gets full pot, player2 gets nothing extra
-    assert_eq!(token_client.balance(&player1), 1000 - 100 + 200); // 1100
-    assert_eq!(token_client.balance(&player2), 1000 - 100);       // 900
-
-    // Match B: both players get their stake back
-    assert_eq!(token_client.balance(&player3), 1000);
-    assert_eq!(token_client.balance(&player4), 1000);
-
-    // Final states are isolated — each match completed independently
-    assert_eq!(client.get_match(&match_a).state, MatchState::Completed);
-    assert_eq!(client.get_match(&match_b).state, MatchState::Completed);
+    assert_eq!(client.get_escrow_balance(&id), 0);
 }

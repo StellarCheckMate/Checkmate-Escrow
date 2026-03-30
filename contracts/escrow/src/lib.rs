@@ -99,6 +99,7 @@ impl EscrowContract {
             state: MatchState::Pending,
             player1_deposited: false,
             player2_deposited: false,
+            created_ledger: env.ledger().sequence(),
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -197,6 +198,10 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         oracle.require_auth();
 
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            return Err(Error::ContractPaused);
+        }
+
         let mut m: Match = env
             .storage()
             .persistent()
@@ -245,7 +250,7 @@ impl EscrowContract {
             .ok_or(Error::MatchNotFound)?;
 
         if m.state != MatchState::Pending {
-            return Err(Error::InvalidState);
+            return Err(Error::MatchAlreadyActive);
         }
 
         // Either player1 or player2 can cancel a pending match
@@ -310,6 +315,9 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+        if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
+            return Ok(0);
+        }
         let deposited = m.player1_deposited as i128 + m.player2_deposited as i128;
         Ok(deposited * m.stake_amount)
     }
