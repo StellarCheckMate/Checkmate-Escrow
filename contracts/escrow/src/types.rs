@@ -37,7 +37,6 @@ pub struct Match {
     pub state: MatchState,
     pub player1_deposited: bool,
     pub player2_deposited: bool,
-    /// Ledger sequence number at match creation. Used for timeout and ordering logic.
     pub created_ledger: u32,
 }
 
@@ -48,20 +47,5 @@ pub enum DataKey {
     Oracle,
     Admin,
     Paused,
-    GameId(String),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum OracleMatchResult {
-    Player1Wins,
-    Player2Wins,
-    Draw,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct OracleResultEntry {
-    pub game_id: String,
-    pub result: OracleMatchResult,
+    MatchTimeout,
 }
