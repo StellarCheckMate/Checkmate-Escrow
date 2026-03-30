@@ -2,6 +2,7 @@
 
 A trustless chess wagering platform built on Stellar Soroban smart contracts. Players stake XLM or USDC before a match, and the winner is automatically paid out the moment the game ends — no middleman, no delays, no trust required.
 
+
 ## 🎯 What is Checkmate-Escrow?
 
 Checkmate-Escrow combines competitive chess with Stellar's fast settlement to create a fully on-chain betting platform for casual and high-stakes matches.
