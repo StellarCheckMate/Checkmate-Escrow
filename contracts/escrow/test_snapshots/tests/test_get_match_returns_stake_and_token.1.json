@@ -93,14 +93,14 @@
                 {
                   "i128": {
                     "hi": 0,
-                    "lo": 200
+                    "lo": 500
                   }
                 },
                 {
                   "address": "CDLDVFKHEZ2RVB3NG4UQA4VPD3TSHV6XMHXMHP2BSGCJ2IIWVTOHGDSG"
                 },
                 {
-                  "string": "test_stake_token"
+                  "string": "game_266"
                 },
                 {
                   "vec": [
@@ -338,7 +338,7 @@
                         "symbol": "game_id"
                       },
                       "val": {
-                        "string": "test_stake_token"
+                        "string": "game_266"
                       }
                     },
                     {
@@ -400,7 +400,7 @@
                       "val": {
                         "i128": {
                           "hi": 0,
-                          "lo": 200
+                          "lo": 500
                         }
                       }
                     },
@@ -430,7 +430,7 @@
             },
             "ext": "v0"
           },
-          4095
+          518400
         ]
       ],
       [

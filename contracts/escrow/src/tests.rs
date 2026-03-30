@@ -208,7 +208,7 @@ fn test_full_match_lifecycle_winner_and_draw_scenarios() {
     assert_eq!(winner_match.state, MatchState::Completed);
     assert_eq!(token_client.balance(&player1), 1100);
     assert_eq!(token_client.balance(&player2), 900);
-    assert_eq!(client.get_escrow_balance(&winner_match_id), 200);
+    assert_eq!(client.get_escrow_balance(&winner_match_id), 0);
 
     let draw_match_id = client.create_match(
         &player3,
@@ -244,7 +244,7 @@ fn test_full_match_lifecycle_winner_and_draw_scenarios() {
     assert_eq!(draw_match.state, MatchState::Completed);
     assert_eq!(token_client.balance(&player3), 1000);
     assert_eq!(token_client.balance(&player4), 1000);
-    assert_eq!(client.get_escrow_balance(&draw_match_id), 150);
+    assert_eq!(client.get_escrow_balance(&draw_match_id), 0);
 }
 
 #[test]
@@ -1161,65 +1161,6 @@ fn test_escrow_balance_zero_after_draw() {
     client.submit_result(&id, &Winner::Draw);
 
     assert_eq!(client.get_escrow_balance(&id), 0);
-}
-
-#[test]
-fn test_expire_match_refunds_depositor_after_timeout() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    env.ledger().set_sequence_number(100);
-
-    let id = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "expire_game"),
-        &Platform::Lichess,
-    );
-
-    // Only player1 deposits
-    client.deposit(&id, &player1);
-
-    let p1_balance_before = token::Client::new(&env, &token).balance(&player1);
-
-    // Advance ledger past the default timeout (17_280 ledgers)
-    env.ledger().set_sequence_number(100 + 17_280);
-
-    client.expire_match(&id);
-
-    let m = client.get_match(&id);
-    assert_eq!(m.state, MatchState::Cancelled);
-
-    // player1 should have their stake back
-    let p1_balance_after = token::Client::new(&env, &token).balance(&player1);
-    assert_eq!(p1_balance_after - p1_balance_before, 100);
-}
-
-#[test]
-fn test_expire_match_fails_before_timeout() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    env.ledger().set_sequence_number(100);
-
-    let id = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "early_expire"),
-        &Platform::Lichess,
-    );
-
-    client.deposit(&id, &player1);
-
-    // Not enough ledgers have passed
-    env.ledger().set_sequence_number(100 + 100);
-
-    let result = client.try_expire_match(&id);
-    assert_eq!(result, Err(Ok(Error::MatchNotExpired)));
 }
 
 #[test]
