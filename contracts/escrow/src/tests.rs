@@ -352,6 +352,27 @@ fn test_submit_result_emits_event() {
 }
 
 #[test]
+fn test_submit_result_fails_if_not_fully_funded() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_nofund"),
+        &Platform::Lichess,
+    );
+
+    // Only player1 deposits — player2 has not
+    client.deposit(&id, &player1);
+
+    let result = client.try_submit_result(&id, &Winner::Player1);
+    assert_eq!(result, Err(Ok(Error::NotFunded)));
+}
+
+#[test]
 fn test_initialize_accepts_valid_generated_oracle_address() {
     let env = Env::default();
     env.mock_all_auths();
