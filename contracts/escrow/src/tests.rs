@@ -218,6 +218,30 @@ fn test_draw_refund() {
 }
 
 #[test]
+fn test_player2_balance_decreases_after_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "player2_balance_after_deposit"),
+        &Platform::Lichess,
+    );
+
+    let balance_before = token_client.balance(&player2);
+    client.deposit(&id, &player2);
+    let balance_after = token_client.balance(&player2);
+
+    assert_eq!(balance_before, 1000);
+    assert_eq!(balance_after, 900);
+    assert_eq!(balance_before - balance_after, 100);
+}
+
+#[test]
 fn test_cancel_refunds_deposit() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
