@@ -151,7 +151,7 @@ fn test_full_match_lifecycle_winner_and_draw_scenarios() {
     assert_eq!(winner_match.state, MatchState::Completed);
     assert_eq!(token_client.balance(&player1), 1100);
     assert_eq!(token_client.balance(&player2), 900);
-    assert_eq!(client.get_escrow_balance(&winner_match_id), 200);
+    assert_eq!(client.get_escrow_balance(&winner_match_id), 0);
 
     let draw_match_id = client.create_match(
         &player3,
@@ -187,7 +187,7 @@ fn test_full_match_lifecycle_winner_and_draw_scenarios() {
     assert_eq!(draw_match.state, MatchState::Completed);
     assert_eq!(token_client.balance(&player3), 1000);
     assert_eq!(token_client.balance(&player4), 1000);
-    assert_eq!(client.get_escrow_balance(&draw_match_id), 150);
+    assert_eq!(client.get_escrow_balance(&draw_match_id), 0);
 }
 
 #[test]

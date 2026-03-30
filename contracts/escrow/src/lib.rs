@@ -190,6 +190,13 @@ impl EscrowContract {
 
     /// Oracle submits the verified match result and triggers payout.
     pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        oracle.require_auth();
+
         if env
             .storage()
             .instance()
@@ -199,29 +206,18 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
-        let oracle: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Oracle)
-            .ok_or(Error::Unauthorized)?;
-        oracle.require_auth();
-
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
-            return Err(Error::ContractPaused);
-        }
-
         let mut m: Match = env
             .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state != MatchState::Active {
-            return Err(Error::InvalidState);
-        }
-
         if !m.player1_deposited || !m.player2_deposited {
             return Err(Error::NotFunded);
+        }
+
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
         }
 
         let client = token::Client::new(&env, &m.token);
