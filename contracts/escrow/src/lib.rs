@@ -169,16 +169,16 @@ impl EscrowContract {
 
     /// Oracle submits the verified match result and triggers payout.
     pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
-            return Err(Error::ContractPaused);
-        }
-
         let oracle: Address = env
             .storage()
             .instance()
             .get(&DataKey::Oracle)
             .ok_or(Error::Unauthorized)?;
         oracle.require_auth();
+
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            return Err(Error::ContractPaused);
+        }
 
         let mut m: Match = env
             .storage()

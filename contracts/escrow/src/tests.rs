@@ -502,6 +502,43 @@ fn test_ttl_extended_on_submit_result() {
 }
 
 #[test]
+fn test_non_oracle_unauthorized_even_when_paused() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "paused_unauth"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    client.pause();
+
+    // A random address that is not the oracle attempts to submit a result
+    // while the contract is paused — must get Unauthorized, not ContractPaused.
+    let non_oracle = Address::generate(&env);
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &non_oracle,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (id, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = client.try_submit_result(&id, &Winner::Player1);
+    assert!(
+        matches!(result, Err(Err(_))),
+        "expected auth failure (Abort) for non-oracle caller on paused contract"
+    );
+}
+
+#[test]
 fn test_ttl_extended_on_cancel() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
