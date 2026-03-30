@@ -250,7 +250,7 @@ impl EscrowContract {
             .ok_or(Error::MatchNotFound)?;
 
         if m.state != MatchState::Pending {
-            return Err(Error::InvalidState);
+            return Err(Error::MatchAlreadyActive);
         }
 
         // Either player1 or player2 can cancel a pending match

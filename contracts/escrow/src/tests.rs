@@ -664,12 +664,12 @@ fn test_cancel_active_match_fails_with_invalid_state() {
     // Verify match is Active before attempting cancel
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
-    // Attempt to cancel an Active match — must return InvalidState (error code #5)
+    // Attempt to cancel an Active match — must return MatchAlreadyActive (error code #11)
     let result = client.try_cancel_match(&id, &player1);
     assert_eq!(
         result,
-        Err(Ok(Error::InvalidState)),
-        "expected InvalidState error when cancelling an Active match"
+        Err(Ok(Error::MatchAlreadyActive)),
+        "expected MatchAlreadyActive error when cancelling an Active match"
     );
 
     // Match must still be Active — no state change
@@ -678,6 +678,30 @@ fn test_cancel_active_match_fails_with_invalid_state() {
     // Funds must remain in escrow — balances unchanged from post-deposit state
     assert_eq!(token_client.balance(&player1), 900);
     assert_eq!(token_client.balance(&player2), 900);
+}
+
+#[test]
+fn test_cancel_active_match_returns_match_already_active() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_already_active"),
+        &Platform::Lichess,
+    );
+
+    // Fund both players — match transitions to Active
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // cancel_match must return MatchAlreadyActive, not InvalidState
+    let result = client.try_cancel_match(&id, &player1);
+    assert_eq!(result, Err(Ok(Error::MatchAlreadyActive)));
 }
 
 #[test]
