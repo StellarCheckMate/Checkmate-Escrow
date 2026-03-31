@@ -59,6 +59,33 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.events()
+            .publish((Symbol::new(&env, "admin"), symbol_short!("unpaused")), ());
+        Ok(())
+    }
+
+    /// Rotate the oracle address. Requires authorization from the admin.
+    pub fn update_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        let current_oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
+            (current_oracle, new_oracle.clone()),
+        );
+
         Ok(())
     }
 
