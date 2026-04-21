@@ -92,9 +92,17 @@ Network configurations are defined in `environments.toml`:
 # Configure your testnet identity first
 stellar keys generate deployer --network testnet
 
-# Deploy
-./scripts/deploy_testnet.sh
+# Build the contract WASM
+./scripts/build.sh
+
+# Deploy with the Stellar CLI (replace <CONTRACT_WASM> with the built artifact)
+stellar contract deploy \
+  --source deployer \
+  --network testnet \
+  --wasm target/wasm32-unknown-unknown/release/<CONTRACT_WASM>.wasm
 ```
+
+> NOTE: A dedicated `scripts/deploy_testnet.sh` wrapper is planned (see issue #391). For now, use the inline \`stellar contract deploy\` command above.
 
 ### Run Demo
 
