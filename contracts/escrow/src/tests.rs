@@ -714,6 +714,27 @@ fn test_deposit_blocked_when_paused() {
 }
 
 #[test]
+fn test_deposit_by_unauthorized_address_returns_unauthorized() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "unauth_deposit_game"),
+        &Platform::Lichess,
+    );
+
+    // A random third-party address that is not player1 or player2
+    let unauthorized_address = Address::generate(&env);
+
+    let result = client.try_deposit(&id, &unauthorized_address);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
 fn test_submit_result_blocked_when_paused() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
