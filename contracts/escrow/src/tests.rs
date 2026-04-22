@@ -1001,6 +1001,32 @@ fn test_unauthorized_player_cannot_cancel() {
 }
 
 #[test]
+fn test_cancel_match_on_cancelled_match_returns_error() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancel_cancelled_match"),
+        &Platform::Lichess,
+    );
+
+    // Cancel the match first
+    client.cancel_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+
+    // Try to cancel the already cancelled match
+    let result = client.try_cancel_match(&id, &player1);
+    assert!(
+        matches!(result, Err(Ok(Error::MatchAlreadyActive)) | Err(Ok(Error::InvalidState))),
+        "Expected MatchAlreadyActive or InvalidState error when cancelling an already cancelled match"
+    );
+}
+
+#[test]
 fn test_ttl_extended_on_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
