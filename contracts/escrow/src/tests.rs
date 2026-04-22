@@ -1151,6 +1151,42 @@ fn test_ttl_extended_on_cancel() {
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
 
+#[test]
+fn test_is_funded_extends_ttl() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_is_funded"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Advance ledgers so TTL would have decreased without extend
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
+    client.is_funded(&id);
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+}
+
 // #287 — created_ledger is populated on create_match
 #[test]
 fn test_created_ledger_is_set() {

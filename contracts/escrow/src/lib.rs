@@ -342,6 +342,11 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         Ok(m.player1_deposited && m.player2_deposited)
     }
 
