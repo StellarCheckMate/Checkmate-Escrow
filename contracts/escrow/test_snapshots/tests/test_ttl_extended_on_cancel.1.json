@@ -382,6 +382,12 @@
                   "map": [
                     {
                       "key": {
+                        "symbol": "completed_ledger"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
                         "symbol": "created_ledger"
                       },
                       "val": {

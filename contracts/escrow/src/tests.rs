@@ -307,6 +307,7 @@ fn test_payout_winner() {
     // player1 started with 1000, deposited 100, won the 200 pot → 1100
     assert_eq!(token_client.balance(&player1), 1100);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
+    assert!(client.get_match(&id).completed_ledger.is_some());
 }
 
 #[test]
