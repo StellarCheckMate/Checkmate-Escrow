@@ -1196,6 +1196,28 @@ fn test_escrow_balance_zero_after_draw() {
 }
 
 #[test]
+fn test_get_escrow_balance_returns_stake_amount_after_player1_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "escrow_balance_player1"),
+        &Platform::Lichess,
+    );
+
+    // Before any deposits, escrow balance should be 0
+    assert_eq!(client.get_escrow_balance(&id), 0);
+
+    // After player1 deposits, escrow balance should be 100 (1 * stake_amount)
+    client.deposit(&id, &player1);
+    assert_eq!(client.get_escrow_balance(&id), 100);
+}
+
+#[test]
 fn test_expire_match_refunds_depositor_after_timeout() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
