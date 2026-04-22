@@ -235,6 +235,7 @@
       ]
     ],
     [],
+    [],
     []
   ],
   "ledger": {
@@ -543,6 +544,14 @@
                 "durability": "persistent",
                 "val": {
                   "map": [
+                    {
+                      "key": {
+                        "symbol": "completed_ledger"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
                     {
                       "key": {
                         "symbol": "created_ledger"

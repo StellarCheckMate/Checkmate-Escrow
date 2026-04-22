@@ -38,6 +38,7 @@ pub struct Match {
     pub player1_deposited: bool,
     pub player2_deposited: bool,
     pub created_ledger: u32,
+    pub completed_ledger: Option<u32>,
 }
 
 #[contracttype]
