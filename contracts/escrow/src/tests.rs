@@ -1574,3 +1574,50 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
         "expected auth failure for non-oracle caller"
     );
 }
+
+
+/// Verify that Platform::Lichess and Platform::ChessDotCom survive a storage write/read round-trip correctly.
+/// This test ensures platform variants are properly serialized and deserialized through persistent storage.
+#[test]
+fn test_platform_survives_storage_roundtrip() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Test Platform::Lichess
+    let lichess_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "lichess_game_123"),
+        &Platform::Lichess,
+    );
+
+    let lichess_match = client.get_match(&lichess_id);
+    assert_eq!(
+        lichess_match.platform, Platform::Lichess,
+        "Platform::Lichess must survive storage round-trip"
+    );
+
+    // Test Platform::ChessDotCom
+    let chess_com_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "chess_com_game_456"),
+        &Platform::ChessDotCom,
+    );
+
+    let chess_com_match = client.get_match(&chess_com_id);
+    assert_eq!(
+        chess_com_match.platform, Platform::ChessDotCom,
+        "Platform::ChessDotCom must survive storage round-trip"
+    );
+
+    // Verify both matches maintain their distinct platform values
+    assert_ne!(
+        lichess_match.platform, chess_com_match.platform,
+        "Different platform variants must remain distinct after storage round-trip"
+    );
+}
