@@ -42,6 +42,36 @@ fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, amou
 }
 
 #[test]
+fn test_initialize_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "escrow").into_val(&env),
+        symbol_short!("init").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "escrow initialized event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_oracle, ev_admin): (Address, Address) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_oracle, oracle);
+    assert_eq!(ev_admin, admin);
+}
+
+#[test]
 fn test_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -1368,4 +1398,13 @@ fn test_get_match_returns_correct_players() {
     let m = client.get_match(&id);
     assert_eq!(m.player1, player1);
     assert_eq!(m.player2, player2);
+}
+
+#[test]
+fn test_get_match_timeout_returns_default() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let timeout = client.get_match_timeout().unwrap();
+    assert_eq!(timeout, MATCH_TTL_LEDGERS);
 }
