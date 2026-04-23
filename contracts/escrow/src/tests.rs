@@ -1885,3 +1885,13 @@ fn test_is_funded_returns_false_when_only_player1_deposited() {
     client.deposit(&id, &player2);
     assert!(client.is_funded(&id));
 }
+
+
+#[test]
+fn test_submit_result_on_nonexistent_match_id_returns_match_not_found() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_submit_result(&9999u64, &Address::generate(&env));
+    assert_eq!(result, Err(Ok(Error::MatchNotFound)));
+}
