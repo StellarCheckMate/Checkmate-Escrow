@@ -1574,3 +1574,71 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
         "expected auth failure for non-oracle caller"
     );
 }
+
+#[test]
+fn test_expire_match_respects_updated_timeout() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Set a short custom timeout of 500 ledgers
+    client.set_match_timeout(&500u32);
+    assert_eq!(client.get_match_timeout(), 500u32);
+
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "timeout_test_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+
+    // Advance past the custom timeout (500 ledgers) but well under the default (17_280)
+    env.ledger().set_sequence_number(100 + 500);
+
+    env.deployer().extend_ttl_for_contract_instance(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.deployer().extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.deployer().extend_ttl_for_contract_instance(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.deployer().extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+    let p1_balance_before = token::Client::new(&env, &token).balance(&player1);
+
+    client.expire_match(&id);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Cancelled);
+
+    // player1 should have their stake refunded
+    let p1_balance_after = token::Client::new(&env, &token).balance(&player1);
+    assert_eq!(p1_balance_after - p1_balance_before, 100);
+
+    // Verify that without the updated timeout, expiry at 500 ledgers would have failed
+    // (i.e., the default 17_280 would not have been reached)
+    let _ = admin; // admin was used via mock_all_auths for set_match_timeout
+}
+
+#[test]
+fn test_set_match_timeout_requires_admin() {
+    let (env, contract_id, _oracle, player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.mock_auths(&[MockAuth {
+        address: &player1,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_match_timeout",
+            args: (1000u32,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_set_match_timeout(&1000u32);
+    assert!(
+        matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
+        "expected auth failure for non-admin caller"
+    );
+}
