@@ -1408,3 +1408,94 @@ fn test_get_match_timeout_returns_default() {
     let timeout = client.get_match_timeout().unwrap();
     assert_eq!(timeout, MATCH_TTL_LEDGERS);
 }
+
+
+#[test]
+fn test_update_oracle_emits_oracle_up_event_with_addresses() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_oracle = Address::generate(&env);
+    let old_oracle: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Oracle)
+        .unwrap();
+
+    client.update_oracle(&new_oracle, &admin);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        soroban_sdk::symbol_short!("oracle_up").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "oracle_up event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_old, ev_new): (Address, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_old, old_oracle);
+    assert_eq!(ev_new, new_oracle);
+}
+
+
+#[test]
+fn test_is_funded_returns_false_when_only_player1_deposited() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "funded_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    assert!(!client.is_funded(&id));
+
+    client.deposit(&id, &player2);
+    assert!(client.is_funded(&id));
+}
+
+
+#[test]
+fn test_submit_result_on_nonexistent_match_id_returns_match_not_found() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_submit_result(&9999u64, &Address::generate(&env));
+    assert_eq!(result, Err(Ok(Error::MatchNotFound)));
+}
+
+
+#[test]
+fn test_cancel_match_by_player2_refunds_player1_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancel_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    let player1_balance_after_deposit = token_client.balance(&player1);
+    assert_eq!(player1_balance_after_deposit, 900);
+
+    client.cancel_match(&id, &player2);
+
+    let player1_balance_after_cancel = token_client.balance(&player1);
+    assert_eq!(player1_balance_after_cancel, 1000);
+    assert_eq!(token_client.balance(&player2), 1000);
+}
