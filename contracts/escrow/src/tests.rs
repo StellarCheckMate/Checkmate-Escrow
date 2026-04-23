@@ -1642,3 +1642,43 @@ fn test_set_match_timeout_requires_admin() {
         "expected auth failure for non-admin caller"
     );
 }
+
+#[test]
+fn test_transfer_admin_success_and_old_admin_rejected() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+
+    // Successful transfer
+    client.transfer_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+
+    // Old admin is now rejected — only new_admin's auth is mocked
+    env.mock_auths(&[MockAuth {
+        address: &new_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "transfer_admin",
+            args: (new_admin.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    // Old admin trying to transfer again must fail
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "transfer_admin",
+            args: (admin.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_transfer_admin(&admin);
+    assert!(
+        matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
+        "old admin should be rejected after transfer"
+    );
+}
