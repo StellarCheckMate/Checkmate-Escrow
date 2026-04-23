@@ -19,4 +19,5 @@ pub struct ResultEntry {
 pub enum DataKey {
     Admin,
     Result(u64), // keyed by match_id
+    Paused,      // emergency pause state
 }

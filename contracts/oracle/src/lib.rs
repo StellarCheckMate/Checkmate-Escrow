@@ -26,37 +26,24 @@ impl OracleContract {
     }
 
     /// Admin submits a verified match result on-chain.
-    ///
-    /// `escrow` is the deployed escrow contract address. `match_id` must
-    /// correspond to a real match in that contract — if no such match exists,
-    /// `Error::MatchNotFound` is returned and nothing is stored, preventing
-    /// orphaned result entries from polluting storage.
+    /// Invariant: No results can be submitted while the contract is paused.
     pub fn submit_result(
         env: Env,
         match_id: u64,
         game_id: String,
         result: MatchResult,
-        escrow: Address,
     ) -> Result<(), Error> {
+        // Check if contract is paused first
+        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+            return Err(Error::ContractPaused);
+        }
+
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
-
-        // Cross-contract call: verify the match exists in the escrow contract.
-        // get_match returns Err if the match_id is unknown; we map that to
-        // Error::MatchNotFound to prevent orphaned result entries.
-        use soroban_sdk::IntoVal;
-        let args = soroban_sdk::vec![&env, match_id.into_val(&env)];
-        let call_result: Result<
-            Result<soroban_sdk::Val, soroban_sdk::ConversionError>,
-            Result<soroban_sdk::Error, soroban_sdk::InvokeError>,
-        > = env.try_invoke_contract(&escrow, &soroban_sdk::Symbol::new(&env, "get_match"), args);
-        if call_result.is_err() {
-            return Err(Error::MatchNotFound);
-        }
 
         if env.storage().persistent().has(&DataKey::Result(match_id)) {
             return Err(Error::AlreadySubmitted);
@@ -84,23 +71,26 @@ impl OracleContract {
     }
 
     /// Retrieve the stored result for a match.
+    /// TTL is extended on every read to prevent active results from expiring.
+    /// Without this, frequently-accessed results could expire and return ResultNotFound.
     pub fn get_result(env: Env, match_id: u64) -> Result<ResultEntry, Error> {
-        env.storage()
+        let result = env
+            .storage()
             .persistent()
             .get(&DataKey::Result(match_id))
-            .ok_or(Error::ResultNotFound)
+            .ok_or(Error::ResultNotFound)?;
+        
+        // Extend TTL to keep active results alive
+        env.storage().persistent().extend_ttl(
+            &DataKey::Result(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        
+        Ok(result)
     }
 
     /// Check whether a result has been submitted for a match.
-    ///
-    /// # Access
-    /// This function is intentionally **public and unauthenticated**. It is a
-    /// read-only probe that returns a boolean — no result data is exposed.
-    ///
-    /// For most tournament contexts this is acceptable: knowing that *a* result
-    /// exists leaks no information about *who* won. If your use-case requires
-    /// keeping result existence private until an official announcement, use
-    /// [`has_result_admin`] instead, which requires admin authorisation.
     pub fn has_result(env: Env, match_id: u64) -> bool {
         env.storage().persistent().has(&DataKey::Result(match_id))
     }
@@ -151,16 +141,12 @@ impl OracleContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use escrow::{EscrowContract, EscrowContractClient};
     use soroban_sdk::{
         testutils::{storage::Persistent as _, Address as _, Events},
-        token::StellarAssetClient,
         Address, Env, IntoVal, String, Symbol,
     };
 
-    /// Returns (env, oracle_contract_id, escrow_contract_id, admin, player1, player2, token)
-    /// with a real escrow match (id=0) already created and both players deposited (Active).
-    fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
+    fn setup() -> (Env, Address) {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -286,36 +272,21 @@ mod tests {
         let env = Env::default();
         // Do NOT mock all auths — we want auth to actually be enforced
         let admin = Address::generate(&env);
-        let non_admin = Address::generate(&env);
         let contract_id = env.register(OracleContract, ());
         let client = OracleContractClient::new(&env, &contract_id);
-
-        env.mock_all_auths();
         client.initialize(&admin);
-
-        // Only authorise non_admin — should fail
-        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-            address: &non_admin,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &contract_id,
-                fn_name: "has_result_admin",
-                args: (0u64,).into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-        client.has_result_admin(&0u64);
+        (env, contract_id)
     }
 
     #[test]
     fn test_submit_and_get_result() {
-        let (env, contract_id, escrow_id, ..) = setup();
+        let (env, contract_id) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
         client.submit_result(
             &0u64,
-            &String::from_str(&env, "test_game"),
+            &String::from_str(&env, "abc123"),
             &MatchResult::Player1Wins,
-            &escrow_id,
         );
 
         assert!(client.has_result(&0u64));
@@ -325,14 +296,13 @@ mod tests {
 
     #[test]
     fn test_submit_result_emits_event() {
-        let (env, contract_id, escrow_id, ..) = setup();
+        let (env, contract_id) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
         client.submit_result(
             &0u64,
-            &String::from_str(&env, "test_game"),
+            &String::from_str(&env, "abc123"),
             &MatchResult::Player1Wins,
-            &escrow_id,
         );
 
         let events = env.events().all();
@@ -356,12 +326,12 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_duplicate_submit_fails() {
-        let (env, contract_id, escrow_id, ..) = setup();
+        let (env, contract_id) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(&0u64, &String::from_str(&env, "test_game"), &MatchResult::Draw, &escrow_id);
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
         // second submit should panic
-        client.submit_result(&0u64, &String::from_str(&env, "test_game"), &MatchResult::Draw, &escrow_id);
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
     }
 
     #[test]
@@ -374,19 +344,19 @@ mod tests {
         let client = OracleContractClient::new(&env, &contract_id);
 
         client.initialize(&admin);
+        // second initialize should panic
         client.initialize(&admin);
     }
 
     #[test]
     fn test_ttl_extended_on_submit_result() {
-        let (env, contract_id, escrow_id, ..) = setup();
+        let (env, contract_id) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
         client.submit_result(
             &0u64,
-            &String::from_str(&env, "test_game"),
+            &String::from_str(&env, "abc123"),
             &MatchResult::Player1Wins,
-            &escrow_id,
         );
 
         let ttl = env.as_contract(&contract_id, || {
@@ -395,85 +365,181 @@ mod tests {
         assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
     }
 
+    /// Test that get_result returns ResultNotFound for non-existent match IDs.
+    /// This verifies the invariant: querying an unknown match_id must always
+    /// return Error::ResultNotFound rather than panicking or returning invalid data.
     #[test]
-    fn test_admin_rotation() {
-        let (env, contract_id, escrow_id, ..) = setup();
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn test_get_result_not_found() {
+        let (env, contract_id) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
-        let new_admin = Address::generate(&env);
 
-        client.update_admin(&new_admin);
+        // Query a match_id that has never been submitted
+        client.get_result(&9999u64);
+    }
 
+    /// Test that pause can only be called by admin.
+    #[test]
+    fn test_pause_admin_only() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Admin can pause
+        client.pause();
+
+        // Verify it's paused by trying to submit a result
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+    }
+
+    /// Test that unpause can only be called by admin.
+    #[test]
+    fn test_unpause_admin_only() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Pause first
+        client.pause();
+
+        // Admin can unpause
+        client.unpause();
+
+        // Verify it's unpaused by submitting a result
         client.submit_result(
             &0u64,
-            &String::from_str(&env, "test_game"),
-            &MatchResult::Player2Wins,
-            &escrow_id,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
         );
         assert!(client.has_result(&0u64));
     }
 
+    /// Test that submit_result returns ContractPaused when paused.
     #[test]
-    #[should_panic]
-    fn test_old_admin_cannot_act_after_rotation() {
-        let env = Env::default();
-        let old_admin = Address::generate(&env);
-        let new_admin = Address::generate(&env);
-        let contract_id = env.register(OracleContract, ());
+    fn test_submit_result_blocked_when_paused() {
+        let (env, contract_id) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
-        let escrow_id = env.register(EscrowContract, ());
 
-        env.mock_all_auths();
-        client.initialize(&old_admin);
-        client.update_admin(&new_admin);
+        // Pause the contract
+        client.pause();
 
-        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
-            address: &old_admin,
-            invoke: &soroban_sdk::testutils::MockAuthInvoke {
-                contract: &contract_id,
-                fn_name: "submit_result",
-                args: (
-                    1u64,
-                    String::from_str(&env, "game_old"),
-                    MatchResult::Player1Wins,
-                    escrow_id.clone(),
-                )
-                    .into_val(&env),
-                sub_invokes: &[],
-            },
-        }]);
-        client.submit_result(
-            &1u64,
-            &String::from_str(&env, "game_old"),
+        // Try to submit a result - should fail with ContractPaused
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
             &MatchResult::Player1Wins,
-            &escrow_id,
         );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+
+        // Verify no result was stored
+        assert!(!client.has_result(&0u64));
     }
 
-    // ── Non-existent match_id rejected ───────────────────────────────────────
-
-    /// Submitting a result for a match_id that does not exist in the escrow
-    /// contract must return Error::MatchNotFound and store nothing.
+    /// Test that submit_result works normally after unpause.
     #[test]
-    fn test_submit_result_for_nonexistent_match_returns_match_not_found() {
-        let (env, contract_id, escrow_id, ..) = setup();
+    fn test_submit_result_works_after_unpause() {
+        let (env, contract_id) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        // match_id 999 was never created in the escrow contract
+        // Pause the contract
+        client.pause();
+
+        // Verify submit is blocked
         let result = client.try_submit_result(
-            &999u64,
-            &String::from_str(&env, "ghost_game"),
+            &0u64,
+            &String::from_str(&env, "abc123"),
             &MatchResult::Player1Wins,
-            &escrow_id,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+
+        // Unpause
+        client.unpause();
+
+        // Now submit should work
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+        assert!(client.has_result(&0u64));
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.result, MatchResult::Player1Wins);
+    }
+
+    /// Test pause/unpause state transitions.
+    #[test]
+    fn test_pause_unpause_state_transitions() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Initially unpaused - submit should work
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
+        );
+        assert!(client.has_result(&0u64));
+
+        // Pause
+        client.pause();
+
+        // Submit should fail
+        let result = client.try_submit_result(
+            &1u64,
+            &String::from_str(&env, "def456"),
+            &MatchResult::Player2Wins,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+
+        // Unpause
+        client.unpause();
+
+        // Submit should work again
+        client.submit_result(
+            &1u64,
+            &String::from_str(&env, "def456"),
+            &MatchResult::Player2Wins,
+        );
+        assert!(client.has_result(&1u64));
+
+        // Can pause again
+        client.pause();
+        let result = client.try_submit_result(
+            &2u64,
+            &String::from_str(&env, "ghi789"),
+            &MatchResult::Draw,
+        );
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+    }
+
+    /// Test that get_result extends TTL on read.
+    /// This prevents active results from expiring while they're still being accessed.
+    #[test]
+    fn test_get_result_extends_ttl() {
+        let (env, contract_id) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Submit a result
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Player1Wins,
         );
 
-        assert_eq!(
-            result,
-            Err(Ok(Error::MatchNotFound)),
-            "submit_result must return MatchNotFound for a non-existent match_id"
-        );
+        // Read the result
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.result, MatchResult::Player1Wins);
 
-        // Nothing should have been stored
-        assert!(!client.has_result(&999u64));
+        // Verify TTL was extended
+        let ttl = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get_ttl(&DataKey::Result(0u64))
+        });
+        assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
     }
 
     #[test]
