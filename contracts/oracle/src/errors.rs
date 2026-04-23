@@ -8,4 +8,5 @@ pub enum Error {
     ResultNotFound = 3,
     AlreadyInitialized = 4,
     ContractPaused = 5,
+    InvalidGameId = 6,
 }
