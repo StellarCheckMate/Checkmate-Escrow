@@ -1574,3 +1574,18 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
         "expected auth failure for non-oracle caller"
     );
 }
+
+#[test]
+fn test_pause_twice_is_idempotent() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+    client.pause(); // second call must not error
+
+    // Contract is still paused
+    let is_paused: bool = env.as_contract(&contract_id, || {
+        env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+    });
+    assert!(is_paused);
+}
