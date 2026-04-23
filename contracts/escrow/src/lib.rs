@@ -1,7 +1,7 @@
 #![no_std]
 
-pub mod errors;
-pub mod types;
+mod errors;
+mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
@@ -10,14 +10,8 @@ use types::{DataKey, Match, MatchState, Platform, Winner};
 /// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
 
-/// Maximum allowed byte length for a game_id string.
-///
-/// Platform-specific formats:
-/// - Lichess:      8 alphanumeric characters (e.g. `"abcd1234"`)
-/// - Chess.com:    numeric string, typically 7–12 digits (e.g. `"123456789"`)
-///
-/// Both formats fit well within this limit.
-const MAX_GAME_ID_LEN: u32 = 64;
+/// Default match expiry timeout (~24 hours at 5s/ledger).
+const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = 17_280;
 
 #[contract]
 pub struct EscrowContract;
@@ -25,9 +19,17 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     /// Initialize the contract with a trusted oracle address and an admin.
-    pub fn initialize(env: Env, oracle: Address, admin: Address) {
+    ///
+    /// The `oracle` must be an externally-owned account or a separate contract
+    /// address. It must not be the escrow contract's own address — passing the
+    /// contract's own address would allow anyone to satisfy `oracle.require_auth()`
+    /// trivially, permanently compromising result submission.
+    pub fn initialize(env: Env, oracle: Address, admin: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
+        }
+        if oracle == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
         }
         env.storage().instance().set(&DataKey::Oracle, &oracle);
         env.storage().instance().set(&DataKey::Admin, &admin);
@@ -46,8 +48,6 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
-        env.events()
-            .publish((Symbol::new(&env, "admin"), symbol_short!("paused")), ());
         Ok(())
     }
 
@@ -65,22 +65,32 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Rotate the oracle address. Requires authorization from the admin.
+    pub fn update_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        let current_oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
+            (current_oracle, new_oracle.clone()),
+        );
+
+        Ok(())
+    }
+
     /// Create a new match. Both players must call `deposit` before the game starts.
-    ///
-    /// # Parameters
-    /// - `game_id`: The platform-specific game identifier. Must be ≤ 64 bytes.
-    ///   - **Lichess**: 8-character alphanumeric string (e.g. `"abcd1234"`).
-    ///     Taken from the game URL: `https://lichess.org/<game_id>`
-    ///   - **Chess.com**: numeric string, typically 7–12 digits (e.g. `"123456789"`).
-    ///     Taken from the game URL: `https://www.chess.com/game/live/<game_id>`
-    ///   Passing an ID from the wrong platform or a malformed ID will not be
-    ///   rejected on-chain, but the oracle will fail to verify the result.
-    /// - `platform`: Must match the platform the `game_id` was issued by.
-    ///   Use `Platform::Lichess` or `Platform::ChessDotCom` accordingly.
-    ///
-    /// # Errors
-    /// Returns `Error::InvalidGameId` if `game_id` exceeds `MAX_GAME_ID_LEN` (64 bytes).
-    /// Returns `Error::DuplicateGameId` if the same `game_id` has already been used.
     pub fn create_match(
         env: Env,
         player1: Address,
@@ -102,13 +112,6 @@ impl EscrowContract {
         }
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
-        }
-        if game_id.len() > MAX_GAME_ID_LEN {
-            return Err(Error::InvalidGameId);
-        }
-
-        if env.storage().persistent().has(&DataKey::GameId(game_id.clone())) {
-            return Err(Error::DuplicateGameId);
         }
 
         let id: u64 = env
@@ -133,6 +136,7 @@ impl EscrowContract {
             player1_deposited: false,
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
+            completed_ledger: None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -144,7 +148,6 @@ impl EscrowContract {
         // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
-        env.storage().persistent().set(&DataKey::GameId(m.game_id.clone()), &true);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -173,12 +176,6 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state == MatchState::Cancelled {
-            return Err(Error::MatchCancelled);
-        }
-        if m.state == MatchState::Completed {
-            return Err(Error::MatchCompleted);
-        }
         if m.state != MatchState::Pending {
             return Err(Error::InvalidState);
         }
@@ -207,10 +204,6 @@ impl EscrowContract {
 
         if m.player1_deposited && m.player2_deposited {
             m.state = MatchState::Active;
-            env.events().publish(
-                (Symbol::new(&env, "match"), symbol_short!("activated")),
-                match_id,
-            );
         }
 
         env.storage()
@@ -225,12 +218,14 @@ impl EscrowContract {
     }
 
     /// Oracle submits the verified match result and triggers payout.
-    pub fn submit_result(
-        env: Env,
-        match_id: u64,
-        winner: Winner,
-        caller: Address,
-    ) -> Result<(), Error> {
+    pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        oracle.require_auth();
+
         if env
             .storage()
             .instance()
@@ -240,29 +235,18 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
-        let oracle: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Oracle)
-            .ok_or(Error::Unauthorized)?;
-
-        if caller != oracle {
-            return Err(Error::Unauthorized);
-        }
-        caller.require_auth();
-
         let mut m: Match = env
             .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state != MatchState::Active {
-            return Err(Error::InvalidState);
-        }
-
         if !m.player1_deposited || !m.player2_deposited {
             return Err(Error::NotFunded);
+        }
+
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
         }
 
         let client = token::Client::new(&env, &m.token);
@@ -278,6 +262,7 @@ impl EscrowContract {
         }
 
         m.state = MatchState::Completed;
+        m.completed_ledger = Some(env.ledger().sequence());
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -303,7 +288,7 @@ impl EscrowContract {
             .ok_or(Error::MatchNotFound)?;
 
         if m.state != MatchState::Pending {
-            return Err(Error::InvalidState);
+            return Err(Error::MatchAlreadyActive);
         }
 
         // Either player1 or player2 can cancel a pending match
@@ -343,8 +328,48 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Expire a pending match that has not been fully funded within MATCH_TIMEOUT_LEDGERS.
-    /// Anyone can call this; funds are returned to whoever deposited.
+    /// Read a match by ID.
+    pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)
+    }
+
+    /// Check whether both players have deposited.
+    pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        Ok(m.player1_deposited && m.player2_deposited)
+    }
+
+    /// Return the oracle address set at initialization.
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)
+    }
+
+    /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
+    pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
+            return Ok(0);
+        }
+        let deposited = m.player1_deposited as i128 + m.player2_deposited as i128;
+        Ok(deposited * m.stake_amount)
+    }
+
+    /// Cancel a Pending match that has exceeded the configurable ledger timeout,
+    /// refunding any deposited stakes. Anyone may call this once the timeout elapses.
     pub fn expire_match(env: Env, match_id: u64) -> Result<(), Error> {
         let mut m: Match = env
             .storage()
@@ -356,14 +381,22 @@ impl EscrowContract {
             return Err(Error::InvalidState);
         }
 
-        let elapsed = env.ledger().sequence().saturating_sub(m.created_ledger);
+        let timeout: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchTimeout)
+            .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS);
 
-        if elapsed < MATCH_TTL_LEDGERS {
+        let elapsed = env
+            .ledger()
+            .sequence()
+            .saturating_sub(m.created_ledger);
+
+        if elapsed < timeout {
             return Err(Error::MatchNotExpired);
         }
 
         let client = token::Client::new(&env, &m.token);
-
         if m.player1_deposited {
             client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
         }

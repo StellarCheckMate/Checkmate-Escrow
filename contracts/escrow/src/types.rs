@@ -37,8 +37,8 @@ pub struct Match {
     pub state: MatchState,
     pub player1_deposited: bool,
     pub player2_deposited: bool,
-    /// Ledger sequence number at match creation. Used for timeout and ordering logic.
     pub created_ledger: u32,
+    pub completed_ledger: Option<u32>,
 }
 
 #[contracttype]
