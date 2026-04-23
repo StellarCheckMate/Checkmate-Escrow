@@ -7,5 +7,5 @@ pub enum Error {
     AlreadySubmitted = 2,
     ResultNotFound = 3,
     AlreadyInitialized = 4,
-    MatchNotFound = 5,
+    ContractPaused = 5,
 }
