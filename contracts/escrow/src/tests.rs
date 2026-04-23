@@ -1445,6 +1445,15 @@ fn test_get_match_timeout_returns_default() {
     assert_eq!(timeout, MATCH_TTL_LEDGERS);
 }
 
+#[test]
+fn test_get_match_returns_match_not_found_for_unknown_id() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_get_match(&9999u64);
+    assert_eq!(result, Err(Ok(Error::MatchNotFound)));
+}
+
 
 #[test]
 fn test_update_oracle_emits_oracle_up_event_with_addresses() {
