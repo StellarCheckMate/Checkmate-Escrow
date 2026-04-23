@@ -1541,6 +1541,73 @@ fn test_cancel_match_by_player2_refunds_player1_deposit() {
     assert_eq!(token_client.balance(&player2), 1000);
 }
 
+// #373 — update_oracle routes subsequent submit_result to the new oracle
+#[test]
+fn test_update_oracle_routes_submit_result() {
+    let (env, contract_id, oracle_old, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let oracle_new = Address::generate(&env);
+    client.update_oracle(&oracle_new);
+    assert_eq!(client.get_oracle(), oracle_new);
+
+    // Match for oracle_new success assertion
+    let id1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "oracle_new_match"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id1, &player1);
+    client.deposit(&id1, &player2);
+
+    // oracle_new must succeed
+    env.mock_auths(&[MockAuth {
+        address: &oracle_new,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (id1, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.submit_result(&id1, &Winner::Player1);
+    assert_eq!(client.get_match(&id1).state, MatchState::Completed);
+
+    // Match for oracle_old rejection assertion
+    let asset_client = StellarAssetClient::new(&env, &token);
+    asset_client.mint(&player1, &100);
+    asset_client.mint(&player2, &100);
+    let id2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "oracle_old_match"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id2, &player1);
+    client.deposit(&id2, &player2);
+
+    // oracle_old must be rejected
+    env.mock_auths(&[MockAuth {
+        address: &oracle_old,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (id2, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = client.try_submit_result(&id2, &Winner::Player1);
+    assert!(
+        matches!(result, Err(Err(_))),
+        "old oracle must be rejected after rotation"
+    );
+}
+
 #[test]
 fn test_submit_result_from_non_oracle_returns_unauthorized() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
