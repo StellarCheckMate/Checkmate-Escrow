@@ -1574,3 +1574,36 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
         "expected auth failure for non-oracle caller"
     );
 }
+
+#[test]
+fn test_expire_match_no_deposits_emits_no_token_transfers() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "no_deposit_expire"),
+        &Platform::Lichess,
+    );
+
+    // Advance past timeout without any deposits
+    env.ledger().set_sequence_number(100 + DEFAULT_MATCH_TIMEOUT_LEDGERS + 1);
+
+    client.expire_match(&id);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Cancelled);
+
+    let transfer_topic = Symbol::new(&env, "transfer");
+    let has_transfer = env
+        .events()
+        .all()
+        .iter()
+        .any(|(_, topics, _)| topics.get(0) == Some(transfer_topic.clone().into_val(&env)));
+    assert!(!has_transfer, "no token transfer events should be emitted when no deposits were made");
+}
