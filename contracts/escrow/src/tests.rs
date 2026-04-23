@@ -1863,3 +1863,25 @@ fn test_update_oracle_emits_oracle_up_event_with_addresses() {
     assert_eq!(ev_old, old_oracle);
     assert_eq!(ev_new, new_oracle);
 }
+
+
+#[test]
+fn test_is_funded_returns_false_when_only_player1_deposited() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "funded_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    assert!(!client.is_funded(&id));
+
+    client.deposit(&id, &player2);
+    assert!(client.is_funded(&id));
+}
