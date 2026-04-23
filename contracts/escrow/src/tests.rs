@@ -1591,8 +1591,14 @@ fn test_expire_match_no_deposits_emits_no_token_transfers() {
         &Platform::Lichess,
     );
 
+    env.deployer().extend_ttl_for_contract_instance(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.deployer().extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
     // Advance past timeout without any deposits
     env.ledger().set_sequence_number(100 + DEFAULT_MATCH_TIMEOUT_LEDGERS + 1);
+
+    env.deployer().extend_ttl_for_contract_instance(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.deployer().extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
 
     client.expire_match(&id);
 
