@@ -49,6 +49,10 @@ impl OracleContract {
             return Err(Error::AlreadySubmitted);
         }
 
+        if game_id.len() == 0 {
+            return Err(Error::InvalidGameId);
+        }
+
         env.storage().persistent().set(
             &DataKey::Result(match_id),
             &ResultEntry {
@@ -569,5 +573,18 @@ mod tests {
 
         // Test passes if unpause completes without panic
         // The function docstring states it does not emit events
+    }
+
+    #[test]
+    fn test_submit_result_rejects_empty_game_id() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, ""),
+            &MatchResult::Player1Wins,
+        );
+        assert_eq!(result, Err(Ok(Error::InvalidGameId)));
     }
 }
