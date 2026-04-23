@@ -343,6 +343,35 @@ mod tests {
     }
 
     #[test]
+    fn test_submit_draw_result_emits_event() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Draw,
+        );
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "oracle").into_val(&env),
+            symbol_short!("result").into_val(&env),
+        ];
+        let matched = events
+            .iter()
+            .find(|(_, topics, _)| *topics == expected_topics);
+        assert!(matched.is_some(), "oracle result event not emitted for Draw");
+
+        let (_, _, data) = matched.unwrap();
+        let (ev_id, ev_result): (u64, MatchResult) =
+            soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(ev_id, 0u64);
+        assert_eq!(ev_result, MatchResult::Draw);
+    }
+
+    #[test]
     #[should_panic]
     fn test_duplicate_submit_fails() {
         let (env, contract_id, ..) = setup();
