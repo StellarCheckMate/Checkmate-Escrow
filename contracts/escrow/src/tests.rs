@@ -1688,3 +1688,55 @@ fn test_platform_survives_storage_roundtrip() {
         "Different platform variants must remain distinct after storage round-trip"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Property-based tests using quickcheck
+//
+// Compatibility note: proptest relies on std::panic::catch_unwind which is
+// unavailable in the Soroban wasm target. quickcheck 1.x works fine in the
+// native test harness (cargo test) because tests run on the host, not inside
+// the wasm VM. The Soroban Env::default() used here is the host-side
+// simulation environment, so quickcheck integrates without any restrictions.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use quickcheck_macros::quickcheck;
+
+    /// Any positive stake amount must produce a match in Pending state whose
+    /// stake_amount equals the value passed to create_match.
+    #[quickcheck]
+    fn prop_create_match_pending_with_valid_stake(raw_stake: i64) -> bool {
+        // Only positive stakes are valid; skip the rest.
+        let stake = raw_stake.unsigned_abs() as i128 + 1; // always >= 1
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let player1 = Address::generate(&env);
+        let player2 = Address::generate(&env);
+
+        let token_addr = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        client.initialize(&oracle, &admin);
+
+        let id = client.create_match(
+            &player1,
+            &player2,
+            &stake,
+            &token_addr,
+            &soroban_sdk::String::from_str(&env, "prop_game"),
+            &Platform::Lichess,
+        );
+
+        let m = client.get_match(&id);
+        m.state == MatchState::Pending && m.stake_amount == stake
+    }
+}
