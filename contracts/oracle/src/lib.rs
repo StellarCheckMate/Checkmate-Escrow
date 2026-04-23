@@ -21,6 +21,8 @@ impl OracleContract {
             panic!("Contract already initialized");
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.events()
+            .publish((Symbol::new(&env, "oracle"), symbol_short!("init")), &admin);
     }
 
     /// Admin submits a verified match result on-chain.
@@ -133,6 +135,17 @@ impl OracleContract {
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         Ok(())
     }
+
+    /// Unpause the oracle — admin only. Does not emit an event.
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -184,6 +197,32 @@ mod tests {
         oracle_client.initialize(&oracle_admin);
 
         (env, oracle_id, escrow_id, oracle_admin, player1, player2, token_addr)
+    }
+
+    #[test]
+    fn test_initialize_emits_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+        client.initialize(&admin);
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "oracle").into_val(&env),
+            symbol_short!("init").into_val(&env),
+        ];
+        let matched = events
+            .iter()
+            .find(|(_, topics, _)| *topics == expected_topics);
+        assert!(matched.is_some(), "oracle initialized event not emitted");
+
+        let (_, _, data) = matched.unwrap();
+        let ev_admin: Address = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(ev_admin, admin);
     }
 
     // ── has_result (public, unauthenticated) ─────────────────────────────────
@@ -435,5 +474,21 @@ mod tests {
 
         // Nothing should have been stored
         assert!(!client.has_result(&999u64));
+    }
+
+    #[test]
+    fn test_unpause_emits_no_event() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        let events_before = env.events().all().len();
+        client.unpause();
+        let events_after = env.events().all().len();
+
+        // Verify no new events were emitted
+        assert_eq!(
+            events_before, events_after,
+            "unpause must not emit any events"
+        );
     }
 }

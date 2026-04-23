@@ -33,6 +33,8 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.events()
+            .publish((Symbol::new(&env, "escrow"), symbol_short!("init")), (&oracle, &admin));
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
@@ -427,6 +429,14 @@ impl EscrowContract {
         let depositors: i128 = if m.player1_deposited { 1 } else { 0 }
             + if m.player2_deposited { 1 } else { 0 };
         Ok(depositors * m.stake_amount)
+    }
+
+    /// Return the match timeout value in ledgers.
+    pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
+        Ok(env.storage()
+            .instance()
+            .get(&DataKey::MatchTimeout)
+            .unwrap_or(MATCH_TTL_LEDGERS))
     }
 }
 

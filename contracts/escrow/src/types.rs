@@ -49,4 +49,5 @@ pub enum DataKey {
     Admin,
     Paused,
     GameId(String),
+    MatchTimeout,
 }

@@ -36,6 +36,36 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
 }
 
 #[test]
+fn test_initialize_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "escrow").into_val(&env),
+        symbol_short!("init").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "escrow initialized event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_oracle, ev_admin): (Address, Address) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_oracle, oracle);
+    assert_eq!(ev_admin, admin);
+}
+
+#[test]
 fn test_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -1610,4 +1640,13 @@ fn test_match_count_increments_and_get_match_returns_correct_data() {
         assert_eq!(m.platform, Platform::Lichess, "match.platform mismatch for id {i}");
         assert_eq!(m.state, MatchState::Pending, "match.state must be Pending for id {i}");
     }
+}
+
+#[test]
+fn test_get_match_timeout_returns_default() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let timeout = client.get_match_timeout().unwrap();
+    assert_eq!(timeout, MATCH_TTL_LEDGERS);
 }
