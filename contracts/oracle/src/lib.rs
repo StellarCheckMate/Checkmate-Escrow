@@ -79,14 +79,14 @@ impl OracleContract {
             .persistent()
             .get(&DataKey::Result(match_id))
             .ok_or(Error::ResultNotFound)?;
-        
+
         // Extend TTL to keep active results alive
         env.storage().persistent().extend_ttl(
             &DataKey::Result(match_id),
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
-        
+
         Ok(result)
     }
 
@@ -566,7 +566,7 @@ mod tests {
         client.pause();
         // Then unpause it
         client.unpause();
-        
+
         // Test passes if unpause completes without panic
         // The function docstring states it does not emit events
     }
