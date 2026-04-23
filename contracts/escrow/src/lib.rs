@@ -1,7 +1,7 @@
 #![no_std]
 
 mod errors;
-mod types;
+pub mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
@@ -37,6 +37,7 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events()
             .publish((Symbol::new(&env, "escrow"), symbol_short!("init")), (&oracle, &admin));
+        Ok(())
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
@@ -433,40 +434,6 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)
-    }
-
-    /// Read a match by ID.
-    pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)
-    }
-
-    /// Check whether both players have deposited.
-    pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
-        let m: Match = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)?;
-        Ok(m.player1_deposited && m.player2_deposited)
-    }
-
-    /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
-    pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
-        let m: Match = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)?;
-        if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
-            return Ok(0);
-        }
-        // Count depositors explicitly — avoids fragile bool-to-integer casting.
-        let depositors: i128 = if m.player1_deposited { 1 } else { 0 }
-            + if m.player2_deposited { 1 } else { 0 };
-        Ok(depositors * m.stake_amount)
     }
 
     /// Return the match timeout value in ledgers.

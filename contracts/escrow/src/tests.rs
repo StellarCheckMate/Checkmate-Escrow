@@ -1441,24 +1441,20 @@ fn test_get_match_timeout_returns_default() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let timeout = client.get_match_timeout().unwrap();
+    let timeout = client.try_get_match_timeout().unwrap().unwrap();
     assert_eq!(timeout, MATCH_TTL_LEDGERS);
 }
 
 
 #[test]
 fn test_update_oracle_emits_oracle_up_event_with_addresses() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let new_oracle = Address::generate(&env);
-    let old_oracle: Address = env
-        .storage()
-        .instance()
-        .get(&DataKey::Oracle)
-        .unwrap();
+    let old_oracle: Address = client.get_oracle();
 
-    client.update_oracle(&new_oracle, &admin);
+    client.update_oracle(&new_oracle);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -1505,7 +1501,7 @@ fn test_submit_result_on_nonexistent_match_id_returns_match_not_found() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_submit_result(&9999u64, &Address::generate(&env));
+    let result = client.try_submit_result(&9999u64, &Winner::Player1);
     assert_eq!(result, Err(Ok(Error::MatchNotFound)));
 }
 
