@@ -1385,6 +1385,45 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     assert_eq!(token_client.balance(&player1), balance_before + 100);
 }
 
+#[test]
+fn test_expire_match_refunds_player1_when_only_player1_deposited() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_only_p1"),
+        &Platform::Lichess,
+    );
+
+    let p1_balance_before = token_client.balance(&player1);
+    let p2_balance_before = token_client.balance(&player2);
+
+    client.deposit(&id, &player1);
+
+    let new_seq = env.ledger().sequence() + MATCH_TTL_LEDGERS;
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+    env.as_contract(&token, || {
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+    env.ledger().set_sequence_number(new_seq);
+
+    client.expire_match(&id);
+
+    assert_eq!(token_client.balance(&player1), p1_balance_before, "player1 balance must be restored to initial amount");
+    assert_eq!(token_client.balance(&player2), p2_balance_before, "player2 balance must remain unchanged");
+}
+
 // ── get_escrow_balance at each deposit stage ─────────────────────────────────
 
 #[test]
