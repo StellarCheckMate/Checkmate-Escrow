@@ -1599,11 +1599,16 @@ fn test_expire_match_no_deposits_emits_no_token_transfers() {
     let m = client.get_match(&id);
     assert_eq!(m.state, MatchState::Cancelled);
 
-    let transfer_topic = Symbol::new(&env, "transfer");
+    let transfer_sym = Symbol::new(&env, "transfer");
     let has_transfer = env
         .events()
         .all()
         .iter()
-        .any(|(_, topics, _)| topics.get(0) == Some(transfer_topic.clone().into_val(&env)));
+        .any(|(_, topics, _)| {
+            topics
+                .iter()
+                .filter_map(|v| Symbol::try_from_val(&env, &v).ok())
+                .any(|s| s == transfer_sym)
+        });
     assert!(!has_transfer, "no token transfer events should be emitted when no deposits were made");
 }
