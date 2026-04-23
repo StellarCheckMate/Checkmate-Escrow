@@ -1531,3 +1531,37 @@ fn test_cancel_match_by_player2_refunds_player1_deposit() {
     assert_eq!(player1_balance_after_cancel, 1000);
     assert_eq!(token_client.balance(&player2), 1000);
 }
+
+#[test]
+fn test_submit_result_from_non_oracle_returns_unauthorized() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "non_oracle_submit_game"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let non_oracle = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &non_oracle,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (id, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_submit_result(&id, &Winner::Player1);
+    assert!(
+        matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
+        "expected auth failure for non-oracle caller"
+    );
+}
