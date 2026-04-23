@@ -1531,3 +1531,32 @@ fn test_cancel_match_by_player2_refunds_player1_deposit() {
     assert_eq!(player1_balance_after_cancel, 1000);
     assert_eq!(token_client.balance(&player2), 1000);
 }
+
+#[test]
+fn test_transfer_admin_updates_admin_and_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+    env.mock_all_auths();
+
+    client.transfer_admin(&new_admin);
+
+    assert_eq!(client.get_admin(), new_admin);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        soroban_sdk::symbol_short!("transferred").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "transferred event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_old, ev_new): (Address, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_old, admin);
+    assert_eq!(ev_new, new_admin);
+}
