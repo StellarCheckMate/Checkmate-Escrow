@@ -7,7 +7,7 @@ use soroban_sdk::{
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
-fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
+fn setup() -> (Env, Addreshttps://github.com/StellarCheckMate/Checkmate-Escrow/pull/470/conflict?name=contracts%252Fescrow%252Fsrc%252Ftests.rs&ancestor_oid=b5690b23824639cbb4551d781cfa3c403880c19a&base_oid=4c2e0c6879a5f69510d06e9adb08d1e31af26aae&head_oid=c8364e1ffa359f4bb02fbb9297940c84171057bas, Address, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1739,4 +1739,44 @@ mod property_tests {
         let m = client.get_match(&id);
         m.state == MatchState::Pending && m.stake_amount == stake
     }
+}
+
+#[test]
+fn test_transfer_admin_success_and_old_admin_rejected() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+
+    // Successful transfer
+    client.transfer_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+
+    // Old admin is now rejected — only new_admin's auth is mocked
+    env.mock_auths(&[MockAuth {
+        address: &new_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "transfer_admin",
+            args: (new_admin.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    // Old admin trying to transfer again must fail
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "transfer_admin",
+            args: (admin.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_transfer_admin(&admin);
+    assert!(
+        matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
+        "old admin should be rejected after transfer"
+    );
 }
