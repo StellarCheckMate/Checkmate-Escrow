@@ -1574,3 +1574,23 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
         "expected auth failure for non-oracle caller"
     );
 }
+
+#[test]
+fn test_is_funded_false_after_cancel() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_funded_cancel"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.cancel_match(&id, &player1);
+
+    assert!(!client.is_funded(&id));
+}
