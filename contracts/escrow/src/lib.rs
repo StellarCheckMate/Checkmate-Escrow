@@ -428,6 +428,26 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Transfer admin rights to a new address. Requires current admin auth.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let current_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+
+        current_admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("transferred")),
+            (current_admin, new_admin),
+        );
+
+        Ok(())
+    }
+
     /// Return the admin address set at initialization.
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
