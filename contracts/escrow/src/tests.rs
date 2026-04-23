@@ -1831,3 +1831,35 @@ fn test_get_escrow_balance_returns_match_not_found_for_nonexistent_id() {
         "get_escrow_balance must return MatchNotFound for a non-existent match_id"
     );
 }
+
+
+#[test]
+fn test_update_oracle_emits_oracle_up_event_with_addresses() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_oracle = Address::generate(&env);
+    let old_oracle: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Oracle)
+        .unwrap();
+
+    client.update_oracle(&new_oracle, &admin);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        soroban_sdk::symbol_short!("oracle_up").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "oracle_up event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_old, ev_new): (Address, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_old, old_oracle);
+    assert_eq!(ev_new, new_oracle);
+}
