@@ -587,4 +587,19 @@ mod tests {
         );
         assert_eq!(result, Err(Ok(Error::InvalidGameId)));
     }
+
+    #[test]
+    fn test_get_result_game_id_matches_submitted_value() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "chess_game_42"),
+            &MatchResult::Player1Wins,
+        );
+
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.game_id, String::from_str(&env, "chess_game_42"));
+    }
 }
