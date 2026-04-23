@@ -441,7 +441,7 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &new_admin);
 
         env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("transferred")),
+            (Symbol::new(&env, "admin"), symbol_short!("admin_tr")),
             (current_admin, new_admin),
         );
 
