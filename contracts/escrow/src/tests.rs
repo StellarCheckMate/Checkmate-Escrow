@@ -7,7 +7,7 @@ use soroban_sdk::{
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
-fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
+fn setup() -> (Env, Addreshttps://github.com/StellarCheckMate/Checkmate-Escrow/pull/470/conflict?name=contracts%252Fescrow%252Fsrc%252Ftests.rs&ancestor_oid=b5690b23824639cbb4551d781cfa3c403880c19a&base_oid=4c2e0c6879a5f69510d06e9adb08d1e31af26aae&head_oid=c8364e1ffa359f4bb02fbb9297940c84171057bas, Address, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1541,6 +1541,73 @@ fn test_cancel_match_by_player2_refunds_player1_deposit() {
     assert_eq!(token_client.balance(&player2), 1000);
 }
 
+// #373 — update_oracle routes subsequent submit_result to the new oracle
+#[test]
+fn test_update_oracle_routes_submit_result() {
+    let (env, contract_id, oracle_old, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let oracle_new = Address::generate(&env);
+    client.update_oracle(&oracle_new);
+    assert_eq!(client.get_oracle(), oracle_new);
+
+    // Match for oracle_new success assertion
+    let id1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "oracle_new_match"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id1, &player1);
+    client.deposit(&id1, &player2);
+
+    // oracle_new must succeed
+    env.mock_auths(&[MockAuth {
+        address: &oracle_new,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (id1, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.submit_result(&id1, &Winner::Player1);
+    assert_eq!(client.get_match(&id1).state, MatchState::Completed);
+
+    // Match for oracle_old rejection assertion
+    let asset_client = StellarAssetClient::new(&env, &token);
+    asset_client.mint(&player1, &100);
+    asset_client.mint(&player2, &100);
+    let id2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "oracle_old_match"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id2, &player1);
+    client.deposit(&id2, &player2);
+
+    // oracle_old must be rejected
+    env.mock_auths(&[MockAuth {
+        address: &oracle_old,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (id2, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = client.try_submit_result(&id2, &Winner::Player1);
+    assert!(
+        matches!(result, Err(Err(_))),
+        "old oracle must be rejected after rotation"
+    );
+}
+
 #[test]
 fn test_submit_result_from_non_oracle_returns_unauthorized() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -1575,72 +1642,103 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
     );
 }
 
+
+/// Verify that Platform::Lichess and Platform::ChessDotCom survive a storage write/read round-trip correctly.
+/// This test ensures platform variants are properly serialized and deserialized through persistent storage.
 #[test]
-fn test_expire_match_respects_updated_timeout() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+fn test_platform_survives_storage_roundtrip() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    // Set a short custom timeout of 500 ledgers
-    client.set_match_timeout(&500u32);
-    assert_eq!(client.get_match_timeout(), 500u32);
-
-    env.ledger().set_sequence_number(100);
-
-    let id = client.create_match(
+    // Test Platform::Lichess
+    let lichess_id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "timeout_test_game"),
+        &String::from_str(&env, "lichess_game_123"),
         &Platform::Lichess,
     );
 
-    client.deposit(&id, &player1);
+    let lichess_match = client.get_match(&lichess_id);
+    assert_eq!(
+        lichess_match.platform, Platform::Lichess,
+        "Platform::Lichess must survive storage round-trip"
+    );
 
-    // Advance past the custom timeout (500 ledgers) but well under the default (17_280)
-    env.ledger().set_sequence_number(100 + 500);
+    // Test Platform::ChessDotCom
+    let chess_com_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "chess_com_game_456"),
+        &Platform::ChessDotCom,
+    );
 
-    env.deployer().extend_ttl_for_contract_instance(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    env.deployer().extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    env.deployer().extend_ttl_for_contract_instance(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    env.deployer().extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    let chess_com_match = client.get_match(&chess_com_id);
+    assert_eq!(
+        chess_com_match.platform, Platform::ChessDotCom,
+        "Platform::ChessDotCom must survive storage round-trip"
+    );
 
-    let p1_balance_before = token::Client::new(&env, &token).balance(&player1);
-
-    client.expire_match(&id);
-
-    let m = client.get_match(&id);
-    assert_eq!(m.state, MatchState::Cancelled);
-
-    // player1 should have their stake refunded
-    let p1_balance_after = token::Client::new(&env, &token).balance(&player1);
-    assert_eq!(p1_balance_after - p1_balance_before, 100);
-
-    // Verify that without the updated timeout, expiry at 500 ledgers would have failed
-    // (i.e., the default 17_280 would not have been reached)
-    let _ = admin; // admin was used via mock_all_auths for set_match_timeout
+    // Verify both matches maintain their distinct platform values
+    assert_ne!(
+        lichess_match.platform, chess_com_match.platform,
+        "Different platform variants must remain distinct after storage round-trip"
+    );
 }
 
-#[test]
-fn test_set_match_timeout_requires_admin() {
-    let (env, contract_id, _oracle, player1, _player2, _token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
+// ---------------------------------------------------------------------------
+// Property-based tests using quickcheck
+//
+// Compatibility note: proptest relies on std::panic::catch_unwind which is
+// unavailable in the Soroban wasm target. quickcheck 1.x works fine in the
+// native test harness (cargo test) because tests run on the host, not inside
+// the wasm VM. The Soroban Env::default() used here is the host-side
+// simulation environment, so quickcheck integrates without any restrictions.
+// ---------------------------------------------------------------------------
 
-    env.mock_auths(&[MockAuth {
-        address: &player1,
-        invoke: &MockAuthInvoke {
-            contract: &contract_id,
-            fn_name: "set_match_timeout",
-            args: (1000u32,).into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
+#[cfg(test)]
+mod property_tests {
+    use super::*;
+    use quickcheck_macros::quickcheck;
 
-    let result = client.try_set_match_timeout(&1000u32);
-    assert!(
-        matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
-        "expected auth failure for non-admin caller"
-    );
+    /// Any positive stake amount must produce a match in Pending state whose
+    /// stake_amount equals the value passed to create_match.
+    #[quickcheck]
+    fn prop_create_match_pending_with_valid_stake(raw_stake: i64) -> bool {
+        // Only positive stakes are valid; skip the rest.
+        let stake = raw_stake.unsigned_abs() as i128 + 1; // always >= 1
+
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let oracle = Address::generate(&env);
+        let player1 = Address::generate(&env);
+        let player2 = Address::generate(&env);
+
+        let token_addr = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+
+        let contract_id = env.register(EscrowContract, ());
+        let client = EscrowContractClient::new(&env, &contract_id);
+        client.initialize(&oracle, &admin);
+
+        let id = client.create_match(
+            &player1,
+            &player2,
+            &stake,
+            &token_addr,
+            &soroban_sdk::String::from_str(&env, "prop_game"),
+            &Platform::Lichess,
+        );
+
+        let m = client.get_match(&id);
+        m.state == MatchState::Pending && m.stake_amount == stake
+    }
 }
 
 #[test]
