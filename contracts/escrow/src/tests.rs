@@ -1982,3 +1982,43 @@ fn test_get_match_resets_ttl_after_ledger_advance() {
     });
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
+
+#[test]
+fn test_get_match_returns_cancelled_after_expire_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_state_game"),
+        &Platform::Lichess,
+    );
+
+    // Extend TTLs so storage survives the ledger jump
+    for addr in [&contract_id, &token] {
+        env.deployer()
+            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer()
+            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    }
+
+    // Advance past the 17_280-ledger timeout
+    env.ledger().set_sequence_number(100 + 17_280);
+
+    for addr in [&contract_id, &token] {
+        env.deployer()
+            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer()
+            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    }
+
+    client.expire_match(&id);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Cancelled);
+}
