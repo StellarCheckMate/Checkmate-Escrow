@@ -1852,3 +1852,24 @@ fn bench_submit_result() {
         budget.memory_bytes_cost()
     );
 }
+
+#[test]
+fn test_two_step_admin_transfer() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+
+    // Step 1: propose — old admin is still active
+    client.propose_admin(&new_admin);
+    assert_eq!(client.get_admin(), admin);
+
+    // Step 2: accept — new admin takes over
+    client.accept_admin();
+    assert_eq!(client.get_admin(), new_admin);
+
+    // Old admin is now rejected — clear mocks so auth is enforced
+    env.set_auths(&[]);
+    let result = client.try_propose_admin(&admin);
+    assert!(result.is_err());
+}

@@ -48,6 +48,7 @@ pub enum DataKey {
     MatchCount,
     Oracle,
     Admin,
+    PendingAdmin,
     Paused,
     GameId(String),
     MatchTimeout,
