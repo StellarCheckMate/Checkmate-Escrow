@@ -24,6 +24,9 @@ impl EscrowContract {
     /// address. It must not be the escrow contract's own address — passing the
     /// contract's own address would allow anyone to satisfy `oracle.require_auth()`
     /// trivially, permanently compromising result submission.
+    ///
+    /// # Errors
+    /// - [`Error::InvalidAddress`] — `oracle` is the escrow contract's own address.
     pub fn initialize(env: Env, oracle: Address, admin: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
@@ -41,6 +44,9 @@ impl EscrowContract {
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the admin.
     pub fn pause(env: Env) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -53,6 +59,9 @@ impl EscrowContract {
     }
 
     /// Unpause the contract — admin only.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the admin.
     pub fn unpause(env: Env) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -67,6 +76,9 @@ impl EscrowContract {
     }
 
     /// Rotate the oracle address. Requires authorization from the admin.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the admin.
     pub fn update_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
         let current_oracle: Address = env
             .storage()
@@ -92,6 +104,12 @@ impl EscrowContract {
     }
 
     /// Create a new match. Both players must call `deposit` before the game starts.
+    ///
+    /// # Errors
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::InvalidAmount`] — `stake_amount` is zero or negative.
+    /// - [`Error::AlreadyExists`] — a match with the derived ID already exists.
+    /// - [`Error::Overflow`] — the internal match-ID counter would overflow.
     pub fn create_match(
         env: Env,
         player1: Address,
@@ -160,6 +178,13 @@ impl EscrowContract {
     }
 
     /// Player deposits their stake into escrow.
+    ///
+    /// # Errors
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
+    /// - [`Error::InvalidState`] — match is not in `Pending` state.
+    /// - [`Error::Unauthorized`] — `player` is not player1 or player2.
+    /// - [`Error::AlreadyFunded`] — `player` has already deposited.
     pub fn deposit(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
         player.require_auth();
 
@@ -220,6 +245,13 @@ impl EscrowContract {
     }
 
     /// Oracle submits the verified match result and triggers payout.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the oracle.
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
+    /// - [`Error::NotFunded`] — one or both players have not deposited.
+    /// - [`Error::InvalidState`] — match is not in `Active` state.
     pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
         let oracle: Address = env
             .storage()
@@ -283,6 +315,11 @@ impl EscrowContract {
 
     /// Cancel a pending match and refund any deposits.
     /// Either player can cancel a pending match.
+    ///
+    /// # Errors
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
+    /// - [`Error::MatchAlreadyActive`] — match is no longer in `Pending` state.
+    /// - [`Error::Unauthorized`] — `caller` is not player1 or player2.
     pub fn cancel_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
         let mut m: Match = env
             .storage()
@@ -332,6 +369,9 @@ impl EscrowContract {
     }
 
     /// Read a match by ID.
+    ///
+    /// # Errors
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
         env.storage()
             .persistent()
@@ -340,6 +380,9 @@ impl EscrowContract {
     }
 
     /// Check whether both players have deposited.
+    ///
+    /// # Errors
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
         let m: Match = env
             .storage()
@@ -355,6 +398,9 @@ impl EscrowContract {
     }
 
     /// Return the oracle address set at initialization.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -363,6 +409,9 @@ impl EscrowContract {
     }
 
     /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
+    ///
+    /// # Errors
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
         let m: Match = env
             .storage()
@@ -378,6 +427,11 @@ impl EscrowContract {
 
     /// Cancel a Pending match that has exceeded the configurable ledger timeout,
     /// refunding any deposited stakes. Anyone may call this once the timeout elapses.
+    ///
+    /// # Errors
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
+    /// - [`Error::InvalidState`] — match is not in `Pending` state.
+    /// - [`Error::MatchNotExpired`] — the timeout period has not yet elapsed.
     pub fn expire_match(env: Env, match_id: u64) -> Result<(), Error> {
         let mut m: Match = env
             .storage()
@@ -431,6 +485,9 @@ impl EscrowContract {
     }
 
     /// Transfer admin rights to a new address. Requires current admin auth.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the current admin.
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let current_admin: Address = env
             .storage()
@@ -452,6 +509,9 @@ impl EscrowContract {
     }
 
     /// Return the admin address set at initialization.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized.
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
