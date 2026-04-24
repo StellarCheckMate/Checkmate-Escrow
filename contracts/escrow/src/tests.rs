@@ -1719,3 +1719,45 @@ fn test_submit_result_uninitialized_returns_unauthorized() {
     let result = client.try_submit_result(&0, &Winner::Player1);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
+
+#[test]
+fn test_submit_result_overflow_on_extreme_stake() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create a match with a normal stake, then directly overwrite the stake_amount
+    // in storage to i128::MAX so that stake_amount * 2 overflows — bypassing the
+    // token layer which would also overflow on deposit.
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "overflow_game"),
+        &Platform::Lichess,
+    );
+
+    env.as_contract(&contract_id, || {
+        let mut m: Match = env.storage().persistent().get(&DataKey::Match(id)).unwrap();
+        m.stake_amount = i128::MAX;
+        m.state = MatchState::Active;
+        m.player1_deposited = true;
+        m.player2_deposited = true;
+        env.storage().persistent().set(&DataKey::Match(id), &m);
+    });
+
+    let result = client.try_submit_result(&id, &Winner::Player1);
+    assert_eq!(result, Err(Ok(Error::Overflow)));
+}
+
+#[test]
+fn test_submit_result_uninitialized_returns_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_submit_result(&0, &Winner::Player1);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
