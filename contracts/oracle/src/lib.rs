@@ -118,6 +118,23 @@ impl OracleContract {
         Ok(env.storage().persistent().has(&DataKey::Result(match_id)))
     }
 
+    /// Admin removes a previously submitted result from persistent storage.
+    pub fn delete_result(env: Env, match_id: u64) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if !env.storage().persistent().has(&DataKey::Result(match_id)) {
+            return Err(Error::ResultNotFound);
+        }
+
+        env.storage().persistent().remove(&DataKey::Result(match_id));
+        Ok(())
+    }
+
     /// Rotate the admin to a new address. Requires current admin auth.
     pub fn update_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let current_admin: Address = env
@@ -663,5 +680,42 @@ mod tests {
 
         let entry = client.get_result(&0u64);
         assert_eq!(entry.game_id, String::from_str(&env, "chess_game_42"));
+    }
+
+    #[test]
+    fn test_delete_result_removes_from_storage() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "chess_game_42"),
+            &MatchResult::Player1Wins,
+        );
+        assert!(client.has_result(&0u64));
+
+        client.delete_result(&0u64);
+        assert!(!client.has_result(&0u64));
+    }
+
+    #[test]
+    fn test_delete_result_not_found_errors() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        let result = client.try_delete_result(&999u64);
+        assert_eq!(result, Err(Ok(Error::ResultNotFound)));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_delete_result_requires_admin_auth() {
+        let env = Env::default();
+        // No mock_all_auths — auth is enforced
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+        client.initialize(&admin);
+        client.delete_result(&0u64);
     }
 }
