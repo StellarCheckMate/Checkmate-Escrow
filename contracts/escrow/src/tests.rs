@@ -7,7 +7,7 @@ use soroban_sdk::{
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
-fn setup() -> (Env, Addreshttps://github.com/StellarCheckMate/Checkmate-Escrow/pull/470/conflict?name=contracts%252Fescrow%252Fsrc%252Ftests.rs&ancestor_oid=b5690b23824639cbb4551d781cfa3c403880c19a&base_oid=4c2e0c6879a5f69510d06e9adb08d1e31af26aae&head_oid=c8364e1ffa359f4bb02fbb9297940c84171057bas, Address, Address, Address, Address, Address) {
+fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1779,4 +1779,25 @@ fn test_transfer_admin_success_and_old_admin_rejected() {
         matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
         "old admin should be rejected after transfer"
     );
+}
+
+#[test]
+fn test_two_step_admin_transfer() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+
+    // Step 1: propose — old admin is still active
+    client.propose_admin(&new_admin);
+    assert_eq!(client.get_admin(), admin);
+
+    // Step 2: accept — new admin takes over
+    client.accept_admin();
+    assert_eq!(client.get_admin(), new_admin);
+
+    // Old admin is now rejected — clear mocks so auth is enforced
+    env.set_auths(&[]);
+    let result = client.try_propose_admin(&admin);
+    assert!(result.is_err());
 }
