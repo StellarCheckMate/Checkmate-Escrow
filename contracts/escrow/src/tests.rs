@@ -1810,3 +1810,15 @@ fn test_submit_result_overflow_on_extreme_stake() {
     let result = client.try_submit_result(&id, &Winner::Player1);
     assert_eq!(result, Err(Ok(Error::Overflow)));
 }
+
+#[test]
+fn test_submit_result_uninitialized_returns_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_submit_result(&0, &Winner::Player1);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
