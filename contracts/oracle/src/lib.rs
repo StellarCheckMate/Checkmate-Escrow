@@ -350,6 +350,16 @@ mod tests {
     }
 
     #[test]
+    fn test_duplicate_submit_returns_already_submitted() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
+        let result = client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
+        assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
+    }
+
+    #[test]
     #[should_panic]
     fn test_double_initialize_fails() {
         let env = Env::default();
