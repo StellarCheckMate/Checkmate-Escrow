@@ -441,7 +441,8 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &new_admin);
 
         env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("admin_tr")),
+            (Symbol::new(&env, "admin"), symbol_short!("xfer")),
+
             (current_admin, new_admin),
         );
 
@@ -456,12 +457,24 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)
     }
 
+    /// Set the match expiry timeout in ledgers. Requires admin auth.
+    pub fn set_match_timeout(env: Env, ledgers: u32) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::MatchTimeout, &ledgers);
+        Ok(())
+    }
+
     /// Return the match timeout value in ledgers.
     pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
         Ok(env.storage()
             .instance()
             .get(&DataKey::MatchTimeout)
-            .unwrap_or(MATCH_TTL_LEDGERS))
+            .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS))
     }
 }
 
