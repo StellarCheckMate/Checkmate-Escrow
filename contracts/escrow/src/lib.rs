@@ -45,6 +45,11 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Return whether the escrow contract has been initialized.
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&DataKey::Oracle)
+    }
+
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
     ///
     /// # Errors
