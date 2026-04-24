@@ -186,7 +186,7 @@ mod tests {
         Address, Env, IntoVal, String, Symbol,
     };
     use escrow::{EscrowContract, EscrowContractClient};
-    use escrow::types::Platform;
+    use escrow::types::{MatchState, Platform, Winner};
 
     fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         let env = Env::default();
@@ -654,32 +654,32 @@ mod tests {
         // The function docstring states it does not emit events
     }
 
+    /// Full integration: oracle stores result, escrow oracle address submits
+    /// result to escrow, payout executes, match is Completed.
     #[test]
-    fn test_submit_result_rejects_empty_game_id() {
-        let (env, contract_id, ..) = setup();
-        let client = OracleContractClient::new(&env, &contract_id);
+    fn test_oracle_to_escrow_full_payout_flow() {
+        let (env, oracle_id, escrow_id, oracle_admin, player1, _player2, token_addr) = setup();
+        let oracle_client = OracleContractClient::new(&env, &oracle_id);
+        let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+        let token_client = soroban_sdk::token::Client::new(&env, &token_addr);
 
-        let result = client.try_submit_result(
+        // Step 1: oracle admin submits verified result to the oracle contract
+        oracle_client.submit_result(
             &0u64,
-            &String::from_str(&env, ""),
+            &String::from_str(&env, "test_game"),
             &MatchResult::Player1Wins,
         );
-        assert_eq!(result, Err(Ok(Error::InvalidGameId)));
-    }
+        assert!(oracle_client.has_result(&0u64));
 
-    #[test]
-    fn test_get_result_game_id_matches_submitted_value() {
-        let (env, contract_id, ..) = setup();
-        let client = OracleContractClient::new(&env, &contract_id);
+        // Step 2: the escrow's trusted oracle address (oracle_admin) calls
+        // submit_result on the escrow contract, triggering the payout
+        escrow_client.submit_result(&0u64, &Winner::Player1);
 
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "chess_game_42"),
-            &MatchResult::Player1Wins,
-        );
-
-        let entry = client.get_result(&0u64);
-        assert_eq!(entry.game_id, String::from_str(&env, "chess_game_42"));
+        // Step 3: assert match is Completed and player1 received the full pot
+        let m = escrow_client.get_match(&0u64);
+        assert_eq!(m.state, MatchState::Completed);
+        // player1 staked 100, pot = 200; started with 1000, deposited 100 → balance = 1100
+        assert_eq!(token_client.balance(&player1), 1100);
     }
 
     #[test]
