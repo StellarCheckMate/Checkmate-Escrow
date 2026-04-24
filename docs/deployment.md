@@ -1,5 +1,16 @@
 # Deployment Sequence
 
+## Network Configuration
+
+Network environments are defined in [`environments.toml`](../environments.toml) at the project root. Each named section maps to a `--network` value used by the Stellar/Soroban CLI.
+
+Available networks: `testnet`, `mainnet`, `futurenet`, `standalone`.
+
+To target a specific network, pass `--network <name>` to any `stellar contract` command. To add a custom network, append a new `[section]` with `rpc_url` and `network_passphrase` fields — see the comments in `environments.toml` for details.
+
+---
+
+
 This document describes the required deployment order and initialization steps
 for the Checkmate Escrow smart contracts.
 
