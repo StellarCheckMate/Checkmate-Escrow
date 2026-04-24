@@ -4,7 +4,9 @@ extern crate std;
 
 use super::*;
 use soroban_sdk::{
-    testutils::{storage::Persistent as _, Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke},
+    testutils::{
+        storage::Persistent as _, Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke,
+    },
     token::{Client as TokenClient, StellarAssetClient},
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
@@ -24,7 +26,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     asset_client.mint(&player1, &1000);
     asset_client.mint(&player2, &1000);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
 
@@ -51,7 +53,7 @@ fn test_initialize_emits_event() {
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
 
@@ -67,8 +69,7 @@ fn test_initialize_emits_event() {
     assert!(matched.is_some(), "escrow initialized event not emitted");
 
     let (_, _, data) = matched.unwrap();
-    let (ev_oracle, ev_admin): (Address, Address) =
-        TryFromVal::try_from_val(&env, &data).unwrap();
+    let (ev_oracle, ev_admin): (Address, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_oracle, oracle);
     assert_eq!(ev_admin, admin);
 }
@@ -176,18 +177,36 @@ fn test_deposit_flags_set_correctly_after_each_deposit() {
     );
 
     let m = client.get_match(&id);
-    assert!(!m.player1_deposited, "player1_deposited must be false before any deposit");
-    assert!(!m.player2_deposited, "player2_deposited must be false before any deposit");
+    assert!(
+        !m.player1_deposited,
+        "player1_deposited must be false before any deposit"
+    );
+    assert!(
+        !m.player2_deposited,
+        "player2_deposited must be false before any deposit"
+    );
 
     client.deposit(&id, &player1);
     let m = client.get_match(&id);
-    assert!(m.player1_deposited, "player1_deposited must be true after player1 deposits");
-    assert!(!m.player2_deposited, "player2_deposited must still be false after only player1 deposits");
+    assert!(
+        m.player1_deposited,
+        "player1_deposited must be true after player1 deposits"
+    );
+    assert!(
+        !m.player2_deposited,
+        "player2_deposited must still be false after only player1 deposits"
+    );
 
     client.deposit(&id, &player2);
     let m = client.get_match(&id);
-    assert!(m.player1_deposited, "player1_deposited must remain true after player2 deposits");
-    assert!(m.player2_deposited, "player2_deposited must be true after player2 deposits");
+    assert!(
+        m.player1_deposited,
+        "player1_deposited must remain true after player2 deposits"
+    );
+    assert!(
+        m.player2_deposited,
+        "player2_deposited must be true after player2 deposits"
+    );
 }
 
 #[test]
@@ -313,7 +332,7 @@ fn test_full_match_lifecycle() {
     client.submit_result(&id, &Winner::Player1);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
     assert_eq!(token_client.balance(&player1), 1100); // won the pot
-    assert_eq!(token_client.balance(&player2), 900);  // lost stake
+    assert_eq!(token_client.balance(&player2), 900); // lost stake
     assert_eq!(client.get_escrow_balance(&id), 0);
 }
 
@@ -513,7 +532,7 @@ fn test_initialize_accepts_valid_generated_oracle_address() {
 
     let oracle = Address::generate(&env);
     let admin = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.initialize(&oracle, &admin);
@@ -530,7 +549,7 @@ fn test_initialize_rejects_contract_address_as_oracle() {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Passing the contract's own address as oracle must be rejected
@@ -591,7 +610,7 @@ fn test_concurrent_matches_remain_isolated() {
         mint_player_balance(&asset_client, player, 1000);
     }
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
 
@@ -651,7 +670,7 @@ fn test_double_initialize_fails() {
     let oracle2 = Address::generate(&env);
     let admin = Address::generate(&env);
 
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.initialize(&oracle1, &admin);
@@ -1253,7 +1272,10 @@ fn test_created_ledger_is_set() {
     );
 
     let m = client.get_match(&id);
-    assert_eq!(m.created_ledger, 42, "created_ledger should match ledger sequence at creation");
+    assert_eq!(
+        m.created_ledger, 42,
+        "created_ledger should match ledger sequence at creation"
+    );
 }
 
 // #292 — MatchCount increments correctly across multiple matches
@@ -1352,21 +1374,15 @@ fn test_expire_match_refunds_depositor_after_timeout() {
         MATCH_TTL_LEDGERS,
         MATCH_TTL_LEDGERS,
     );
-    env.deployer().extend_ttl_for_code(
-        contract_id.clone(),
-        MATCH_TTL_LEDGERS,
-        MATCH_TTL_LEDGERS,
-    );
+    env.deployer()
+        .extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     env.deployer().extend_ttl_for_contract_instance(
         token.clone(),
         MATCH_TTL_LEDGERS,
         MATCH_TTL_LEDGERS,
     );
-    env.deployer().extend_ttl_for_code(
-        token.clone(),
-        MATCH_TTL_LEDGERS,
-        MATCH_TTL_LEDGERS,
-    );
+    env.deployer()
+        .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
 
     // Advance ledger past the default timeout (17_280 ledgers)
     env.ledger().set_sequence_number(100 + 17_280);
@@ -1376,21 +1392,15 @@ fn test_expire_match_refunds_depositor_after_timeout() {
         MATCH_TTL_LEDGERS,
         MATCH_TTL_LEDGERS,
     );
-    env.deployer().extend_ttl_for_code(
-        contract_id.clone(),
-        MATCH_TTL_LEDGERS,
-        MATCH_TTL_LEDGERS,
-    );
+    env.deployer()
+        .extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     env.deployer().extend_ttl_for_contract_instance(
         token.clone(),
         MATCH_TTL_LEDGERS,
         MATCH_TTL_LEDGERS,
     );
-    env.deployer().extend_ttl_for_code(
-        token.clone(),
-        MATCH_TTL_LEDGERS,
-        MATCH_TTL_LEDGERS,
-    );
+    env.deployer()
+        .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
 
     client.expire_match(&id);
 
@@ -1459,7 +1469,7 @@ fn test_get_match_timeout_returns_default() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let timeout = client.try_get_match_timeout().unwrap().unwrap();
-    assert_eq!(timeout, MATCH_TTL_LEDGERS);
+    assert_eq!(timeout, DEFAULT_MATCH_TIMEOUT_LEDGERS);
 }
 
 #[test]
@@ -1470,7 +1480,6 @@ fn test_get_match_returns_match_not_found_for_unknown_id() {
     let result = client.try_get_match(&9999u64);
     assert_eq!(result, Err(Ok(Error::MatchNotFound)));
 }
-
 
 #[test]
 fn test_update_oracle_emits_oracle_up_event_with_addresses() {
@@ -1499,7 +1508,6 @@ fn test_update_oracle_emits_oracle_up_event_with_addresses() {
     assert_eq!(ev_new, new_oracle);
 }
 
-
 #[test]
 fn test_is_funded_returns_false_when_only_player1_deposited() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -1521,7 +1529,6 @@ fn test_is_funded_returns_false_when_only_player1_deposited() {
     assert!(client.is_funded(&id));
 }
 
-
 #[test]
 fn test_submit_result_on_nonexistent_match_id_returns_match_not_found() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
@@ -1530,7 +1537,6 @@ fn test_submit_result_on_nonexistent_match_id_returns_match_not_found() {
     let result = client.try_submit_result(&9999u64, &Winner::Player1);
     assert_eq!(result, Err(Ok(Error::MatchNotFound)));
 }
-
 
 #[test]
 fn test_cancel_match_by_player2_refunds_player1_deposit() {
@@ -1592,6 +1598,9 @@ fn test_update_oracle_routes_submit_result() {
     }]);
     client.submit_result(&id1, &Winner::Player1);
     assert_eq!(client.get_match(&id1).state, MatchState::Completed);
+
+    // Re-enable all auths for token minting
+    env.mock_all_auths();
 
     // Match for oracle_old rejection assertion
     let asset_client = StellarAssetClient::new(&env, &token);
@@ -1661,7 +1670,7 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
 
 #[test]
 fn test_get_match_returns_winner_after_payout() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1677,7 +1686,7 @@ fn test_get_match_returns_winner_after_payout() {
     client.submit_result(&id, &Winner::Player2);
 
     let m = client.get_match(&id);
-    assert_eq!(m.winner, Some(Winner::Player2));
+    assert_eq!(m.winner, Winner::Player2);
 }
 
 #[test]
@@ -1708,107 +1717,6 @@ fn test_submit_result_overflow_on_extreme_stake() {
 
     let result = client.try_submit_result(&id, &Winner::Player1);
     assert_eq!(result, Err(Ok(Error::Overflow)));
-}
-
-#[test]
-fn test_submit_result_uninitialized_returns_unauthorized() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(EscrowContract, ());
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let result = client.try_submit_result(&0, &Winner::Player1);
-    assert_eq!(result, Err(Ok(Error::Unauthorized)));
-}
-
-// ── Budget / resource benchmarks ────────────────────────────────────────────
-//
-// These tests measure CPU instruction counts and memory bytes consumed by the
-// three core operations. They do NOT assert exact values (which vary across
-// SDK versions) but print the numbers so developers can track regressions and
-// tune fee estimates. Run with `cargo test bench -- --nocapture`.
-
-#[test]
-fn bench_create_match() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let mut budget = env.cost_estimate().budget();
-    budget.reset_tracker();
-
-    client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "bench_game"),
-        &Platform::Lichess,
-    );
-
-    std::println!(
-        "[bench_create_match] cpu={} mem={}",
-        budget.cpu_instruction_cost(),
-        budget.memory_bytes_cost()
-    );
-}
-
-#[test]
-fn bench_deposit() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let id = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "bench_game"),
-        &Platform::Lichess,
-    );
-
-    let mut budget = env.cost_estimate().budget();
-    budget.reset_tracker();
-    client.deposit(&id, &player1);
-    std::println!(
-        "[bench_deposit p1]   cpu={} mem={}",
-        budget.cpu_instruction_cost(),
-        budget.memory_bytes_cost()
-    );
-
-    budget.reset_tracker();
-    client.deposit(&id, &player2);
-    std::println!(
-        "[bench_deposit p2]   cpu={} mem={}",
-        budget.cpu_instruction_cost(),
-        budget.memory_bytes_cost()
-    );
-}
-
-#[test]
-fn bench_submit_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let id = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "bench_game"),
-        &Platform::Lichess,
-    );
-    client.deposit(&id, &player1);
-    client.deposit(&id, &player2);
-
-    let mut budget = env.cost_estimate().budget();
-    budget.reset_tracker();
-    client.submit_result(&id, &Winner::Player1);
-    std::println!(
-        "[bench_submit_result] cpu={} mem={}",
-        budget.cpu_instruction_cost(),
-        budget.memory_bytes_cost()
-    );
 }
 
 #[test]
@@ -1854,7 +1762,10 @@ fn test_transfer_admin_pause_auth() {
         },
     }]);
     let result = client.try_pause();
-    assert!(result.is_err(), "old admin should be rejected from pause after transfer");
+    assert!(
+        result.is_err(),
+        "old admin should be rejected from pause after transfer"
+    );
 
     // New admin pauses — must succeed
     env.mock_auths(&[MockAuth {

@@ -48,7 +48,12 @@ impl OracleContract {
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
         // Check if contract is paused first
-        if env.storage().instance().get(&DataKey::Paused).unwrap_or(false) {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
             return Err(Error::ContractPaused);
         }
 
@@ -63,7 +68,7 @@ impl OracleContract {
             return Err(Error::AlreadySubmitted);
         }
 
-        if game_id.len() == 0 {
+        if game_id.is_empty() {
             return Err(Error::InvalidGameId);
         }
 
@@ -151,7 +156,9 @@ impl OracleContract {
             return Err(Error::ResultNotFound);
         }
 
-        env.storage().persistent().remove(&DataKey::Result(match_id));
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Result(match_id));
         Ok(())
     }
 
@@ -213,13 +220,14 @@ impl OracleContract {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use escrow::types::{MatchState, Platform, Winner};
+    use escrow::{EscrowContract, EscrowContractClient};
     use soroban_sdk::{
-        testutils::{storage::Persistent as _, Address as _, Events},
+        testutils::storage::{Instance as _, Persistent as _},
+        testutils::{Address as _, Events as _},
         token::StellarAssetClient,
         Address, Env, IntoVal, String, Symbol,
     };
-    use escrow::{EscrowContract, EscrowContractClient};
-    use escrow::types::{MatchState, Platform, Winner as EscrowWinner};
 
     fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         let env = Env::default();
@@ -238,7 +246,7 @@ mod tests {
         asset_client.mint(&player2, &1000);
 
         // Register escrow contract and create + fund a match (id=0)
-        let escrow_id = env.register(EscrowContract, ());
+        let escrow_id = env.register_contract(None, EscrowContract);
         let escrow_client = EscrowContractClient::new(&env, &escrow_id);
         escrow_client.initialize(&oracle_admin, &admin);
         escrow_client.create_match(
@@ -253,11 +261,19 @@ mod tests {
         escrow_client.deposit(&0u64, &player2);
 
         // Register oracle contract
-        let oracle_id = env.register(OracleContract, ());
+        let oracle_id = env.register_contract(None, OracleContract);
         let oracle_client = OracleContractClient::new(&env, &oracle_id);
         oracle_client.initialize(&oracle_admin);
 
-        (env, oracle_id, escrow_id, oracle_admin, player1, player2, token_addr)
+        (
+            env,
+            oracle_id,
+            escrow_id,
+            oracle_admin,
+            player1,
+            player2,
+            token_addr,
+        )
     }
 
     #[test]
@@ -266,7 +282,7 @@ mod tests {
         env.mock_all_auths();
 
         let admin = Address::generate(&env);
-        let contract_id = env.register(OracleContract, ());
+        let contract_id = env.register_contract(None, OracleContract);
         let client = OracleContractClient::new(&env, &contract_id);
         client.initialize(&admin);
 
@@ -345,7 +361,7 @@ mod tests {
         let env = Env::default();
         // Do NOT mock all auths — we want auth to actually be enforced
         let admin = Address::generate(&env);
-        let contract_id = env.register(OracleContract, ());
+        let contract_id = env.register_contract(None, OracleContract);
         let client = OracleContractClient::new(&env, &contract_id);
         client.initialize(&admin);
         // Non-admin tries to call has_result_admin - should panic
@@ -402,11 +418,7 @@ mod tests {
         let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Draw,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
 
         let events = env.events().all();
         let expected_topics = soroban_sdk::vec![
@@ -417,7 +429,10 @@ mod tests {
         let matched = events
             .iter()
             .find(|(_, topics, _)| *topics == expected_topics);
-        assert!(matched.is_some(), "oracle result event not emitted for Draw");
+        assert!(
+            matched.is_some(),
+            "oracle result event not emitted for Draw"
+        );
 
         let (_, _, data) = matched.unwrap();
         let (ev_id, ev_result): (u64, Winner) =
@@ -442,8 +457,9 @@ mod tests {
         let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
-        let result = client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
+        let result =
+            client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
         assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
     }
 
@@ -453,7 +469,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
-        let contract_id = env.register(OracleContract, ());
+        let contract_id = env.register_contract(None, OracleContract);
         let client = OracleContractClient::new(&env, &contract_id);
 
         client.initialize(&admin);
@@ -466,7 +482,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
-        let contract_id = env.register(OracleContract, ());
+        let contract_id = env.register_contract(None, OracleContract);
         let client = OracleContractClient::new(&env, &contract_id);
 
         assert!(!client.is_initialized());
@@ -633,11 +649,8 @@ mod tests {
 
         // Can pause again
         client.pause();
-        let result = client.try_submit_result(
-            &2u64,
-            &String::from_str(&env, "ghi789"),
-            &Winner::Draw,
-        );
+        let result =
+            client.try_submit_result(&2u64, &String::from_str(&env, "ghi789"), &MatchResult::Draw);
         assert_eq!(result, Err(Ok(Error::ContractPaused)));
     }
 
@@ -661,9 +674,7 @@ mod tests {
 
         // Verify TTL was extended
         let ttl = env.as_contract(&contract_id, || {
-            env.storage()
-                .persistent()
-                .get_ttl(&DataKey::Result(0u64))
+            env.storage().persistent().get_ttl(&DataKey::Result(0u64))
         });
         assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
     }
@@ -678,7 +689,10 @@ mod tests {
 
         // Contract is still paused
         let is_paused: bool = env.as_contract(&contract_id, || {
-            env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+            env.storage()
+                .instance()
+                .get(&DataKey::Paused)
+                .unwrap_or(false)
         });
         assert!(is_paused);
     }
@@ -701,7 +715,7 @@ mod tests {
     /// result to escrow, payout executes, match is Completed.
     #[test]
     fn test_oracle_to_escrow_full_payout_flow() {
-        let (env, oracle_id, escrow_id, oracle_admin, player1, _player2, token_addr) = setup();
+        let (env, oracle_id, escrow_id, _oracle_admin, player1, _player2, token_addr) = setup();
         let oracle_client = OracleContractClient::new(&env, &oracle_id);
         let escrow_client = EscrowContractClient::new(&env, &escrow_id);
         let token_client = soroban_sdk::token::Client::new(&env, &token_addr);
@@ -756,7 +770,7 @@ mod tests {
         let env = Env::default();
         // No mock_all_auths — auth is enforced
         let admin = Address::generate(&env);
-        let contract_id = env.register(OracleContract, ());
+        let contract_id = env.register_contract(None, OracleContract);
         let client = OracleContractClient::new(&env, &contract_id);
         client.initialize(&admin);
         client.delete_result(&0u64);
@@ -773,9 +787,7 @@ mod tests {
             &Winner::Player1,
         );
 
-        let ttl = env.as_contract(&contract_id, || {
-            env.storage().instance().get_ttl()
-        });
+        let ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
         assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
     }
 

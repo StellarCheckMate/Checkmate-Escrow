@@ -25,7 +25,7 @@ pub enum Winner {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Match {
     pub id: u64,
     pub player1: Address,
@@ -39,7 +39,7 @@ pub struct Match {
     pub player2_deposited: bool,
     pub created_ledger: u32,
     pub completed_ledger: Option<u32>,
-    pub winner: Option<Winner>,
+    pub winner: Winner,
 }
 
 #[contracttype]
