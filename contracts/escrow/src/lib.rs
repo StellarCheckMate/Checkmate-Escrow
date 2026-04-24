@@ -121,6 +121,10 @@ impl EscrowContract {
     ) -> Result<u64, Error> {
         player1.require_auth();
 
+        if player1 == player2 {
+            return Err(Error::InvalidPlayers);
+        }
+
         if env
             .storage()
             .instance()

@@ -48,4 +48,5 @@ pub enum Error {
     /// (13) The supplied address is invalid for the context — e.g. passing the
     /// escrow contract's own address as the oracle during `initialize`.
     InvalidAddress = 13,
+    InvalidPlayers = 14,
 }
