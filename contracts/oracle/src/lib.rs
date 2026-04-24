@@ -27,6 +27,11 @@ impl OracleContract {
 
     /// Admin submits a verified match result on-chain.
     /// Invariant: No results can be submitted while the contract is paused.
+    ///
+    /// # Errors
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
+    /// - [`Error::AlreadySubmitted`] — a result for `match_id` has already been recorded.
     pub fn submit_result(
         env: Env,
         match_id: u64,
@@ -73,6 +78,9 @@ impl OracleContract {
     /// Retrieve the stored result for a match.
     /// TTL is extended on every read to prevent active results from expiring.
     /// Without this, frequently-accessed results could expire and return ResultNotFound.
+    ///
+    /// # Errors
+    /// - [`Error::ResultNotFound`] — no result has been submitted for `match_id`, or the entry has expired.
     pub fn get_result(env: Env, match_id: u64) -> Result<ResultEntry, Error> {
         let result = env
             .storage()
@@ -115,6 +123,9 @@ impl OracleContract {
     }
 
     /// Rotate the admin to a new address. Requires current admin auth.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the current admin.
     pub fn update_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let current_admin: Address = env
             .storage()
@@ -127,6 +138,9 @@ impl OracleContract {
     }
 
     /// Pause the oracle — admin only. Blocks submit_result while paused.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
     pub fn pause(env: Env) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -139,6 +153,9 @@ impl OracleContract {
     }
 
     /// Unpause the oracle — admin only. Does not emit an event.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
     pub fn unpause(env: Env) -> Result<(), Error> {
         let admin: Address = env
             .storage()
