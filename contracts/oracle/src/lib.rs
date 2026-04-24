@@ -160,7 +160,7 @@ mod tests {
         Address, Env, IntoVal, String, Symbol,
     };
     use escrow::{EscrowContract, EscrowContractClient};
-    use escrow::types::Platform;
+    use escrow::types::{MatchState, Platform, Winner};
 
     fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         let env = Env::default();
@@ -569,5 +569,33 @@ mod tests {
         
         // Test passes if unpause completes without panic
         // The function docstring states it does not emit events
+    }
+
+    /// Full integration: oracle stores result, escrow oracle address submits
+    /// result to escrow, payout executes, match is Completed.
+    #[test]
+    fn test_oracle_to_escrow_full_payout_flow() {
+        let (env, oracle_id, escrow_id, oracle_admin, player1, _player2, token_addr) = setup();
+        let oracle_client = OracleContractClient::new(&env, &oracle_id);
+        let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+        let token_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+        // Step 1: oracle admin submits verified result to the oracle contract
+        oracle_client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player1Wins,
+        );
+        assert!(oracle_client.has_result(&0u64));
+
+        // Step 2: the escrow's trusted oracle address (oracle_admin) calls
+        // submit_result on the escrow contract, triggering the payout
+        escrow_client.submit_result(&0u64, &Winner::Player1);
+
+        // Step 3: assert match is Completed and player1 received the full pot
+        let m = escrow_client.get_match(&0u64);
+        assert_eq!(m.state, MatchState::Completed);
+        // player1 staked 100, pot = 200; started with 1000, deposited 100 → balance = 1100
+        assert_eq!(token_client.balance(&player1), 1100);
     }
 }
