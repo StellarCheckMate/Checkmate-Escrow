@@ -790,4 +790,65 @@ mod tests {
         let ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
         assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
     }
+
+    // ── Issue: transfer_admin (update_admin) — old admin rejected, new admin accepted ──
+    //
+    // Verifies that after `update_admin` is called:
+    //   1. The old admin can no longer call `submit_result` (auth failure).
+    //   2. The new admin can successfully call `submit_result`.
+    #[test]
+    fn test_transfer_admin_old_rejected_new_accepted() {
+        let (env, contract_id, _escrow_id, old_admin, player1, player2, token_addr) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        let new_admin = Address::generate(&env);
+
+        // Transfer admin to new_admin (mock_all_auths is active from setup)
+        client.update_admin(&new_admin);
+
+        // ── old admin must be rejected ────────────────────────────────────────
+        // Provide explicit mock auth for old_admin only — new_admin is not mocked,
+        // so the contract will reject old_admin's auth attempt.
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &old_admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "submit_result",
+                args: (0u64, String::from_str(&env, "test_game"), MatchResult::Player1Wins).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player1Wins,
+        );
+        assert!(
+            result.is_err(),
+            "old admin must be rejected after transfer_admin"
+        );
+
+        // ── new admin must be accepted ────────────────────────────────────────
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &new_admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "submit_result",
+                args: (0u64, String::from_str(&env, "test_game"), MatchResult::Player1Wins).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "test_game"),
+            &MatchResult::Player1Wins,
+        );
+
+        // Confirm the result was stored
+        assert!(client.has_result(&0u64), "new admin must be able to submit results after transfer");
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.result, MatchResult::Player1Wins);
+    }
 }
