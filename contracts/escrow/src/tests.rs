@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+extern crate std;
+
 use super::*;
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke},
@@ -7,7 +9,7 @@ use soroban_sdk::{
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
-fn setup() -> (Env, Addreshttps://github.com/StellarCheckMate/Checkmate-Escrow/pull/470/conflict?name=contracts%252Fescrow%252Fsrc%252Ftests.rs&ancestor_oid=b5690b23824639cbb4551d781cfa3c403880c19a&base_oid=4c2e0c6879a5f69510d06e9adb08d1e31af26aae&head_oid=c8364e1ffa359f4bb02fbb9297940c84171057bas, Address, Address, Address, Address, Address) {
+fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1778,5 +1780,94 @@ fn test_transfer_admin_success_and_old_admin_rejected() {
     assert!(
         matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
         "old admin should be rejected after transfer"
+    );
+}
+
+// ── Budget / resource benchmarks ────────────────────────────────────────────
+//
+// These tests measure CPU instruction counts and memory bytes consumed by the
+// three core operations. They do NOT assert exact values (which vary across
+// SDK versions) but print the numbers so developers can track regressions and
+// tune fee estimates. Run with `cargo test bench -- --nocapture`.
+
+#[test]
+fn bench_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let mut budget = env.cost_estimate().budget();
+    budget.reset_tracker();
+
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "bench_game"),
+        &Platform::Lichess,
+    );
+
+    std::println!(
+        "[bench_create_match] cpu={} mem={}",
+        budget.cpu_instruction_cost(),
+        budget.memory_bytes_cost()
+    );
+}
+
+#[test]
+fn bench_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "bench_game"),
+        &Platform::Lichess,
+    );
+
+    let mut budget = env.cost_estimate().budget();
+    budget.reset_tracker();
+    client.deposit(&id, &player1);
+    std::println!(
+        "[bench_deposit p1]   cpu={} mem={}",
+        budget.cpu_instruction_cost(),
+        budget.memory_bytes_cost()
+    );
+
+    budget.reset_tracker();
+    client.deposit(&id, &player2);
+    std::println!(
+        "[bench_deposit p2]   cpu={} mem={}",
+        budget.cpu_instruction_cost(),
+        budget.memory_bytes_cost()
+    );
+}
+
+#[test]
+fn bench_submit_result() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "bench_game"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let mut budget = env.cost_estimate().budget();
+    budget.reset_tracker();
+    client.submit_result(&id, &Winner::Player1);
+    std::println!(
+        "[bench_submit_result] cpu={} mem={}",
+        budget.cpu_instruction_cost(),
+        budget.memory_bytes_cost()
     );
 }
