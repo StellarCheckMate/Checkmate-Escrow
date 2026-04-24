@@ -11,8 +11,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  test:
-    name: Test
+  fmt:
+    name: Rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +20,23 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
           targets: wasm32-unknown-unknown
+          components: clippy
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -31,6 +47,9 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Lint
+        run: cargo clippy -- -D warnings
 
       - name: Run tests
         run: cargo test
