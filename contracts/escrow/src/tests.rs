@@ -900,6 +900,22 @@ fn test_create_match_with_zero_stake_fails() {
 }
 
 #[test]
+fn test_create_match_with_negative_stake_returns_invalid_amount() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &-100,
+        &token,
+        &String::from_str(&env, "negative_stake_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
 fn test_player2_cancel_pending_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
