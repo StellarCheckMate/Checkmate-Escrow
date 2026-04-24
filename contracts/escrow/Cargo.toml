@@ -12,3 +12,5 @@ soroban-sdk = { workspace = true }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 oracle = { path = "../oracle" }
+quickcheck = "1.0"
+quickcheck_macros = "1.0"

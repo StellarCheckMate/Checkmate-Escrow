@@ -7,7 +7,7 @@ use soroban_sdk::{
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
-fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
+fn setup() -> (Env, Addreshttps://github.com/StellarCheckMate/Checkmate-Escrow/pull/470/conflict?name=contracts%252Fescrow%252Fsrc%252Ftests.rs&ancestor_oid=b5690b23824639cbb4551d781cfa3c403880c19a&base_oid=4c2e0c6879a5f69510d06e9adb08d1e31af26aae&head_oid=c8364e1ffa359f4bb02fbb9297940c84171057bas, Address, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1539,6 +1539,73 @@ fn test_cancel_match_by_player2_refunds_player1_deposit() {
     let player1_balance_after_cancel = token_client.balance(&player1);
     assert_eq!(player1_balance_after_cancel, 1000);
     assert_eq!(token_client.balance(&player2), 1000);
+}
+
+// #373 — update_oracle routes subsequent submit_result to the new oracle
+#[test]
+fn test_update_oracle_routes_submit_result() {
+    let (env, contract_id, oracle_old, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let oracle_new = Address::generate(&env);
+    client.update_oracle(&oracle_new);
+    assert_eq!(client.get_oracle(), oracle_new);
+
+    // Match for oracle_new success assertion
+    let id1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "oracle_new_match"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id1, &player1);
+    client.deposit(&id1, &player2);
+
+    // oracle_new must succeed
+    env.mock_auths(&[MockAuth {
+        address: &oracle_new,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (id1, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.submit_result(&id1, &Winner::Player1);
+    assert_eq!(client.get_match(&id1).state, MatchState::Completed);
+
+    // Match for oracle_old rejection assertion
+    let asset_client = StellarAssetClient::new(&env, &token);
+    asset_client.mint(&player1, &100);
+    asset_client.mint(&player2, &100);
+    let id2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "oracle_old_match"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id2, &player1);
+    client.deposit(&id2, &player2);
+
+    // oracle_old must be rejected
+    env.mock_auths(&[MockAuth {
+        address: &oracle_old,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (id2, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = client.try_submit_result(&id2, &Winner::Player1);
+    assert!(
+        matches!(result, Err(Err(_))),
+        "old oracle must be rejected after rotation"
+    );
 }
 
 #[test]

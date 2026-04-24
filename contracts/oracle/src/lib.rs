@@ -49,6 +49,10 @@ impl OracleContract {
             return Err(Error::AlreadySubmitted);
         }
 
+        if game_id.len() == 0 {
+            return Err(Error::InvalidGameId);
+        }
+
         env.storage().persistent().set(
             &DataKey::Result(match_id),
             &ResultEntry {
@@ -79,14 +83,14 @@ impl OracleContract {
             .persistent()
             .get(&DataKey::Result(match_id))
             .ok_or(Error::ResultNotFound)?;
-        
+
         // Extend TTL to keep active results alive
         env.storage().persistent().extend_ttl(
             &DataKey::Result(match_id),
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
-        
+
         Ok(result)
     }
 
@@ -136,6 +140,11 @@ impl OracleContract {
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
         Ok(())
+    }
+
+    /// Returns true if the contract has been initialized.
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&DataKey::Admin)
     }
 
     /// Unpause the oracle — admin only. Does not emit an event.
@@ -339,6 +348,35 @@ mod tests {
     }
 
     #[test]
+    fn test_submit_draw_result_emits_event() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "abc123"),
+            &MatchResult::Draw,
+        );
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "oracle").into_val(&env),
+            symbol_short!("result").into_val(&env),
+        ];
+        let matched = events
+            .iter()
+            .find(|(_, topics, _)| *topics == expected_topics);
+        assert!(matched.is_some(), "oracle result event not emitted for Draw");
+
+        let (_, _, data) = matched.unwrap();
+        let (ev_id, ev_result): (u64, MatchResult) =
+            soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(ev_id, 0u64);
+        assert_eq!(ev_result, MatchResult::Draw);
+    }
+
+    #[test]
     #[should_panic]
     fn test_duplicate_submit_fails() {
         let (env, contract_id, ..) = setup();
@@ -361,6 +399,19 @@ mod tests {
         client.initialize(&admin);
         // second initialize should panic
         client.initialize(&admin);
+    }
+
+    #[test]
+    fn test_is_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        assert!(!client.is_initialized());
+        client.initialize(&admin);
+        assert!(client.is_initialized());
     }
 
     #[test]
@@ -558,6 +609,21 @@ mod tests {
     }
 
     #[test]
+    fn test_pause_twice_is_idempotent() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.pause();
+        client.pause(); // second call must not error
+
+        // Contract is still paused
+        let is_paused: bool = env.as_contract(&contract_id, || {
+            env.storage().instance().get(&DataKey::Paused).unwrap_or(false)
+        });
+        assert!(is_paused);
+    }
+
+    #[test]
     fn test_unpause_emits_no_event() {
         let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
@@ -566,8 +632,36 @@ mod tests {
         client.pause();
         // Then unpause it
         client.unpause();
-        
+
         // Test passes if unpause completes without panic
         // The function docstring states it does not emit events
+    }
+
+    #[test]
+    fn test_submit_result_rejects_empty_game_id() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, ""),
+            &MatchResult::Player1Wins,
+        );
+        assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+    }
+
+    #[test]
+    fn test_get_result_game_id_matches_submitted_value() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "chess_game_42"),
+            &MatchResult::Player1Wins,
+        );
+
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.game_id, String::from_str(&env, "chess_game_42"));
     }
 }
