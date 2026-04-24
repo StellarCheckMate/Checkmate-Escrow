@@ -1173,6 +1173,21 @@ fn test_ttl_extended_on_cancel() {
         &String::from_str(&env, "ttl_game4"),
         &Platform::Lichess,
     );
+
+    // Advance ledger so TTL decreases, making the subsequent extend_ttl in
+    // cancel_match meaningful — without it the assertion would pass trivially
+    // because create_match already set TTL to MATCH_TTL_LEDGERS.
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
     client.cancel_match(&id, &player1);
 
     let ttl = env.as_contract(&contract_id, || {
@@ -1573,4 +1588,40 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
         matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
         "expected auth failure for non-oracle caller"
     );
+}
+
+#[test]
+fn test_ttl_extended_on_cancel_after_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_cancel_deposit"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+
+    // Advance ledger so TTL drops below MATCH_TTL_LEDGERS, ensuring
+    // cancel_match's extend_ttl call is what restores it.
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
+    client.cancel_match(&id, &player1);
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
