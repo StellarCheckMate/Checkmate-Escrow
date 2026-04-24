@@ -1910,3 +1910,32 @@ fn test_transfer_admin_pause_auth() {
     }]);
     client.pause();
 }
+
+#[test]
+fn test_match_state_active_after_both_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "active_state_test"),
+        &Platform::Lichess,
+    );
+
+    // Initially pending
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Pending);
+
+    // After player1 deposits, still pending
+    client.deposit(&id, &player1);
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Pending);
+
+    // After both deposits, becomes active
+    client.deposit(&id, &player2);
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Active);
+}
