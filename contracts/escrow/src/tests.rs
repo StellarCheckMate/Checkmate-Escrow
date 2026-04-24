@@ -1173,6 +1173,21 @@ fn test_ttl_extended_on_cancel() {
         &String::from_str(&env, "ttl_game4"),
         &Platform::Lichess,
     );
+
+    // Advance ledger so TTL decreases, making the subsequent extend_ttl in
+    // cancel_match meaningful — without it the assertion would pass trivially
+    // because create_match already set TTL to MATCH_TTL_LEDGERS.
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
     client.cancel_match(&id, &player1);
 
     let ttl = env.as_contract(&contract_id, || {
