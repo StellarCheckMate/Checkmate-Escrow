@@ -38,8 +38,10 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
-        env.events()
-            .publish((Symbol::new(&env, "escrow"), symbol_short!("init")), (&oracle, &admin));
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), symbol_short!("init")),
+            (&oracle, &admin),
+        );
         Ok(())
     }
 
@@ -160,7 +162,7 @@ impl EscrowContract {
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
             completed_ledger: None,
-            winner: None,
+            winner: Winner::Draw,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -301,7 +303,7 @@ impl EscrowContract {
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
-        m.winner = Some(winner.clone());
+        m.winner = winner.clone();
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -453,10 +455,7 @@ impl EscrowContract {
             .get(&DataKey::MatchTimeout)
             .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS);
 
-        let elapsed = env
-            .ledger()
-            .sequence()
-            .saturating_sub(m.created_ledger);
+        let elapsed = env.ledger().sequence().saturating_sub(m.created_ledger);
 
         if elapsed < timeout {
             return Err(Error::MatchNotExpired);
@@ -505,7 +504,6 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("xfer")),
-
             (current_admin, new_admin),
         );
 
@@ -521,7 +519,9 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         current_admin.require_auth();
-        env.storage().instance().set(&DataKey::PendingAdmin, &new_admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
         Ok(())
     }
 
@@ -557,13 +557,16 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
-        env.storage().instance().set(&DataKey::MatchTimeout, &ledgers);
+        env.storage()
+            .instance()
+            .set(&DataKey::MatchTimeout, &ledgers);
         Ok(())
     }
 
     /// Return the match timeout value in ledgers.
     pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
-        Ok(env.storage()
+        Ok(env
+            .storage()
             .instance()
             .get(&DataKey::MatchTimeout)
             .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS))
