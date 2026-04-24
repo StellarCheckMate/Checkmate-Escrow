@@ -142,6 +142,11 @@ impl OracleContract {
         Ok(())
     }
 
+    /// Returns true if the contract has been initialized.
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&DataKey::Admin)
+    }
+
     /// Unpause the oracle — admin only. Does not emit an event.
     pub fn unpause(env: Env) -> Result<(), Error> {
         let admin: Address = env
@@ -394,6 +399,19 @@ mod tests {
         client.initialize(&admin);
         // second initialize should panic
         client.initialize(&admin);
+    }
+
+    #[test]
+    fn test_is_initialized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract_id = env.register(OracleContract, ());
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        assert!(!client.is_initialized());
+        client.initialize(&admin);
+        assert!(client.is_initialized());
     }
 
     #[test]
