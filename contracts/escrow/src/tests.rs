@@ -1780,3 +1780,19 @@ fn test_transfer_admin_success_and_old_admin_rejected() {
         "old admin should be rejected after transfer"
     );
 }
+
+#[test]
+fn test_create_match_rejects_same_player_as_both_sides() {
+    let (env, contract_id, _oracle, player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(
+        &player1,
+        &player1,
+        &100,
+        &token,
+        &String::from_str(&env, "self_match"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidPlayers)));
+}

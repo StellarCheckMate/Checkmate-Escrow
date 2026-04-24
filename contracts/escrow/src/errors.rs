@@ -16,4 +16,5 @@ pub enum Error {
     MatchAlreadyActive = 11,
     MatchNotExpired = 12,
     InvalidAddress = 13,
+    InvalidPlayers = 14,
 }
