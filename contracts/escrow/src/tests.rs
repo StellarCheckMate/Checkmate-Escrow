@@ -661,6 +661,53 @@ fn test_concurrent_matches_remain_isolated() {
 }
 
 #[test]
+fn test_concurrent_matches_do_not_share_escrow_balances() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let player3 = Address::generate(&env);
+    let player4 = Address::generate(&env);
+
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_id.address();
+    let asset_client = StellarAssetClient::new(&env, &token);
+
+    for player in [&player1, &player2, &player3, &player4] {
+        mint_player_balance(&asset_client, player, 1000);
+    }
+
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    let match_a = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "isolated_balance_match_a"),
+        &Platform::Lichess,
+    );
+    let match_b = client.create_match(
+        &player3,
+        &player4,
+        &60,
+        &token,
+        &String::from_str(&env, "isolated_balance_match_b"),
+        &Platform::ChessDotCom,
+    );
+
+    client.deposit(&match_a, &player1);
+
+    assert_eq!(client.get_escrow_balance(&match_a), 100);
+    assert_eq!(client.get_escrow_balance(&match_b), 0);
+}
+
+#[test]
 #[should_panic(expected = "Contract already initialized")]
 fn test_double_initialize_fails() {
     let env = Env::default();
