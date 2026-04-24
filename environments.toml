@@ -1,3 +1,15 @@
+# Network environment configurations for Stellar CLI / Soroban CLI.
+# Each section corresponds to a named network passed via --network <name>.
+#
+# Fields:
+#   rpc_url           - Soroban RPC endpoint for the network
+#   network_passphrase - Unique string identifying the network; must match exactly
+#
+# To add a custom network, append a new section:
+#   [my_network]
+#   rpc_url = "https://my-rpc-endpoint"
+#   network_passphrase = "My Custom Network ; YYYY"
+
 [testnet]
 rpc_url = "https://soroban-testnet.stellar.org"
 network_passphrase = "Test SDF Network ; September 2015"
@@ -11,5 +23,6 @@ rpc_url = "https://rpc-futurenet.stellar.org"
 network_passphrase = "Test SDF Future Network ; October 2022"
 
 [standalone]
+# Local development node — start with `stellar network start local`
 rpc_url = "http://localhost:8000/soroban/rpc"
 network_passphrase = "Standalone Network ; February 2017"
