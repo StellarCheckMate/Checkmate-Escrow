@@ -251,7 +251,7 @@ impl EscrowContract {
         }
 
         let client = token::Client::new(&env, &m.token);
-        let pot = m.stake_amount * 2;
+        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
 
         match winner {
             Winner::Player1 => client.transfer(&env.current_contract_address(), &m.player1, &pot),
