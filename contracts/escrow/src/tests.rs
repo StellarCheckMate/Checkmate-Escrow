@@ -1904,6 +1904,36 @@ fn test_get_escrow_balance_zero_for_cancelled_match_no_deposits() {
 }
 
 #[test]
+fn test_get_escrow_balance_zero_after_cancel_with_player1_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "balance_cancelled_after_player1_deposit"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        100,
+        "escrow balance must reflect player1's deposited stake before cancellation"
+    );
+
+    client.cancel_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        0,
+        "get_escrow_balance must return 0 after cancelling a match and refunding player1"
+    );
+}
+
+#[test]
 fn test_match_state_active_after_both_deposits() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
