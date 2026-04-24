@@ -1780,3 +1780,40 @@ fn test_transfer_admin_success_and_old_admin_rejected() {
         "old admin should be rejected after transfer"
     );
 }
+
+#[test]
+fn test_transfer_admin_pause_auth() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+
+    // Transfer admin to new_admin (mock_all_auths is active from setup)
+    client.transfer_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+
+    // Old admin tries to pause — must fail
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = client.try_pause();
+    assert!(result.is_err(), "old admin should be rejected from pause after transfer");
+
+    // New admin pauses — must succeed
+    env.mock_auths(&[MockAuth {
+        address: &new_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.pause();
+}
