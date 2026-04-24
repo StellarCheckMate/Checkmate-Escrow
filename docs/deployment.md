@@ -94,3 +94,29 @@ stellar contract invoke --id $ORACLE_CONTRACT_ID \
   --source <ORACLE_ADMIN_KEYPAIR> \
   -- has_result_admin --match_id 0
 ```
+
+---
+
+## Resource Usage Baselines
+
+Soroban charges fees based on CPU instruction count and memory bytes. The
+table below shows baseline measurements captured via `env.cost_estimate().budget()`
+in the test suite (SDK v22, native host — no Wasm overhead included).
+
+| Operation       | CPU Instructions | Memory Bytes |
+|-----------------|-----------------|--------------|
+| `create_match`  | ~103,736        | ~18,954      |
+| `deposit` (p1)  | ~242,178        | ~38,457      |
+| `deposit` (p2)  | ~243,232        | ~39,134      |
+| `submit_result` | ~253,053        | ~40,766      |
+
+> **Note:** These figures reflect host-level metering only. Real on-chain costs
+> will be higher once Wasm execution, VM instantiation, XDR round-trips, and
+> ledger entry reads/writes are included. Use `stellar contract invoke --fee`
+> on testnet for production fee estimates.
+
+To re-run the benchmarks locally:
+
+```bash
+cargo test bench -- --nocapture
+```
