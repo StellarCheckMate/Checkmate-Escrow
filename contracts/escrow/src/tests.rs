@@ -1722,48 +1722,6 @@ fn test_submit_result_uninitialized_returns_unauthorized() {
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
-#[test]
-fn test_submit_result_overflow_on_extreme_stake() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    // Create a match with a normal stake, then directly overwrite the stake_amount
-    // in storage to i128::MAX so that stake_amount * 2 overflows — bypassing the
-    // token layer which would also overflow on deposit.
-    let id = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "overflow_game"),
-        &Platform::Lichess,
-    );
-
-    env.as_contract(&contract_id, || {
-        let mut m: Match = env.storage().persistent().get(&DataKey::Match(id)).unwrap();
-        m.stake_amount = i128::MAX;
-        m.state = MatchState::Active;
-        m.player1_deposited = true;
-        m.player2_deposited = true;
-        env.storage().persistent().set(&DataKey::Match(id), &m);
-    });
-
-    let result = client.try_submit_result(&id, &Winner::Player1);
-    assert_eq!(result, Err(Ok(Error::Overflow)));
-}
-
-#[test]
-fn test_submit_result_uninitialized_returns_unauthorized() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(EscrowContract, ());
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let result = client.try_submit_result(&0, &Winner::Player1);
-    assert_eq!(result, Err(Ok(Error::Unauthorized)));
-}
-
 // ── Budget / resource benchmarks ────────────────────────────────────────────
 //
 // These tests measure CPU instruction counts and memory bytes consumed by the
@@ -1954,4 +1912,39 @@ fn test_create_match_rejects_same_player_as_both_sides() {
         &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::InvalidPlayers)));
+}
+
+/// get_match resets TTL to MATCH_TTL_LEDGERS even after ledgers have advanced.
+#[test]
+fn test_get_match_resets_ttl_after_ledger_advance() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_get_match"),
+        &Platform::Lichess,
+    );
+
+    // Advance ledger by 1000 so the TTL has decreased
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
+    client.get_match(&id);
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
