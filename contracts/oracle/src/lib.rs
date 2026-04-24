@@ -5,7 +5,7 @@ mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol};
-use types::{DataKey, MatchResult, ResultEntry};
+use types::{DataKey, Winner, ResultEntry};
 
 /// ~30 days at 5s/ledger.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -44,7 +44,7 @@ impl OracleContract {
         env: Env,
         match_id: u64,
         game_id: String,
-        result: MatchResult,
+        result: Winner,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
         // Check if contract is paused first
@@ -318,7 +318,7 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "test_game"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
 
         // After submission — still public, now returns true
@@ -348,7 +348,7 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "test_game"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
 
         assert!(client.has_result_admin(&0u64));
@@ -376,12 +376,12 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "abc123"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
 
         assert!(client.has_result(&0u64));
         let entry = client.get_result(&0u64);
-        assert_eq!(entry.result, MatchResult::Player1Wins);
+        assert_eq!(entry.result, Winner::Player1);
     }
 
     #[test]
@@ -392,7 +392,7 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "abc123"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
 
         let events = env.events().all();
@@ -407,10 +407,10 @@ mod tests {
         assert!(matched.is_some(), "oracle result event not emitted");
 
         let (_, _, data) = matched.unwrap();
-        let (ev_id, ev_result): (u64, MatchResult) =
+        let (ev_id, ev_result): (u64, Winner) =
             soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
         assert_eq!(ev_id, 0u64);
-        assert_eq!(ev_result, MatchResult::Player1Wins);
+        assert_eq!(ev_result, Winner::Player1);
     }
 
     #[test]
@@ -435,10 +435,10 @@ mod tests {
         );
 
         let (_, _, data) = matched.unwrap();
-        let (ev_id, ev_result): (u64, MatchResult) =
+        let (ev_id, ev_result): (u64, Winner) =
             soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
         assert_eq!(ev_id, 0u64);
-        assert_eq!(ev_result, MatchResult::Draw);
+        assert_eq!(ev_result, Winner::Draw);
     }
 
     #[test]
@@ -447,9 +447,9 @@ mod tests {
         let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
         // second submit should panic
-        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
     }
 
     #[test]
@@ -498,7 +498,7 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "abc123"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
 
         let ttl = env.as_contract(&contract_id, || {
@@ -533,7 +533,7 @@ mod tests {
         let result = client.try_submit_result(
             &0u64,
             &String::from_str(&env, "abc123"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
         assert_eq!(result, Err(Ok(Error::ContractPaused)));
     }
@@ -554,7 +554,7 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "abc123"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
         assert!(client.has_result(&0u64));
     }
@@ -572,7 +572,7 @@ mod tests {
         let result = client.try_submit_result(
             &0u64,
             &String::from_str(&env, "abc123"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
         assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
@@ -593,7 +593,7 @@ mod tests {
         let result = client.try_submit_result(
             &0u64,
             &String::from_str(&env, "abc123"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
         assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
@@ -604,11 +604,11 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "abc123"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
         assert!(client.has_result(&0u64));
         let entry = client.get_result(&0u64);
-        assert_eq!(entry.result, MatchResult::Player1Wins);
+        assert_eq!(entry.result, Winner::Player1);
     }
 
     /// Test pause/unpause state transitions.
@@ -621,7 +621,7 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "abc123"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
         assert!(client.has_result(&0u64));
 
@@ -632,7 +632,7 @@ mod tests {
         let result = client.try_submit_result(
             &1u64,
             &String::from_str(&env, "def456"),
-            &MatchResult::Player2Wins,
+            &Winner::Player2,
         );
         assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
@@ -643,7 +643,7 @@ mod tests {
         client.submit_result(
             &1u64,
             &String::from_str(&env, "def456"),
-            &MatchResult::Player2Wins,
+            &Winner::Player2,
         );
         assert!(client.has_result(&1u64));
 
@@ -665,12 +665,12 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "abc123"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
 
         // Read the result
         let entry = client.get_result(&0u64);
-        assert_eq!(entry.result, MatchResult::Player1Wins);
+        assert_eq!(entry.result, Winner::Player1);
 
         // Verify TTL was extended
         let ttl = env.as_contract(&contract_id, || {
@@ -724,13 +724,13 @@ mod tests {
         oracle_client.submit_result(
             &0u64,
             &String::from_str(&env, "test_game"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
         assert!(oracle_client.has_result(&0u64));
 
         // Step 2: the escrow's trusted oracle address (oracle_admin) calls
         // submit_result on the escrow contract, triggering the payout
-        escrow_client.submit_result(&0u64, &Winner::Player1);
+        escrow_client.submit_result(&0u64, &EscrowWinner::Player1);
 
         // Step 3: assert match is Completed and player1 received the full pot
         let m = escrow_client.get_match(&0u64);
@@ -747,7 +747,7 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "chess_game_42"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
         assert!(client.has_result(&0u64));
 
@@ -784,7 +784,7 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "ttl_game"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
 
         let ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
