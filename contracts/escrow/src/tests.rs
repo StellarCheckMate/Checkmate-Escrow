@@ -75,6 +75,30 @@ fn test_initialize_emits_event() {
 }
 
 #[test]
+fn test_is_initialized_false_before_initialize_and_true_after() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert!(
+        !client.is_initialized(),
+        "contract must report uninitialized before initialize is called"
+    );
+
+    client.initialize(&oracle, &admin);
+
+    assert!(
+        client.is_initialized(),
+        "contract must report initialized after initialize is called"
+    );
+}
+
+#[test]
 fn test_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
