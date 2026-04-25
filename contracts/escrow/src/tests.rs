@@ -2308,3 +2308,143 @@ fn test_create_match_with_chess_dot_com_platform() {
     let m = client.get_match(&id);
     assert_eq!(m.platform, Platform::ChessDotCom);
 }
+
+// #401 — match state is Completed after submit_result
+#[test]
+fn test_match_state_completed_after_submit_result() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_state_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Completed);
+}
+
+// #403 — MatchCount increments correctly after creates and cancels
+#[test]
+fn test_match_count_increments_after_cancels() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id0 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancel_count_0"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id0, 0);
+
+    let id1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancel_count_1"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id1, 1);
+
+    let id2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancel_count_2"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id2, 2);
+
+    client.cancel_match(&id1, &player1);
+
+    let id3 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancel_count_3"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id3, 3);
+
+    let id4 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancel_count_4"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id4, 4);
+}
+
+// #405 — MatchCount overflow at u64::MAX
+#[test]
+fn test_match_count_overflow_at_max() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::MatchCount, &u64::MAX);
+    });
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "overflow_test"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::Overflow)));
+}
+
+// #406 — deposit fails when player has insufficient token balance
+#[test]
+fn test_deposit_fails_with_insufficient_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = token_id.address();
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+
+    asset_client.mint(&player1, &500);
+    asset_client.mint(&player2, &1000);
+
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &1000,
+        &token_addr,
+        &String::from_str(&env, "insufficient_balance_test"),
+        &Platform::Lichess,
+    );
+
+    let result = client.try_deposit(&id, &player1);
+    assert!(result.is_err());
+}
