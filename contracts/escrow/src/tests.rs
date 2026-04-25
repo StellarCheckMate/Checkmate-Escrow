@@ -2345,3 +2345,16 @@ fn test_is_paused_cycle() {
     client.unpause();
     assert!(!client.is_paused());
 }
+
+#[test]
+fn test_initialize_rejects_self_as_oracle() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(&contract_id, &admin);
+    assert_eq!(result, Err(Ok(Error::InvalidAddress)));
+}
