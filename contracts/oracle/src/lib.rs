@@ -492,11 +492,8 @@ mod tests {
         let client = OracleContractClient::new(&env, &contract_id);
 
         // No initialize call — Admin key is absent
-        let result = client.try_submit_result(
-            &0u64,
-            &String::from_str(&env, "game_abc"),
-            &Winner::Player1,
-        );
+        let result =
+            client.try_submit_result(&0u64, &String::from_str(&env, "game_abc"), &Winner::Player1);
         assert_eq!(result, Err(Ok(Error::Unauthorized)));
     }
 

@@ -2148,7 +2148,10 @@ fn test_ttl_extended_on_get_escrow_balance() {
     });
 
     // TTL should be extended (increased)
-    assert!(ttl_after >= ttl_before, "TTL should be extended after get_escrow_balance");
+    assert!(
+        ttl_after >= ttl_before,
+        "TTL should be extended after get_escrow_balance"
+    );
 }
 
 #[test]
