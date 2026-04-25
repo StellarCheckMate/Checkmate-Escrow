@@ -132,6 +132,10 @@ impl EscrowContract {
             return Err(Error::InvalidPlayers);
         }
 
+        if game_id.len() == 0 {
+            return Err(Error::InvalidGameId);
+        }
+
         if env
             .storage()
             .instance()

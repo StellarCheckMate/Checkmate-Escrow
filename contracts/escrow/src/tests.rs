@@ -987,6 +987,22 @@ fn test_create_match_with_negative_stake_returns_invalid_amount() {
 }
 
 #[test]
+fn test_create_match_with_empty_game_id_returns_invalid_game_id() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, ""),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+}
+
+#[test]
 fn test_player2_cancel_pending_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
