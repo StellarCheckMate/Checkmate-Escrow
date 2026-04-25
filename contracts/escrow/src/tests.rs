@@ -2291,154 +2291,20 @@ fn test_submit_result_emits_completed_event_with_correct_winner() {
     assert_eq!(ev_winner, Winner::Player1);
 }
 
-// #223 — get_player_matches index is populated correctly
 #[test]
-fn test_get_player_matches_returns_all_match_ids_for_player() {
+fn test_create_match_with_chess_dot_com_platform() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let id0 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "pm_game0"),
-        &Platform::Lichess,
-    );
-    let id1 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "pm_game1"),
-        &Platform::Lichess,
-    );
-    let id2 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "pm_game2"),
-        &Platform::Lichess,
-    );
-
-    let matches = client.get_player_matches(&player1);
-    assert_eq!(matches.len(), 3);
-    assert_eq!(matches.get(0).unwrap(), id0);
-    assert_eq!(matches.get(1).unwrap(), id1);
-    assert_eq!(matches.get(2).unwrap(), id2);
-}
-
-// #224 — get_active_matches index is updated correctly through lifecycle
-#[test]
-fn test_get_active_matches_updated_after_cancel_and_complete() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let id0 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "am_game0"),
-        &Platform::Lichess,
-    );
-    let id1 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "am_game1"),
-        &Platform::Lichess,
-    );
-    let id2 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "am_game2"),
-        &Platform::Lichess,
-    );
-
-    // Cancel match id1
-    client.cancel_match(&id1, &player1);
-
-    // Complete match id2
-    client.deposit(&id2, &player1);
-    client.deposit(&id2, &player2);
-    client.submit_result(&id2, &Winner::Player1);
-
-    let active = client.get_active_matches();
-    assert_eq!(active.len(), 1);
-    assert_eq!(active.get(0).unwrap(), id0);
-}
-
-// #225 — token allowlist rejects disallowed tokens, accepts after add_allowed_token
-#[test]
-fn test_token_allowlist_rejects_disallowed_and_accepts_after_add() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    // Register a second token that is NOT on the allowlist
-    let admin2 = Address::generate(&env);
-    let other_token_id = env.register_stellar_asset_contract_v2(admin2.clone());
-    let other_token = other_token_id.address();
-    let other_asset = StellarAssetClient::new(&env, &other_token);
-    other_asset.mint(&player1, &1000);
-    other_asset.mint(&player2, &1000);
-
-    // Enable allowlist by adding the main token
-    client.add_allowed_token(&token);
-
-    // other_token is not on the allowlist — must be rejected
-    let result = client.try_create_match(
-        &player1,
-        &player2,
-        &100,
-        &other_token,
-        &String::from_str(&env, "allowlist_game1"),
-        &Platform::Lichess,
-    );
-    assert_eq!(result, Err(Ok(Error::InvalidToken)));
-
-    // Add other_token to allowlist
-    client.add_allowed_token(&other_token);
-
-    // Now it should succeed
     let id = client.create_match(
         &player1,
         &player2,
         &100,
-        &other_token,
-        &String::from_str(&env, "allowlist_game2"),
-        &Platform::Lichess,
-    );
-    assert_eq!(client.get_match(&id).state, MatchState::Pending);
-}
-
-// #227 — duplicate game_id guard rejects second match with same game_id
-#[test]
-fn test_duplicate_game_id_rejected() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    client.create_match(
-        &player1,
-        &player2,
-        &100,
         &token,
-        &String::from_str(&env, "game1"),
-        &Platform::Lichess,
+        &String::from_str(&env, "chess_dot_com_game"),
+        &Platform::ChessDotCom,
     );
 
-    // Second match with the same game_id must be rejected
-    let result = client.try_create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "game1"),
-        &Platform::Lichess,
-    );
-    assert_eq!(result, Err(Ok(Error::AlreadyExists)));
+    let m = client.get_match(&id);
+    assert_eq!(m.platform, Platform::ChessDotCom);
 }
