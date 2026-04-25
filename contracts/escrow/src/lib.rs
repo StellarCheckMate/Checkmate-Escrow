@@ -463,6 +463,14 @@ impl EscrowContract {
         Ok(m)
     }
 
+    /// Return whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
     /// Check whether both players have deposited.
     ///
     /// # Errors
