@@ -905,6 +905,15 @@ fn test_admin_can_rotate_oracle() {
 }
 
 #[test]
+fn test_update_oracle_rejects_self_address() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_update_oracle(&contract_id);
+    assert_eq!(result, Err(Ok(Error::InvalidAddress)));
+}
+
+#[test]
 fn test_old_oracle_rejected_after_rotation() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -1899,7 +1908,10 @@ fn test_is_funded_returns_true_after_payout() {
     client.deposit(&id, &player2);
 
     // Both deposited — match is Active, is_funded must be true
-    assert!(client.is_funded(&id), "is_funded must be true when both players have deposited");
+    assert!(
+        client.is_funded(&id),
+        "is_funded must be true when both players have deposited"
+    );
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
     // Complete the match
@@ -1944,7 +1956,11 @@ fn test_get_escrow_balance_zero_for_completed_match() {
     // Fund both players
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    assert_eq!(client.get_escrow_balance(&id), 200, "escrow balance must be 2x stake while Active");
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        200,
+        "escrow balance must be 2x stake while Active"
+    );
 
     // Complete the match — payout transfers funds out
     client.submit_result(&id, &Winner::Player2);
@@ -1978,7 +1994,11 @@ fn test_get_escrow_balance_zero_for_cancelled_match_no_deposits() {
     );
 
     // No deposits made — cancel immediately
-    assert_eq!(client.get_escrow_balance(&id), 0, "escrow balance must be 0 before any deposits");
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        0,
+        "escrow balance must be 0 before any deposits"
+    );
     client.cancel_match(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 
@@ -2139,8 +2159,11 @@ fn test_get_match_returns_cancelled_after_expire_match() {
 
     // Extend TTLs so storage survives the ledger jump
     for addr in [&contract_id, &token] {
-        env.deployer()
-            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer().extend_ttl_for_contract_instance(
+            addr.clone(),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         env.deployer()
             .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
@@ -2149,8 +2172,11 @@ fn test_get_match_returns_cancelled_after_expire_match() {
     env.ledger().set_sequence_number(100 + 17_280);
 
     for addr in [&contract_id, &token] {
-        env.deployer()
-            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer().extend_ttl_for_contract_instance(
+            addr.clone(),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         env.deployer()
             .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
