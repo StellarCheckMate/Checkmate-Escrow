@@ -4,7 +4,7 @@ mod errors;
 pub mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
+use soroban_sdk::{contract, contractimpl, symbol_short, token, vec, Address, Env, String, Symbol, Vec};
 use types::{DataKey, Match, MatchState, Platform, Winner};
 
 /// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
@@ -141,6 +141,15 @@ impl EscrowContract {
             return Err(Error::InvalidGameId);
         }
 
+        // Reject duplicate game_id
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GameId(game_id.clone()))
+        {
+            return Err(Error::AlreadyExists);
+        }
+
         if env
             .storage()
             .instance()
@@ -151,6 +160,20 @@ impl EscrowContract {
         }
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
+        }
+
+        // Token allowlist check — only enforced once at least one token has been added
+        if env
+            .storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::AllowlistEnabled)
+            .unwrap_or(false)
+            && !env
+                .storage()
+                .persistent()
+                .has(&DataKey::AllowedToken(token.clone()))
+        {
+            return Err(Error::InvalidToken);
         }
 
         let id: u64 = env
@@ -185,13 +208,41 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        // Mark game_id as used
+        env.storage()
+            .persistent()
+            .set(&DataKey::GameId(m.game_id.clone()), &true);
         // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
 
+        // Update player match indexes
+        for p in [&m.player1, &m.player2] {
+            let mut ids: Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PlayerMatches(p.clone()))
+                .unwrap_or_else(|| vec![&env]);
+            ids.push_back(id);
+            env.storage()
+                .persistent()
+                .set(&DataKey::PlayerMatches(p.clone()), &ids);
+        }
+
+        // Update active match index
+        let mut active: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveMatches)
+            .unwrap_or_else(|| vec![&env]);
+        active.push_back(id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveMatches, &active);
+
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
-            (id, m.player1, m.player2, stake_amount),
+            (id, m.player1.clone(), m.player2.clone(), stake_amount),
         );
 
         Ok(id)
@@ -327,6 +378,9 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Remove from active match index
+        Self::remove_from_active(&env, match_id);
+
         let topics = (Symbol::new(&env, "match"), symbol_short!("completed"));
         env.events().publish(topics, (match_id, winner));
 
@@ -379,6 +433,9 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+
+        // Remove from active match index
+        Self::remove_from_active(&env, match_id);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("cancelled")),
@@ -505,6 +562,9 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Remove from active match index
+        Self::remove_from_active(&env, match_id);
+
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("expired")),
             match_id,
@@ -596,6 +656,55 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::MatchTimeout)
             .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS))
+    }
+
+    /// Return all match IDs for a given player.
+    pub fn get_player_matches(env: Env, player: Address) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player))
+            .unwrap_or_else(|| vec![&env])
+    }
+
+    /// Return all currently active (non-cancelled, non-completed) match IDs.
+    pub fn get_active_matches(env: Env) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ActiveMatches)
+            .unwrap_or_else(|| vec![&env])
+    }
+
+    /// Add a token to the allowlist. Requires admin auth.
+    /// Once any token is added, the allowlist is enforced on `create_match`.
+    pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage()
+            .persistent()
+            .set(&DataKey::AllowedToken(token), &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowlistEnabled, &true);
+        Ok(())
+    }
+
+    /// Internal helper: remove `match_id` from the `ActiveMatches` index.
+    fn remove_from_active(env: &Env, match_id: u64) {
+        let mut active: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveMatches)
+            .unwrap_or_else(|| vec![env]);
+        if let Some(pos) = active.first_index_of(match_id) {
+            active.remove(pos);
+            env.storage()
+                .persistent()
+                .set(&DataKey::ActiveMatches, &active);
+        }
     }
 }
 

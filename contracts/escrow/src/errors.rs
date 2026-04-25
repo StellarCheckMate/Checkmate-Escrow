@@ -52,4 +52,7 @@ pub enum Error {
 
     /// (15) The `game_id` is empty or invalid.
     InvalidGameId = 15,
+
+    /// (16) The token address is not on the allowlist.
+    InvalidToken = 16,
 }
