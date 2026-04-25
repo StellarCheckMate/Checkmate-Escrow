@@ -536,6 +536,18 @@ mod tests {
         client.get_result(&9999u64);
     }
 
+    #[test]
+    fn test_pause_on_uninitialized_contract_returns_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, OracleContract);
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // No initialize call — Admin key is absent
+        let result = client.try_pause();
+        assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    }
+
     /// Test that pause can only be called by admin.
     #[test]
     fn test_pause_admin_only() {

@@ -792,6 +792,18 @@ fn test_double_initialize_fails() {
 }
 
 #[test]
+fn test_pause_on_uninitialized_contract_returns_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // No initialize call — Admin key is absent
+    let result = client.try_pause();
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
 fn test_admin_pause_blocks_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
