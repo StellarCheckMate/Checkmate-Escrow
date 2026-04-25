@@ -2160,3 +2160,39 @@ fn test_get_match_returns_cancelled_after_expire_match() {
     let m = client.get_match(&id);
     assert_eq!(m.state, MatchState::Cancelled);
 }
+
+#[test]
+fn test_submit_result_emits_completed_event_with_correct_winner() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "event_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+
+    client.submit_result(&match_id, &Winner::Player1);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("completed").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match completed event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_match_id, ev_winner): (u64, Winner) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_match_id, match_id);
+    assert_eq!(ev_winner, Winner::Player1);
+}
