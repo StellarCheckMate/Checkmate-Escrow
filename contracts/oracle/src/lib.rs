@@ -485,6 +485,22 @@ mod tests {
     }
 
     #[test]
+    fn test_submit_result_on_uninitialized_contract_returns_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, OracleContract);
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // No initialize call — Admin key is absent
+        let result = client.try_submit_result(
+            &0u64,
+            &String::from_str(&env, "game_abc"),
+            &Winner::Player1,
+        );
+        assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    }
+
+    #[test]
     fn test_is_initialized() {
         let env = Env::default();
         env.mock_all_auths();

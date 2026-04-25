@@ -2395,7 +2395,7 @@ fn test_initialize_rejects_self_as_oracle() {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_initialize(&contract_id, &admin);
