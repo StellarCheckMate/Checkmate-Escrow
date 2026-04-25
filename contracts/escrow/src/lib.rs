@@ -86,6 +86,7 @@ impl EscrowContract {
     ///
     /// # Errors
     /// - [`Error::Unauthorized`] — caller is not the admin.
+    /// - [`Error::InvalidAddress`] — `new_oracle` is the escrow contract's own address.
     pub fn update_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
         let current_oracle: Address = env
             .storage()
@@ -99,6 +100,10 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
 
         admin.require_auth();
+
+        if new_oracle == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
 
         env.storage().instance().set(&DataKey::Oracle, &new_oracle);
 
