@@ -25,7 +25,7 @@ pub enum Winner {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Match {
     pub id: u64,
     pub player1: Address,
@@ -37,8 +37,9 @@ pub struct Match {
     pub state: MatchState,
     pub player1_deposited: bool,
     pub player2_deposited: bool,
-    /// Ledger sequence number at match creation. Used for timeout and ordering logic.
     pub created_ledger: u32,
+    pub completed_ledger: Option<u32>,
+    pub winner: Winner,
 }
 
 #[contracttype]
@@ -47,5 +48,12 @@ pub enum DataKey {
     MatchCount,
     Oracle,
     Admin,
+    PendingAdmin,
     Paused,
+    GameId(String),
+    MatchTimeout,
+    PlayerMatches(Address),
+    ActiveMatches,
+    AllowedToken(Address),
+    AllowlistEnabled,
 }

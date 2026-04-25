@@ -1,17 +1,17 @@
 #![no_std]
 
 mod errors;
-mod types;
+pub mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
+use soroban_sdk::{contract, contractimpl, symbol_short, token, vec, Address, Env, String, Symbol, Vec};
 use types::{DataKey, Match, MatchState, Platform, Winner};
 
 /// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
 
-/// Maximum allowed byte length for a game_id string.
-const MAX_GAME_ID_LEN: u32 = 64;
+/// Default match expiry timeout (~24 hours at 5s/ledger).
+const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = 17_280;
 
 #[contract]
 pub struct EscrowContract;
@@ -19,6 +19,14 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     /// Initialize the contract with a trusted oracle address and an admin.
+    ///
+    /// The `oracle` must be an externally-owned account or a separate contract
+    /// address. It must not be the escrow contract's own address — passing the
+    /// contract's own address would allow anyone to satisfy `oracle.require_auth()`
+    /// trivially, permanently compromising result submission.
+    ///
+    /// # Errors
+    /// - [`Error::InvalidAddress`] — `oracle` is the escrow contract's own address.
     pub fn initialize(env: Env, oracle: Address, admin: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
@@ -30,10 +38,22 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), symbol_short!("init")),
+            (&oracle, &admin),
+        );
         Ok(())
     }
 
+    /// Return whether the escrow contract has been initialized.
+    pub fn is_initialized(env: Env) -> bool {
+        env.storage().instance().has(&DataKey::Oracle)
+    }
+
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the admin.
     pub fn pause(env: Env) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -42,12 +62,13 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
-        env.events()
-            .publish((Symbol::new(&env, "admin"), symbol_short!("paused")), ());
         Ok(())
     }
 
     /// Unpause the contract — admin only.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the admin.
     pub fn unpause(env: Env) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -61,7 +82,46 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Rotate the oracle address. Requires authorization from the admin.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the admin.
+    /// - [`Error::InvalidAddress`] — `new_oracle` is the escrow contract's own address.
+    pub fn update_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        let current_oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+
+        admin.require_auth();
+
+        if new_oracle == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
+
+        env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
+            (current_oracle, new_oracle.clone()),
+        );
+
+        Ok(())
+    }
+
     /// Create a new match. Both players must call `deposit` before the game starts.
+    ///
+    /// # Errors
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::InvalidAmount`] — `stake_amount` is zero or negative.
+    /// - [`Error::AlreadyExists`] — a match with the derived ID already exists.
+    /// - [`Error::Overflow`] — the internal match-ID counter would overflow.
     pub fn create_match(
         env: Env,
         player1: Address,
@@ -72,6 +132,23 @@ impl EscrowContract {
         platform: Platform,
     ) -> Result<u64, Error> {
         player1.require_auth();
+
+        if player1 == player2 {
+            return Err(Error::InvalidPlayers);
+        }
+
+        if game_id.len() == 0 {
+            return Err(Error::InvalidGameId);
+        }
+
+        // Reject duplicate game_id
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GameId(game_id.clone()))
+        {
+            return Err(Error::AlreadyExists);
+        }
 
         if env
             .storage()
@@ -84,8 +161,19 @@ impl EscrowContract {
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        if game_id.len() > MAX_GAME_ID_LEN {
-            return Err(Error::InvalidGameId);
+
+        // Token allowlist check — only enforced once at least one token has been added
+        if env
+            .storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::AllowlistEnabled)
+            .unwrap_or(false)
+            && !env
+                .storage()
+                .persistent()
+                .has(&DataKey::AllowedToken(token.clone()))
+        {
+            return Err(Error::InvalidToken);
         }
 
         let id: u64 = env
@@ -110,6 +198,8 @@ impl EscrowContract {
             player1_deposited: false,
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
+            completed_ledger: None,
+            winner: Winner::Draw,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -118,19 +208,54 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        // Mark game_id as used
+        env.storage()
+            .persistent()
+            .set(&DataKey::GameId(m.game_id.clone()), &true);
         // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
 
+        // Update player match indexes
+        for p in [&m.player1, &m.player2] {
+            let mut ids: Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PlayerMatches(p.clone()))
+                .unwrap_or_else(|| vec![&env]);
+            ids.push_back(id);
+            env.storage()
+                .persistent()
+                .set(&DataKey::PlayerMatches(p.clone()), &ids);
+        }
+
+        // Update active match index
+        let mut active: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveMatches)
+            .unwrap_or_else(|| vec![&env]);
+        active.push_back(id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveMatches, &active);
+
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
-            (id, m.player1, m.player2, stake_amount),
+            (id, m.player1.clone(), m.player2.clone(), stake_amount),
         );
 
         Ok(id)
     }
 
     /// Player deposits their stake into escrow.
+    ///
+    /// # Errors
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
+    /// - [`Error::InvalidState`] — match is not in `Pending` state.
+    /// - [`Error::Unauthorized`] — `player` is not player1 or player2.
+    /// - [`Error::AlreadyFunded`] — `player` has already deposited.
     pub fn deposit(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
         player.require_auth();
 
@@ -177,10 +302,6 @@ impl EscrowContract {
 
         if m.player1_deposited && m.player2_deposited {
             m.state = MatchState::Active;
-            env.events().publish(
-                (Symbol::new(&env, "match"), symbol_short!("activated")),
-                match_id,
-            );
         }
 
         env.storage()
@@ -195,12 +316,21 @@ impl EscrowContract {
     }
 
     /// Oracle submits the verified match result and triggers payout.
-    pub fn submit_result(
-        env: Env,
-        match_id: u64,
-        winner: Winner,
-        caller: Address,
-    ) -> Result<(), Error> {
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the oracle.
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
+    /// - [`Error::NotFunded`] — one or both players have not deposited.
+    /// - [`Error::InvalidState`] — match is not in `Active` state.
+    pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        oracle.require_auth();
+
         if env
             .storage()
             .instance()
@@ -210,33 +340,22 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
-        let oracle: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Oracle)
-            .ok_or(Error::Unauthorized)?;
-
-        if caller != oracle {
-            return Err(Error::Unauthorized);
-        }
-        caller.require_auth();
-
         let mut m: Match = env
             .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state != MatchState::Active {
-            return Err(Error::InvalidState);
-        }
-
         if !m.player1_deposited || !m.player2_deposited {
             return Err(Error::NotFunded);
         }
 
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
+        }
+
         let client = token::Client::new(&env, &m.token);
-        let pot = m.stake_amount * 2;
+        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
 
         match winner {
             Winner::Player1 => client.transfer(&env.current_contract_address(), &m.player1, &pot),
@@ -248,6 +367,8 @@ impl EscrowContract {
         }
 
         m.state = MatchState::Completed;
+        m.completed_ledger = Some(env.ledger().sequence());
+        m.winner = winner.clone();
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -257,6 +378,9 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Remove from active match index
+        Self::remove_from_active(&env, match_id);
+
         let topics = (Symbol::new(&env, "match"), symbol_short!("completed"));
         env.events().publish(topics, (match_id, winner));
 
@@ -265,6 +389,11 @@ impl EscrowContract {
 
     /// Cancel a pending match and refund any deposits.
     /// Either player can cancel a pending match.
+    ///
+    /// # Errors
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
+    /// - [`Error::MatchAlreadyActive`] — match is no longer in `Pending` state.
+    /// - [`Error::Unauthorized`] — `caller` is not player1 or player2.
     pub fn cancel_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
         let mut m: Match = env
             .storage()
@@ -273,7 +402,7 @@ impl EscrowContract {
             .ok_or(Error::MatchNotFound)?;
 
         if m.state != MatchState::Pending {
-            return Err(Error::InvalidState);
+            return Err(Error::MatchAlreadyActive);
         }
 
         // Either player1 or player2 can cancel a pending match
@@ -305,6 +434,9 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Remove from active match index
+        Self::remove_from_active(&env, match_id);
+
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("cancelled")),
             match_id,
@@ -313,36 +445,274 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Read a match by ID.
+    /// Read a match by ID. Extends TTL on every read so active matches never expire.
+    ///
+    /// # Errors
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
-        env.storage()
+        let m = env
+            .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)
+            .ok_or(Error::MatchNotFound)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        Ok(m)
+    }
+
+    /// Return whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
     }
 
     /// Check whether both players have deposited.
+    ///
+    /// # Errors
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
         let m: Match = env
             .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         Ok(m.player1_deposited && m.player2_deposited)
     }
 
+    /// Return the oracle address set at initialization.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized.
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)
+    }
+
     /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
+    ///
+    /// # Errors
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
         let m: Match = env
             .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
             return Ok(0);
         }
         let deposited = m.player1_deposited as i128 + m.player2_deposited as i128;
         Ok(deposited * m.stake_amount)
+    }
+
+    /// Cancel a Pending match that has exceeded the configurable ledger timeout,
+    /// refunding any deposited stakes. Anyone may call this once the timeout elapses.
+    ///
+    /// # Errors
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
+    /// - [`Error::InvalidState`] — match is not in `Pending` state.
+    /// - [`Error::MatchNotExpired`] — the timeout period has not yet elapsed.
+    pub fn expire_match(env: Env, match_id: u64) -> Result<(), Error> {
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::Pending {
+            return Err(Error::InvalidState);
+        }
+
+        let timeout: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchTimeout)
+            .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS);
+
+        let elapsed = env.ledger().sequence().saturating_sub(m.created_ledger);
+
+        if elapsed < timeout {
+            return Err(Error::MatchNotExpired);
+        }
+
+        let client = token::Client::new(&env, &m.token);
+        if m.player1_deposited {
+            client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+        }
+        if m.player2_deposited {
+            client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+        }
+
+        m.state = MatchState::Cancelled;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        // Remove from active match index
+        Self::remove_from_active(&env, match_id);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("expired")),
+            match_id,
+        );
+
+        Ok(())
+    }
+
+    /// Transfer admin rights to a new address. Requires current admin auth.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the current admin.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let current_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+
+        current_admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("xfer")),
+            (current_admin, new_admin),
+        );
+
+        Ok(())
+    }
+
+    /// Propose a new admin. Current admin must authorize. Transfer is not
+    /// complete until the nominee calls `accept_admin`.
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let current_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        current_admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        Ok(())
+    }
+
+    /// Accept a pending admin proposal. Must be called by the proposed address.
+    pub fn accept_admin(env: Env) -> Result<(), Error> {
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(Error::Unauthorized)?;
+        pending.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &pending);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        Ok(())
+    }
+
+    /// Return the admin address set at initialization.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)
+    }
+
+    /// Set the match expiry timeout in ledgers. Requires admin auth.
+    pub fn set_match_timeout(env: Env, ledgers: u32) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::MatchTimeout, &ledgers);
+        Ok(())
+    }
+
+    /// Return the match timeout value in ledgers.
+    pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchTimeout)
+            .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS))
+    }
+
+    /// Return all match IDs for a given player.
+    pub fn get_player_matches(env: Env, player: Address) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player))
+            .unwrap_or_else(|| vec![&env])
+    }
+
+    /// Return all currently active (non-cancelled, non-completed) match IDs.
+    pub fn get_active_matches(env: Env) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ActiveMatches)
+            .unwrap_or_else(|| vec![&env])
+    }
+
+    /// Add a token to the allowlist. Requires admin auth.
+    /// Once any token is added, the allowlist is enforced on `create_match`.
+    pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage()
+            .persistent()
+            .set(&DataKey::AllowedToken(token), &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowlistEnabled, &true);
+        Ok(())
+    }
+
+    /// Internal helper: remove `match_id` from the `ActiveMatches` index.
+    fn remove_from_active(env: &Env, match_id: u64) {
+        let mut active: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveMatches)
+            .unwrap_or_else(|| vec![env]);
+        if let Some(pos) = active.first_index_of(match_id) {
+            active.remove(pos);
+            env.storage()
+                .persistent()
+                .set(&DataKey::ActiveMatches, &active);
+        }
     }
 }
 

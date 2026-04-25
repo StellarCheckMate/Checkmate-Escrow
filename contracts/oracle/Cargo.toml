@@ -2,12 +2,16 @@
 name = "oracle"
 version = "0.1.0"
 edition = "2021"
+description = "Oracle contract for verifying chess match results on Stellar Soroban"
+repository = "https://github.com/StellarCheckMate/Checkmate-Escrow"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-soroban-sdk = { workspace = true }
+soroban-sdk = "21.7.5"
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+escrow = { path = "../escrow" }
