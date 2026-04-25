@@ -159,6 +159,29 @@ fn test_deposit_and_activate() {
 }
 
 #[test]
+fn test_concurrent_deposits_same_ledger() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "concurrent_deposits"),
+        &Platform::Lichess,
+    );
+
+    // Deposits back-to-back without ledger advancement
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Active);
+    assert!(client.is_funded(&id));
+}
+
+#[test]
 fn test_is_funded_false_after_only_player1_deposits() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
