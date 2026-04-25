@@ -1538,6 +1538,13 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     // Advance ledger past the default timeout (17_280 ledgers)
     env.ledger().set_sequence_number(100 + 17_280);
@@ -1556,6 +1563,13 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     client.expire_match(&id);
 
@@ -2281,6 +2295,13 @@ fn test_get_match_returns_cancelled_after_expire_match() {
         env.deployer()
             .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     // Advance past the 17_280-ledger timeout
     env.ledger().set_sequence_number(100 + 17_280);
@@ -2294,6 +2315,13 @@ fn test_get_match_returns_cancelled_after_expire_match() {
         env.deployer()
             .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     client.expire_match(&id);
 
