@@ -1667,6 +1667,25 @@ fn test_cancel_match_by_player2_refunds_player1_deposit() {
     assert_eq!(token_client.balance(&player2), 1000);
 }
 
+#[test]
+fn test_cancel_match_by_unauthorized_address_returns_unauthorized() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let third_party = Address::generate(&env);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "unauthorized_cancel_test"),
+        &Platform::Lichess,
+    );
+
+    let result = client.try_cancel_match(&id, &third_party);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
 // #373 — update_oracle routes subsequent submit_result to the new oracle
 #[test]
 fn test_update_oracle_routes_submit_result() {
