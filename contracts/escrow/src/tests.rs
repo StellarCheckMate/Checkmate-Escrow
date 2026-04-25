@@ -2290,3 +2290,21 @@ fn test_submit_result_emits_completed_event_with_correct_winner() {
     assert_eq!(ev_match_id, match_id);
     assert_eq!(ev_winner, Winner::Player1);
 }
+
+#[test]
+fn test_create_match_with_chess_dot_com_platform() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "chess_dot_com_game"),
+        &Platform::ChessDotCom,
+    );
+
+    let m = client.get_match(&id);
+    assert_eq!(m.platform, Platform::ChessDotCom);
+}

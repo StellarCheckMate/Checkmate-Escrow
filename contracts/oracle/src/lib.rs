@@ -36,10 +36,15 @@ impl OracleContract {
     /// Admin submits a verified match result on-chain.
     /// Invariant: No results can be submitted while the contract is paused.
     ///
+    /// The `match_id` must correspond to a valid escrow match. This function performs
+    /// a cross-contract call to the escrow contract to verify the match exists before
+    /// storing the result.
+    ///
     /// # Errors
     /// - [`Error::ContractPaused`] — contract is paused.
     /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
     /// - [`Error::AlreadySubmitted`] — a result for `match_id` has already been recorded.
+    /// - [`Error::MatchNotFound`] — the `match_id` does not correspond to a valid escrow match.
     pub fn submit_result(
         env: Env,
         match_id: u64,
