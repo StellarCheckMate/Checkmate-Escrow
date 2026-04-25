@@ -681,7 +681,10 @@ fn test_cancel_match_no_deposits_emits_no_token_transfers() {
         .all()
         .iter()
         .any(|(_, topics, _)| topics.contains(&transfer_topic));
-    assert!(!has_transfer, "no token transfer events should be emitted when no deposits were made");
+    assert!(
+        !has_transfer,
+        "no token transfer events should be emitted when no deposits were made"
+    );
 }
 
 #[test]
