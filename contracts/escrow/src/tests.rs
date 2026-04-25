@@ -2256,6 +2256,31 @@ fn test_get_match_returns_cancelled_after_expire_match() {
 }
 
 #[test]
+fn test_update_oracle_rejects_non_admin_caller() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let attacker = Address::generate(&env);
+    let new_oracle = Address::generate(&env);
+
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "update_oracle",
+            args: (new_oracle.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_update_oracle(&new_oracle);
+    assert!(
+        result.is_err(),
+        "update_oracle must reject a non-admin caller"
+    );
+}
+
+#[test]
 fn test_submit_result_emits_completed_event_with_correct_winner() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
