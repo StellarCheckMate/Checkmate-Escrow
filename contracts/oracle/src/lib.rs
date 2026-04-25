@@ -5,7 +5,7 @@ mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol};
-use types::{DataKey, Winner, ResultEntry};
+use types::{DataKey, ResultEntry, Winner};
 
 /// ~30 days at 5s/ledger.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -220,7 +220,7 @@ impl OracleContract {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use escrow::types::{MatchState, Platform, Winner};
+    use escrow::types::{MatchState, Platform, Winner as EscrowWinner};
     use escrow::{EscrowContract, EscrowContractClient};
     use soroban_sdk::{
         testutils::storage::{Instance as _, Persistent as _},
@@ -373,11 +373,7 @@ mod tests {
         let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Player1,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
 
         assert!(client.has_result(&0u64));
         let entry = client.get_result(&0u64);
@@ -389,11 +385,7 @@ mod tests {
         let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Player1,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
 
         let events = env.events().all();
         let expected_topics = soroban_sdk::vec![
@@ -418,7 +410,7 @@ mod tests {
         let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
 
         let events = env.events().all();
         let expected_topics = soroban_sdk::vec![
@@ -457,9 +449,9 @@ mod tests {
         let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
         let result =
-            client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &MatchResult::Draw);
+            client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
         assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
     }
 
@@ -495,11 +487,7 @@ mod tests {
         let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Player1,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
 
         let ttl = env.as_contract(&contract_id, || {
             env.storage().persistent().get_ttl(&DataKey::Result(0u64))
@@ -530,11 +518,8 @@ mod tests {
         client.pause();
 
         // Verify it's paused by trying to submit a result
-        let result = client.try_submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Player1,
-        );
+        let result =
+            client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
         assert_eq!(result, Err(Ok(Error::ContractPaused)));
     }
 
@@ -551,11 +536,7 @@ mod tests {
         client.unpause();
 
         // Verify it's unpaused by submitting a result
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Player1,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
         assert!(client.has_result(&0u64));
     }
 
@@ -569,11 +550,8 @@ mod tests {
         client.pause();
 
         // Try to submit a result - should fail with ContractPaused
-        let result = client.try_submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Player1,
-        );
+        let result =
+            client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
         assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
         // Verify no result was stored
@@ -590,22 +568,15 @@ mod tests {
         client.pause();
 
         // Verify submit is blocked
-        let result = client.try_submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Player1,
-        );
+        let result =
+            client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
         assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
         // Unpause
         client.unpause();
 
         // Now submit should work
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Player1,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
         assert!(client.has_result(&0u64));
         let entry = client.get_result(&0u64);
         assert_eq!(entry.result, Winner::Player1);
@@ -618,39 +589,28 @@ mod tests {
         let client = OracleContractClient::new(&env, &contract_id);
 
         // Initially unpaused - submit should work
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Player1,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
         assert!(client.has_result(&0u64));
 
         // Pause
         client.pause();
 
         // Submit should fail
-        let result = client.try_submit_result(
-            &1u64,
-            &String::from_str(&env, "def456"),
-            &Winner::Player2,
-        );
+        let result =
+            client.try_submit_result(&1u64, &String::from_str(&env, "def456"), &Winner::Player2);
         assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
         // Unpause
         client.unpause();
 
         // Submit should work again
-        client.submit_result(
-            &1u64,
-            &String::from_str(&env, "def456"),
-            &Winner::Player2,
-        );
+        client.submit_result(&1u64, &String::from_str(&env, "def456"), &Winner::Player2);
         assert!(client.has_result(&1u64));
 
         // Can pause again
         client.pause();
         let result =
-            client.try_submit_result(&2u64, &String::from_str(&env, "ghi789"), &MatchResult::Draw);
+            client.try_submit_result(&2u64, &String::from_str(&env, "ghi789"), &Winner::Draw);
         assert_eq!(result, Err(Ok(Error::ContractPaused)));
     }
 
@@ -662,11 +622,7 @@ mod tests {
         let client = OracleContractClient::new(&env, &contract_id);
 
         // Submit a result
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "abc123"),
-            &Winner::Player1,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
 
         // Read the result
         let entry = client.get_result(&0u64);
@@ -781,11 +737,7 @@ mod tests {
         let (env, contract_id, ..) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
-        client.submit_result(
-            &0u64,
-            &String::from_str(&env, "ttl_game"),
-            &Winner::Player1,
-        );
+        client.submit_result(&0u64, &String::from_str(&env, "ttl_game"), &Winner::Player1);
 
         let ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
         assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
@@ -798,7 +750,7 @@ mod tests {
     //   2. The new admin can successfully call `submit_result`.
     #[test]
     fn test_transfer_admin_old_rejected_new_accepted() {
-        let (env, contract_id, _escrow_id, old_admin, player1, player2, token_addr) = setup();
+        let (env, contract_id, _escrow_id, old_admin, _player1, _player2, _token_addr) = setup();
         let client = OracleContractClient::new(&env, &contract_id);
 
         let new_admin = Address::generate(&env);
@@ -814,7 +766,7 @@ mod tests {
             invoke: &soroban_sdk::testutils::MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "submit_result",
-                args: (0u64, String::from_str(&env, "test_game"), MatchResult::Player1Wins).into_val(&env),
+                args: (0u64, String::from_str(&env, "test_game"), Winner::Player1).into_val(&env),
                 sub_invokes: &[],
             },
         }]);
@@ -822,7 +774,7 @@ mod tests {
         let result = client.try_submit_result(
             &0u64,
             &String::from_str(&env, "test_game"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
         assert!(
             result.is_err(),
@@ -835,7 +787,7 @@ mod tests {
             invoke: &soroban_sdk::testutils::MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "submit_result",
-                args: (0u64, String::from_str(&env, "test_game"), MatchResult::Player1Wins).into_val(&env),
+                args: (0u64, String::from_str(&env, "test_game"), Winner::Player1).into_val(&env),
                 sub_invokes: &[],
             },
         }]);
@@ -843,12 +795,15 @@ mod tests {
         client.submit_result(
             &0u64,
             &String::from_str(&env, "test_game"),
-            &MatchResult::Player1Wins,
+            &Winner::Player1,
         );
 
         // Confirm the result was stored
-        assert!(client.has_result(&0u64), "new admin must be able to submit results after transfer");
+        assert!(
+            client.has_result(&0u64),
+            "new admin must be able to submit results after transfer"
+        );
         let entry = client.get_result(&0u64);
-        assert_eq!(entry.result, MatchResult::Player1Wins);
+        assert_eq!(entry.result, Winner::Player1);
     }
 }
