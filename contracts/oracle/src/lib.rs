@@ -304,6 +304,16 @@ mod tests {
 
     // ── has_result (public, unauthenticated) ─────────────────────────────────
 
+    /// Test that has_result returns false for match_id 0 on a fresh contract.
+    #[test]
+    fn test_has_result_returns_false_for_match_id_0_on_fresh_contract() {
+        let (env, contract_id, _escrow_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // On a fresh contract, has_result(0) should return false
+        assert!(!client.has_result(&0u64));
+    }
+
     /// Confirms that any caller can invoke has_result without authentication.
     /// Returns false before a result is submitted and true afterwards.
     #[test]
