@@ -137,6 +137,10 @@ impl EscrowContract {
             return Err(Error::InvalidPlayers);
         }
 
+        if game_id.len() == 0 {
+            return Err(Error::InvalidGameId);
+        }
+
         if env
             .storage()
             .instance()
@@ -441,6 +445,11 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
             return Ok(0);
         }

@@ -996,6 +996,22 @@ fn test_create_match_with_negative_stake_returns_invalid_amount() {
 }
 
 #[test]
+fn test_create_match_with_empty_game_id_returns_invalid_game_id() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, ""),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+}
+
+#[test]
 fn test_player2_cancel_pending_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -1660,6 +1676,25 @@ fn test_cancel_match_by_player2_refunds_player1_deposit() {
     assert_eq!(token_client.balance(&player2), 1000);
 }
 
+#[test]
+fn test_cancel_match_by_unauthorized_address_returns_unauthorized() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let third_party = Address::generate(&env);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "unauthorized_cancel_test"),
+        &Platform::Lichess,
+    );
+
+    let result = client.try_cancel_match(&id, &third_party);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
 // #373 — update_oracle routes subsequent submit_result to the new oracle
 #[test]
 fn test_update_oracle_routes_submit_result() {
@@ -2038,6 +2073,39 @@ fn test_get_escrow_balance_zero_after_cancel_with_player1_deposit() {
         0,
         "get_escrow_balance must return 0 after cancelling a match and refunding player1"
     );
+}
+
+#[test]
+fn test_ttl_extended_on_get_escrow_balance() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_balance_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+
+    // Get the TTL before calling get_escrow_balance
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+
+    // Call get_escrow_balance which should extend TTL
+    let _balance = client.get_escrow_balance(&id);
+
+    // Get the TTL after calling get_escrow_balance
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+
+    // TTL should be extended (increased)
+    assert!(ttl_after >= ttl_before, "TTL should be extended after get_escrow_balance");
 }
 
 #[test]

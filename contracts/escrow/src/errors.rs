@@ -49,4 +49,7 @@ pub enum Error {
     /// escrow contract's own address as the oracle during `initialize`.
     InvalidAddress = 13,
     InvalidPlayers = 14,
+
+    /// (15) The `game_id` is empty or invalid.
+    InvalidGameId = 15,
 }
