@@ -2308,3 +2308,15 @@ fn test_create_match_with_chess_dot_com_platform() {
     let m = client.get_match(&id);
     assert_eq!(m.platform, Platform::ChessDotCom);
 }
+
+#[test]
+fn test_is_paused_cycle() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert!(!client.is_paused());
+    client.pause();
+    assert!(client.is_paused());
+    client.unpause();
+    assert!(!client.is_paused());
+}
