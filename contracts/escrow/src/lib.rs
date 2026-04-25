@@ -19,14 +19,18 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     /// Initialize the contract with a trusted oracle address and an admin.
-    pub fn initialize(env: Env, oracle: Address, admin: Address) {
+    pub fn initialize(env: Env, oracle: Address, admin: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Oracle) {
             panic!("Contract already initialized");
+        }
+        if oracle == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
         }
         env.storage().instance().set(&DataKey::Oracle, &oracle);
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
+        Ok(())
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
