@@ -118,6 +118,26 @@ fn test_create_match() {
 }
 
 #[test]
+fn test_match_state_pending_immediately_after_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pending_state_test"),
+        &Platform::Lichess,
+    );
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Pending);
+    assert!(!m.player1_deposited);
+    assert!(!m.player2_deposited);
+}
+
+#[test]
 fn test_get_match_returns_stake_and_token() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
