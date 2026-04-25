@@ -2056,6 +2056,39 @@ fn test_get_escrow_balance_zero_after_cancel_with_player1_deposit() {
 }
 
 #[test]
+fn test_ttl_extended_on_get_escrow_balance() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_balance_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+
+    // Get the TTL before calling get_escrow_balance
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+
+    // Call get_escrow_balance which should extend TTL
+    let _balance = client.get_escrow_balance(&id);
+
+    // Get the TTL after calling get_escrow_balance
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+
+    // TTL should be extended (increased)
+    assert!(ttl_after >= ttl_before, "TTL should be extended after get_escrow_balance");
+}
+
+#[test]
 fn test_deposit_after_cancel_match_returns_invalid_state() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
