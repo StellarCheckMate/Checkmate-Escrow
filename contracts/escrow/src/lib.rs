@@ -4,7 +4,9 @@ mod errors;
 pub mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, token, vec, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, token, vec, Address, Env, String, Symbol, Vec,
+};
 use types::{DataKey, Match, MatchState, Platform, Winner};
 
 /// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.

@@ -1538,6 +1538,13 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     // Advance ledger past the default timeout (17_280 ledgers)
     env.ledger().set_sequence_number(100 + 17_280);
@@ -1556,6 +1563,13 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     client.expire_match(&id);
 
@@ -2148,7 +2162,10 @@ fn test_ttl_extended_on_get_escrow_balance() {
     });
 
     // TTL should be extended (increased)
-    assert!(ttl_after >= ttl_before, "TTL should be extended after get_escrow_balance");
+    assert!(
+        ttl_after >= ttl_before,
+        "TTL should be extended after get_escrow_balance"
+    );
 }
 
 #[test]
@@ -2278,6 +2295,13 @@ fn test_get_match_returns_cancelled_after_expire_match() {
         env.deployer()
             .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     // Advance past the 17_280-ledger timeout
     env.ledger().set_sequence_number(100 + 17_280);
@@ -2291,6 +2315,13 @@ fn test_get_match_returns_cancelled_after_expire_match() {
         env.deployer()
             .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     client.expire_match(&id);
 
@@ -2395,7 +2426,7 @@ fn test_initialize_rejects_self_as_oracle() {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_initialize(&contract_id, &admin);
