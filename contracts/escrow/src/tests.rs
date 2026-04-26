@@ -2038,3 +2038,26 @@ fn test_get_match_returns_cancelled_after_expire_match() {
     let m = client.get_match(&id);
     assert_eq!(m.state, MatchState::Cancelled);
 }
+
+#[test]
+fn test_player1_double_deposit_returns_already_funded() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "double_deposit_test"),
+        &Platform::Lichess,
+    );
+
+    // First deposit should succeed
+    client.deposit(&id, &player1);
+    assert!(!client.is_funded(&id));
+
+    // Second deposit by player1 should fail with AlreadyFunded
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(result, Err(Ok(Error::AlreadyFunded)));
+}
