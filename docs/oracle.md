@@ -119,6 +119,60 @@ Returns `Error::Unauthorized` if the caller is not the current admin.
 
 ---
 
+## Data Structures
+
+### ResultEntry
+
+The `ResultEntry` struct stores a verified match result in the oracle contract's
+persistent storage. Each entry is keyed by `match_id`.
+
+```rust
+pub struct ResultEntry {
+    pub game_id: String,
+    pub result: Winner,
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `game_id` | `String` | Platform-specific game identifier (e.g., `"abcd1234"` for Lichess, `"123456789"` for Chess.com) |
+| `result` | `Winner` | The verified outcome of the match |
+
+Example values:
+
+```rust
+ResultEntry {
+    game_id: String::from_str(&env, "abcd1234"),
+    result: Winner::Player1,
+}
+
+ResultEntry {
+    game_id: String::from_str(&env, "987654321"),
+    result: Winner::Draw,
+}
+```
+
+### Winner
+
+The `Winner` enum represents the possible outcomes of a chess match. It mirrors
+the escrow contract's `Winner` enum for consistency.
+
+```rust
+pub enum Winner {
+    Player1,
+    Player2,
+    Draw,
+}
+```
+
+| Variant | Description |
+|---------|-------------|
+| `Player1` | Player 1 won the match |
+| `Player2` | Player 2 won the match |
+| `Draw` | The match ended in a draw (stakes are refunded) |
+
+---
+
 ## Example: Full Match Lifecycle
 
 ```
