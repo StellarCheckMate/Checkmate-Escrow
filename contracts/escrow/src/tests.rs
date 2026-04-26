@@ -657,6 +657,37 @@ fn test_cancel_match_emits_event() {
 }
 
 #[test]
+fn test_cancel_match_no_deposits_emits_no_token_transfers() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_no_deposit_cancel"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id, &player1);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+
+    // No token transfers should have been emitted — neither player deposited
+    let transfer_topic = soroban_sdk::symbol_short!("transfer").into_val(&env);
+    let has_transfer = env
+        .events()
+        .all()
+        .iter()
+        .any(|(_, topics, _)| topics.contains(&transfer_topic));
+    assert!(
+        !has_transfer,
+        "no token transfer events should be emitted when no deposits were made"
+    );
+}
+
+#[test]
 fn test_concurrent_matches_remain_isolated() {
     let env = Env::default();
     env.mock_all_auths();
