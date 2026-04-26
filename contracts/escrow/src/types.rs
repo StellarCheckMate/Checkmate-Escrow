@@ -52,4 +52,8 @@ pub enum DataKey {
     Paused,
     GameId(String),
     MatchTimeout,
+    PlayerMatches(Address),
+    ActiveMatches,
+    AllowedToken(Address),
+    AllowlistEnabled,
 }

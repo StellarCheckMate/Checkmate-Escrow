@@ -2,6 +2,9 @@
 name = "escrow"
 version = "0.1.0"
 edition = "2021"
+description = "Trustless chess wagering escrow contract on Stellar Soroban"
+repository = "https://github.com/StellarCheckMate/Checkmate-Escrow"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

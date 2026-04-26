@@ -14,4 +14,6 @@ pub enum Error {
     /// The contract is paused and not accepting submissions.
     ContractPaused = 5,
     InvalidGameId = 6,
+    /// The match_id does not correspond to a valid escrow match.
+    MatchNotFound = 7,
 }
