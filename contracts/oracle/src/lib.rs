@@ -196,6 +196,8 @@ impl OracleContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
+        env.events()
+            .publish((Symbol::new(&env, "admin"), symbol_short!("paused")), ());
         Ok(())
     }
 
@@ -705,6 +707,25 @@ mod tests {
 
         // Test passes if unpause completes without panic
         // The function docstring states it does not emit events
+    }
+
+    #[test]
+    fn test_pause_emits_paused_event() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.pause();
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "admin").into_val(&env),
+            symbol_short!("paused").into_val(&env),
+        ];
+        let matched = events
+            .iter()
+            .find(|(_, topics, _)| *topics == expected_topics);
+        assert!(matched.is_some(), "paused event not emitted");
     }
 
     /// Full integration: oracle stores result, escrow oracle address submits
