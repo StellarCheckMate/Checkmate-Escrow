@@ -2,6 +2,9 @@
 name = "oracle"
 version = "0.1.0"
 edition = "2021"
+description = "Oracle contract for verifying chess match results on Stellar Soroban"
+repository = "https://github.com/StellarCheckMate/Checkmate-Escrow"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

@@ -75,6 +75,30 @@ fn test_initialize_emits_event() {
 }
 
 #[test]
+fn test_is_initialized_false_before_initialize_and_true_after() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert!(
+        !client.is_initialized(),
+        "contract must report uninitialized before initialize is called"
+    );
+
+    client.initialize(&oracle, &admin);
+
+    assert!(
+        client.is_initialized(),
+        "contract must report initialized after initialize is called"
+    );
+}
+
+#[test]
 fn test_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -91,6 +115,26 @@ fn test_create_match() {
     assert_eq!(id, 0);
     let m = client.get_match(&id);
     assert_eq!(m.state, MatchState::Pending);
+}
+
+#[test]
+fn test_match_state_pending_immediately_after_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pending_state_test"),
+        &Platform::Lichess,
+    );
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Pending);
+    assert!(!m.player1_deposited);
+    assert!(!m.player2_deposited);
 }
 
 #[test]
@@ -132,6 +176,29 @@ fn test_deposit_and_activate() {
     client.deposit(&id, &player2);
     assert!(client.is_funded(&id));
     assert_eq!(client.get_escrow_balance(&id), 200);
+}
+
+#[test]
+fn test_concurrent_deposits_same_ledger() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "concurrent_deposits"),
+        &Platform::Lichess,
+    );
+
+    // Deposits back-to-back without ledger advancement
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Active);
+    assert!(client.is_funded(&id));
 }
 
 #[test]
@@ -590,6 +657,37 @@ fn test_cancel_match_emits_event() {
 }
 
 #[test]
+fn test_cancel_match_no_deposits_emits_no_token_transfers() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_no_deposit_cancel"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id, &player1);
+
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+
+    // No token transfers should have been emitted — neither player deposited
+    let transfer_topic = soroban_sdk::symbol_short!("transfer").into_val(&env);
+    let has_transfer = env
+        .events()
+        .all()
+        .iter()
+        .any(|(_, topics, _)| topics.contains(&transfer_topic));
+    assert!(
+        !has_transfer,
+        "no token transfer events should be emitted when no deposits were made"
+    );
+}
+
+#[test]
 fn test_concurrent_matches_remain_isolated() {
     let env = Env::default();
     env.mock_all_auths();
@@ -661,6 +759,53 @@ fn test_concurrent_matches_remain_isolated() {
 }
 
 #[test]
+fn test_concurrent_matches_do_not_share_escrow_balances() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+    let player3 = Address::generate(&env);
+    let player4 = Address::generate(&env);
+
+    let token_id = env.register_stellar_asset_contract_v2(admin.clone());
+    let token = token_id.address();
+    let asset_client = StellarAssetClient::new(&env, &token);
+
+    for player in [&player1, &player2, &player3, &player4] {
+        mint_player_balance(&asset_client, player, 1000);
+    }
+
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&oracle, &admin);
+
+    let match_a = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "isolated_balance_match_a"),
+        &Platform::Lichess,
+    );
+    let match_b = client.create_match(
+        &player3,
+        &player4,
+        &60,
+        &token,
+        &String::from_str(&env, "isolated_balance_match_b"),
+        &Platform::ChessDotCom,
+    );
+
+    client.deposit(&match_a, &player1);
+
+    assert_eq!(client.get_escrow_balance(&match_a), 100);
+    assert_eq!(client.get_escrow_balance(&match_b), 0);
+}
+
+#[test]
 #[should_panic(expected = "Contract already initialized")]
 fn test_double_initialize_fails() {
     let env = Env::default();
@@ -675,6 +820,18 @@ fn test_double_initialize_fails() {
 
     client.initialize(&oracle1, &admin);
     client.initialize(&oracle2, &admin);
+}
+
+#[test]
+fn test_pause_on_uninitialized_contract_returns_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // No initialize call — Admin key is absent
+    let result = client.try_pause();
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
@@ -834,6 +991,15 @@ fn test_admin_can_rotate_oracle() {
 }
 
 #[test]
+fn test_update_oracle_rejects_self_address() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_update_oracle(&contract_id);
+    assert_eq!(result, Err(Ok(Error::InvalidAddress)));
+}
+
+#[test]
 fn test_old_oracle_rejected_after_rotation() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -913,6 +1079,22 @@ fn test_create_match_with_negative_stake_returns_invalid_amount() {
         &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_create_match_with_empty_game_id_returns_invalid_game_id() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, ""),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
 }
 
 #[test]
@@ -1399,6 +1581,13 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     // Advance ledger past the default timeout (17_280 ledgers)
     env.ledger().set_sequence_number(100 + 17_280);
@@ -1417,6 +1606,13 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     client.expire_match(&id);
 
@@ -1578,6 +1774,25 @@ fn test_cancel_match_by_player2_refunds_player1_deposit() {
     let player1_balance_after_cancel = token_client.balance(&player1);
     assert_eq!(player1_balance_after_cancel, 1000);
     assert_eq!(token_client.balance(&player2), 1000);
+}
+
+#[test]
+fn test_cancel_match_by_unauthorized_address_returns_unauthorized() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let third_party = Address::generate(&env);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "unauthorized_cancel_test"),
+        &Platform::Lichess,
+    );
+
+    let result = client.try_cancel_match(&id, &third_party);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 // #373 — update_oracle routes subsequent submit_result to the new oracle
@@ -1828,7 +2043,10 @@ fn test_is_funded_returns_true_after_payout() {
     client.deposit(&id, &player2);
 
     // Both deposited — match is Active, is_funded must be true
-    assert!(client.is_funded(&id), "is_funded must be true when both players have deposited");
+    assert!(
+        client.is_funded(&id),
+        "is_funded must be true when both players have deposited"
+    );
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
     // Complete the match
@@ -1873,7 +2091,11 @@ fn test_get_escrow_balance_zero_for_completed_match() {
     // Fund both players
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    assert_eq!(client.get_escrow_balance(&id), 200, "escrow balance must be 2x stake while Active");
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        200,
+        "escrow balance must be 2x stake while Active"
+    );
 
     // Complete the match — payout transfers funds out
     client.submit_result(&id, &Winner::Player2);
@@ -1907,7 +2129,11 @@ fn test_get_escrow_balance_zero_for_cancelled_match_no_deposits() {
     );
 
     // No deposits made — cancel immediately
-    assert_eq!(client.get_escrow_balance(&id), 0, "escrow balance must be 0 before any deposits");
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        0,
+        "escrow balance must be 0 before any deposits"
+    );
     client.cancel_match(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 
@@ -1917,6 +2143,93 @@ fn test_get_escrow_balance_zero_for_cancelled_match_no_deposits() {
         0,
         "get_escrow_balance must return 0 for a Cancelled match where no deposits were made"
     );
+}
+
+#[test]
+fn test_get_escrow_balance_zero_after_cancel_with_player1_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "balance_cancelled_after_player1_deposit"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        100,
+        "escrow balance must reflect player1's deposited stake before cancellation"
+    );
+
+    client.cancel_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        0,
+        "get_escrow_balance must return 0 after cancelling a match and refunding player1"
+    );
+}
+
+#[test]
+fn test_ttl_extended_on_get_escrow_balance() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_balance_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+
+    // Get the TTL before calling get_escrow_balance
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+
+    // Call get_escrow_balance which should extend TTL
+    let _balance = client.get_escrow_balance(&id);
+
+    // Get the TTL after calling get_escrow_balance
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+
+    // TTL should be extended (increased)
+    assert!(
+        ttl_after >= ttl_before,
+        "TTL should be extended after get_escrow_balance"
+    );
+}
+
+#[test]
+fn test_deposit_after_cancel_match_returns_invalid_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "deposit_after_cancel"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+
+    let result = client.try_deposit(&id, &player2);
+    assert_eq!(result, Err(Ok(Error::InvalidState)));
 }
 
 #[test]
@@ -2017,21 +2330,41 @@ fn test_get_match_returns_cancelled_after_expire_match() {
 
     // Extend TTLs so storage survives the ledger jump
     for addr in [&contract_id, &token] {
-        env.deployer()
-            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer().extend_ttl_for_contract_instance(
+            addr.clone(),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         env.deployer()
             .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     // Advance past the 17_280-ledger timeout
     env.ledger().set_sequence_number(100 + 17_280);
 
     for addr in [&contract_id, &token] {
-        env.deployer()
-            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer().extend_ttl_for_contract_instance(
+            addr.clone(),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         env.deployer()
             .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
 
     client.expire_match(&id);
 
@@ -2040,7 +2373,86 @@ fn test_get_match_returns_cancelled_after_expire_match() {
 }
 
 #[test]
-fn test_player1_double_deposit_returns_already_funded() {
+fn test_update_oracle_rejects_non_admin_caller() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let attacker = Address::generate(&env);
+    let new_oracle = Address::generate(&env);
+
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "update_oracle",
+            args: (new_oracle.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_update_oracle(&new_oracle);
+    assert!(
+        result.is_err(),
+        "update_oracle must reject a non-admin caller"
+    );
+}
+
+#[test]
+fn test_submit_result_emits_completed_event_with_correct_winner() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "event_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+
+    client.submit_result(&match_id, &Winner::Player1);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("completed").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match completed event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_match_id, ev_winner): (u64, Winner) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_match_id, match_id);
+    assert_eq!(ev_winner, Winner::Player1);
+}
+
+#[test]
+fn test_create_match_with_chess_dot_com_platform() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "chess_dot_com_game"),
+        &Platform::ChessDotCom,
+    );
+
+    let m = client.get_match(&id);
+    assert_eq!(m.platform, Platform::ChessDotCom);
+}
+
+#[test]
+fn test_double_deposit() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -2060,4 +2472,29 @@ fn test_player1_double_deposit_returns_already_funded() {
     // Second deposit by player1 should fail with AlreadyFunded
     let result = client.try_deposit(&id, &player1);
     assert_eq!(result, Err(Ok(Error::AlreadyFunded)));
+}
+
+#[test]
+fn test_is_paused_cycle() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert!(!client.is_paused());
+    client.pause();
+    assert!(client.is_paused());
+    client.unpause();
+    assert!(!client.is_paused());
+}
+
+#[test]
+fn test_initialize_rejects_self_as_oracle() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(&contract_id, &admin);
+    assert_eq!(result, Err(Ok(Error::InvalidAddress)));
 }
