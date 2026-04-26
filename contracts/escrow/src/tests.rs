@@ -2452,6 +2452,29 @@ fn test_create_match_with_chess_dot_com_platform() {
 }
 
 #[test]
+fn test_double_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "double_deposit_test"),
+        &Platform::Lichess,
+    );
+
+    // First deposit should succeed
+    client.deposit(&id, &player1);
+    assert!(!client.is_funded(&id));
+
+    // Second deposit by player1 should fail with AlreadyFunded
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(result, Err(Ok(Error::AlreadyFunded)));
+}
+
+#[test]
 fn test_is_paused_cycle() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
