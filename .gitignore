@@ -5,8 +5,7 @@ target/
 .env
 
 # Test snapshots
-contracts/escrow/test_snapshots/
-contracts/oracle/test_snapshots/
+**/test_snapshots/
 **/*.snap
 
 # IDE / editor

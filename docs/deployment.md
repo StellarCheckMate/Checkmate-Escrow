@@ -1,138 +1,133 @@
-# Deployment Guide
+# Deployment Sequence
 
-## Testnet Deployment
+## Network Configuration
 
-### 1. Generate a deployer identity
+Network environments are defined in [`environments.toml`](../environments.toml) at the project root. Each named section maps to a `--network` value used by the Stellar/Soroban CLI.
+
+Available networks: `testnet`, `mainnet`, `futurenet`, `standalone`.
+
+To target a specific network, pass `--network <name>` to any `stellar contract` command. To add a custom network, append a new `[section]` with `rpc_url` and `network_passphrase` fields — see the comments in `environments.toml` for details.
+
+---
+
+
+This document describes the required deployment order and initialization steps
+for the Checkmate Escrow smart contracts.
+
+---
+
+## Why Order Matters
+
+Both the `OracleContract` and `EscrowContract` expose an `initialize` function
+that must be called exactly once after deployment. Prior to the fix for
+[#216], these functions had no deployer guard, meaning any observer of the
+deployment transaction could front-run the call and initialize the contract
+with a malicious admin or oracle address.
+
+The fix requires the deployer address to be passed explicitly and to authorize
+the `initialize` call via `deployer.require_auth()`. This means only the
+account that deployed the contract can initialize it.
+
+---
+
+## Deployment Steps
+
+### 1. Deploy OracleContract
 
 ```bash
-stellar keys generate deployer --network testnet
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/oracle.wasm \
+  --source <DEPLOYER_KEYPAIR>
+# → outputs ORACLE_CONTRACT_ID
 ```
 
-### 2. Fund the account via Friendbot
+### 2. Initialize OracleContract
+
+The `deployer` argument must be the same account used to deploy the contract.
 
 ```bash
-stellar keys fund deployer --network testnet
+stellar contract invoke \
+  --id $ORACLE_CONTRACT_ID \
+  --source <DEPLOYER_KEYPAIR> \
+  -- initialize \
+  --admin <ORACLE_ADMIN_ADDRESS> \
+  --deployer <DEPLOYER_ADDRESS>
 ```
 
-### 3. Build the contracts
+### 3. Deploy EscrowContract
 
 ```bash
-./scripts/build.sh
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/escrow.wasm \
+  --source <DEPLOYER_KEYPAIR>
+# → outputs ESCROW_CONTRACT_ID
 ```
 
-### 4. Deploy
+### 4. Initialize EscrowContract
+
+The `oracle` argument must be the `ORACLE_CONTRACT_ID` from step 1.
+The `deployer` argument must be the same account used to deploy the contract.
 
 ```bash
-./scripts/deploy_testnet.sh
-```
-
-### 5. Configure `.env`
-
-```env
-STELLAR_NETWORK=testnet
-STELLAR_RPC_URL=https://soroban-testnet.stellar.org
-CONTRACT_ESCROW=<deployed-contract-id>
-CONTRACT_ORACLE=<deployed-contract-id>
+stellar contract invoke \
+  --id $ESCROW_CONTRACT_ID \
+  --source <DEPLOYER_KEYPAIR> \
+  -- initialize \
+  --oracle $ORACLE_CONTRACT_ID \
+  --admin <ESCROW_ADMIN_ADDRESS> \
+  --deployer <DEPLOYER_ADDRESS>
 ```
 
 ---
 
-## Mainnet Deployment
+## Security Notes
 
-> ⚠️ Mainnet transactions are irreversible and involve real funds. Complete the pre-deployment checklist before proceeding.
+- Steps 2 and 4 must be executed **in the same transaction or immediately after
+  deployment** to eliminate the front-run window. Use a deployment script that
+  batches deploy + initialize atomically where possible.
+- The `deployer` address passed to `initialize` must match the account signing
+  the transaction. Any mismatch will cause `require_auth` to fail.
+- Once initialized, `initialize` cannot be called again (guarded by an
+  `AlreadyInitialized` check).
 
-### Pre-Deployment Checklist
+---
 
-- [ ] All contract tests pass (`cargo test`)
-- [ ] Contracts audited or peer-reviewed for logic errors and reentrancy
-- [ ] Oracle authorization logic verified — only the trusted oracle key can call `submit_result`
-- [ ] Payout and draw-refund paths manually tested on testnet with real match flows
-- [ ] Deployer key is a hardware wallet or stored in a secrets manager (not a plaintext file)
-- [ ] Oracle hot key is separate from the deployer key and has minimum required permissions
-- [ ] `.env` and key files are excluded from version control (confirm `.gitignore`)
-- [ ] Contract WASM hash recorded for post-deployment verification
+## Verifying Initialization
 
-### Key Management
+After initialization, confirm the stored admin and oracle addresses:
 
-**Deployer key** — used once to deploy contracts, then should be kept offline.
+```bash
+# Escrow: read admin
+stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_admin
 
-- Use a hardware wallet (Ledger) or an HSM where possible.
-- If using a software key, generate it on an air-gapped machine and import only the public key to CI.
-- Never store the secret key in `.env`, CI environment variables, or any file tracked by git.
+# Oracle: verify a result can be submitted (requires oracle admin auth)
+stellar contract invoke --id $ORACLE_CONTRACT_ID \
+  --source <ORACLE_ADMIN_KEYPAIR> \
+  -- has_result_admin --match_id 0
+```
 
-**Oracle hot key** — used by the oracle service to submit match results.
+---
 
-- Generate a dedicated keypair with no other permissions:
-  ```bash
-  stellar keys generate oracle-hot --network mainnet
-  ```
-- Store the secret in a secrets manager (AWS Secrets Manager, HashiCorp Vault, etc.).
-- Rotate the key if it is ever exposed.
+## Resource Usage Baselines
 
-**Backup**
+Soroban charges fees based on CPU instruction count and memory bytes. The
+table below shows baseline measurements captured via `env.cost_estimate().budget()`
+in the test suite (SDK v22, native host — no Wasm overhead included).
 
-- Store mnemonic / secret key backups encrypted (e.g., GPG) in at least two offline locations.
-- Document the recovery procedure and test it before going live.
+| Operation       | CPU Instructions | Memory Bytes |
+|-----------------|-----------------|--------------|
+| `create_match`  | ~103,736        | ~18,954      |
+| `deposit` (p1)  | ~242,178        | ~38,457      |
+| `deposit` (p2)  | ~243,232        | ~39,134      |
+| `submit_result` | ~253,053        | ~40,766      |
 
-### Deploy Steps
+> **Note:** These figures reflect host-level metering only. Real on-chain costs
+> will be higher once Wasm execution, VM instantiation, XDR round-trips, and
+> ledger entry reads/writes are included. Use `stellar contract invoke --fee`
+> on testnet for production fee estimates.
 
-1. **Configure mainnet identity**
+To re-run the benchmarks locally:
 
-   ```bash
-   stellar keys generate deployer --network mainnet
-   # Fund the account with enough XLM to cover deployment fees (~10 XLM)
-   ```
-
-2. **Build optimized WASM**
-
-   ```bash
-   ./scripts/build.sh
-   ```
-
-3. **Deploy escrow contract**
-
-   ```bash
-   stellar contract deploy \
-     --wasm target/wasm32-unknown-unknown/release/escrow.wasm \
-     --source deployer \
-     --network mainnet
-   ```
-
-4. **Deploy oracle contract**
-
-   ```bash
-   stellar contract deploy \
-     --wasm target/wasm32-unknown-unknown/release/oracle.wasm \
-     --source deployer \
-     --network mainnet
-   ```
-
-5. **Initialize contracts** — invoke any `init` / `set_oracle` entry points with the oracle hot key's public address.
-
-6. **Verify WASM hashes**
-
-   ```bash
-   stellar contract info --id <CONTRACT_ESCROW> --network mainnet
-   stellar contract info --id <CONTRACT_ORACLE> --network mainnet
-   ```
-
-   Confirm the reported WASM hash matches `sha256sum` of the local WASM files.
-
-7. **Configure `.env`**
-
-   ```env
-   STELLAR_NETWORK=mainnet
-   STELLAR_RPC_URL=https://soroban-mainnet.stellar.org
-   CONTRACT_ESCROW=<deployed-contract-id>
-   CONTRACT_ORACLE=<deployed-contract-id>
-   ```
-
-8. **Move deployer key offline** — once deployment is confirmed, the deployer secret key should not remain on any internet-connected machine.
-
-### Security Considerations
-
-- **Upgrade path**: Soroban contracts are immutable once deployed. Plan for a proxy/migration pattern before deploying if upgrades may be needed.
-- **Oracle trust**: The oracle key is the single point of trust for result submission. Compromise of this key allows fraudulent payouts. Rotate immediately if exposed.
-- **Stake limits**: Consider enforcing a maximum stake per match in the contract to limit blast radius from bugs or oracle compromise.
-- **Monitoring**: Set up alerts on the escrow contract address for unexpected large outflows.
-- **RPC endpoint**: Use a reliable, authenticated RPC provider for the oracle service in production rather than the public endpoint.
+```bash
+cargo test bench -- --nocapture
+```
