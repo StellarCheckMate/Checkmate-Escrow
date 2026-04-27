@@ -593,6 +593,40 @@ fn test_submit_result_fails_if_not_fully_funded() {
 }
 
 #[test]
+fn test_submit_result_fails_when_contract_token_balance_is_zero() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "zero_balance_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Drain the contract's token balance by transferring out all funds
+    let contract_balance = token_client.balance(&contract_id);
+    if contract_balance > 0 {
+        env.as_contract(&contract_id, || {
+            token_client.transfer(&contract_id, &player1, &contract_balance);
+        });
+    }
+
+    // Verify balance is zero
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    // Attempt to submit result should fail due to insufficient balance
+    let result = client.try_submit_result(&id, &Winner::Player1);
+    assert!(result.is_err(), "submit_result should fail when contract has zero token balance");
+}
+
+#[test]
 fn test_initialize_accepts_valid_generated_oracle_address() {
     let env = Env::default();
     env.mock_all_auths();
@@ -849,7 +883,7 @@ fn test_admin_pause_blocks_create_match() {
         &String::from_str(&env, "paused_game"),
         &Platform::Lichess,
     );
-    assert!(result.is_err());
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
 #[test]
