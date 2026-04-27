@@ -761,6 +761,49 @@ fn test_cancel_only_player2_deposited_refunds_player2() {
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 }
 
+// ── Issue #17: create_match on uninitialized contract ────────────────────────
+
+/// Calling `create_match` on a contract that has never been initialized succeeds
+/// because `create_match` does not require the Oracle or Admin keys to be present.
+/// The `MatchCount` key defaults to 0 via `unwrap_or(0)` and `Paused` defaults to
+/// `false` via `unwrap_or(false)`, so no initialization guard exists on this path.
+///
+/// Expected behaviour (documented): the call succeeds and returns match id 0.
+/// If a future change adds an initialization guard to `create_match`, this test
+/// should be updated to assert the appropriate error instead.
+#[test]
+fn test_create_match_on_uninitialized_contract_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let player1 = Address::generate(&env);
+    let player2 = Address::generate(&env);
+
+    let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token_addr = token_id.address();
+
+    // Register the contract but deliberately skip `initialize`
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // create_match must succeed — no initialization guard exists on this path
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token_addr,
+        &String::from_str(&env, "uninit_game"),
+        &Platform::Lichess,
+    );
+
+    assert!(
+        result.is_ok(),
+        "create_match on an uninitialized contract should succeed (no init guard); got: {:?}",
+        result
+    );
+    assert_eq!(result.unwrap().unwrap(), 0, "first match id must be 0");
+}
+
 // ── From main: pause / unpause emit events ───────────────────────────────────
 
 #[test]
