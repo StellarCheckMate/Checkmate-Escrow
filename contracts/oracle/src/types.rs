@@ -1,10 +1,12 @@
 use soroban_sdk::{contracttype, String};
 
+/// Canonical result enum shared conceptually with the escrow contract.
+/// Variants mirror escrow's `Winner` enum for consistency.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum MatchResult {
-    Player1Wins,
-    Player2Wins,
+pub enum Winner {
+    Player1,
+    Player2,
     Draw,
 }
 
@@ -12,7 +14,7 @@ pub enum MatchResult {
 #[derive(Clone, Debug)]
 pub struct ResultEntry {
     pub game_id: String,
-    pub result: MatchResult,
+    pub result: Winner,
 }
 
 #[contracttype]

@@ -19,5 +19,4 @@
 
 6. Create PR: `gh pr create --title "test(escrow): verify get_match returns correct stake_amount and token (#127)" --body "Closes #127\n\n- Adds test verifying get_match returns exact stake_amount and token from create_match inputs.\n- Uses distinct stake 200i128 to differentiate from existing tests."`
 
-**Next: Awaiting user to checkout branch and confirm `git status` / branch name.**
 
