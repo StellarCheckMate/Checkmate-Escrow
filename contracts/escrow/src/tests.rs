@@ -2311,6 +2311,29 @@ fn test_create_match_rejects_same_player_as_both_sides() {
     assert_eq!(result, Err(Ok(Error::InvalidPlayers)));
 }
 
+/// get_match extends TTL on every read so hot matches never expire between reads.
+#[test]
+fn test_get_match_extends_ttl_on_read() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_read_test"),
+        &Platform::Lichess,
+    );
+
+    client.get_match(&id);
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
+    });
+    assert_eq!(ttl, MATCH_TTL_LEDGERS);
+}
+
 /// get_match resets TTL to MATCH_TTL_LEDGERS even after ledgers have advanced.
 #[test]
 fn test_get_match_resets_ttl_after_ledger_advance() {
