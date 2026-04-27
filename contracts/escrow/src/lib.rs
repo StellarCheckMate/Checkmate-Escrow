@@ -119,6 +119,11 @@ impl EscrowContract {
 
     /// Create a new match. Both players must call `deposit` before the game starts.
     ///
+    /// # Arguments
+    /// - `stake_amount` — must be greater than 0. The practical minimum depends on token
+    ///   decimal precision (e.g., 1 stroop = 0.0000001 XLM for 7-decimal tokens).
+    ///   Ensure the stake amount is at least 1 in the token's smallest unit.
+    ///
     /// # Errors
     /// - [`Error::ContractPaused`] — contract is paused.
     /// - [`Error::InvalidAmount`] — `stake_amount` is zero or negative.
