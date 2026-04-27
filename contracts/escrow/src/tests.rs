@@ -1708,6 +1708,15 @@ fn test_get_oracle_returns_initialized_address() {
 }
 
 #[test]
+fn test_get_oracle_returns_updated_address_after_update_oracle() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let new_oracle = Address::generate(&env);
+    client.update_oracle(&new_oracle);
+    assert_eq!(client.get_oracle(), new_oracle);
+}
+
+#[test]
 fn test_get_match_returns_correct_players() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
