@@ -621,7 +621,10 @@ fn test_submit_result_fails_when_contract_token_balance_is_zero() {
 
     // Attempt to submit result should fail due to insufficient balance
     let result = client.try_submit_result(&id, &Winner::Player1);
-    assert!(result.is_err(), "submit_result should fail when contract has zero token balance");
+    assert!(
+        result.is_err(),
+        "submit_result should fail when contract has zero token balance"
+    );
 }
 
 #[test]
