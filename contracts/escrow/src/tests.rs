@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 extern crate std;
 
 use super::*;
@@ -709,12 +707,12 @@ fn test_cancel_match_no_deposits_emits_no_token_transfers() {
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 
     // No token transfers should have been emitted — neither player deposited
-    let transfer_topic = soroban_sdk::symbol_short!("transfer").into_val(&env);
+    let transfer_topic: soroban_sdk::Val = soroban_sdk::symbol_short!("transfer").into_val(&env);
     let has_transfer = env
         .events()
         .all()
         .iter()
-        .any(|(_, topics, _)| topics.contains(&transfer_topic));
+        .any(|(_, topics, _)| topics.contains(transfer_topic));
     assert!(
         !has_transfer,
         "no token transfer events should be emitted when no deposits were made"
@@ -903,6 +901,25 @@ fn test_admin_unpause_allows_create_match() {
         &Platform::Lichess,
     );
     assert_eq!(id, 0);
+}
+
+#[test]
+fn test_pause_emits_paused_event() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("paused").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "paused event not emitted");
 }
 
 /// Test that deposit is rejected when the contract is paused.

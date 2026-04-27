@@ -64,6 +64,8 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &true);
+        env.events()
+            .publish((Symbol::new(&env, "admin"), symbol_short!("paused")), ());
         Ok(())
     }
 
@@ -144,7 +146,7 @@ impl EscrowContract {
             return Err(Error::InvalidPlayers);
         }
 
-        if game_id.len() == 0 {
+        if game_id.is_empty() {
             return Err(Error::InvalidGameId);
         }
 
