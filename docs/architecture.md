@@ -25,11 +25,32 @@ Checkmate-Escrow is a trustless chess wagering platform built on Stellar Soroban
 
 ## Match Lifecycle
 
+```mermaid
+stateDiagram-v2
+    [*] --> Pending : create_match
+    Pending --> Pending : deposit (single player)
+    Pending --> Active : deposit (second player)
+    Pending --> Cancelled : cancel_match
+    Pending --> Cancelled : expire_match
+    Active --> Completed : submit_result
+    Completed --> [*]
+    Cancelled --> [*]
 ```
-Pending ──(both deposit)──▶ Active ──(oracle submits result)──▶ Completed
-   │                           │
-   └──(cancel)──▶ Cancelled ◀──┘
-```
+
+### Transition Reference
+
+| From | To | Triggering Function | Authorized Caller | Conditions | Key Errors |
+|---|---|---|---|---|---|
+| `*` | `Pending` | `create_match` | `player1` | Contract not paused; `stake_amount > 0`; `game_id` non-empty and unique; token on allowlist (if enforced). | `ContractPaused`, `InvalidAmount`, `AlreadyExists`, `InvalidGameId`, `InvalidToken` |
+| `Pending` | `Pending` | `deposit` | `player1` or `player2` | Match exists; contract not paused; caller has not already deposited; transfers `stake_amount` to escrow. | `ContractPaused`, `MatchNotFound`, `InvalidState`, `Unauthorized`, `AlreadyFunded` |
+| `Pending` | `Active` | `deposit` | `player1` or `player2` | Same as above, **and** this deposit completes funding (both `player1_deposited` and `player2_deposited` are now `true`). | (same as single deposit) |
+| `Pending` | `Cancelled` | `cancel_match` | `player1` or `player2` | Match is in `Pending` state; refunds any deposited stakes. | `MatchNotFound`, `MatchAlreadyActive`, `Unauthorized` |
+| `Pending` | `Cancelled` | `expire_match` | Anyone | Match is in `Pending` state; ledger timeout (`MatchTimeout`, default ~24h) has elapsed since `created_ledger`; refunds any deposited stakes. | `MatchNotFound`, `InvalidState`, `MatchNotExpired` |
+| `Active` | `Completed` | `submit_result` | Oracle address stored at initialization | Match is in `Active` state; contract not paused; both players have deposited; oracle auth required. **Payout is executed inline** (winner receives `2 * stake_amount`, or each player receives `stake_amount` on draw). | `Unauthorized`, `ContractPaused`, `MatchNotFound`, `NotFunded`, `InvalidState` |
+| `Completed` | — | — | — | Terminal state. No further transitions. | — |
+| `Cancelled` | — | — | — | Terminal state. No further transitions. | — |
+
+> **Note:** `execute_payout` is not a separate external function in the current implementation. The escrow contract pays out atomically inside `submit_result`.
 
 ## Stable Public API
 
