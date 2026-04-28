@@ -2584,3 +2584,100 @@ fn test_initialize_rejects_self_as_oracle() {
     let result = client.try_initialize(&contract_id, &admin);
     assert_eq!(result, Err(Ok(Error::InvalidAddress)));
 }
+
+#[test]
+fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = token::Client::new(&env, &token);
+
+    env.ledger().set_sequence_number(100);
+
+    // Both players deposit, but we manually keep the state Pending to simulate
+    // the scenario where both deposited yet the match never transitioned to Active.
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_both_deposited"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // At this point the contract transitions to Active after both deposits.
+    // Force the state back to Pending to represent the target scenario.
+    env.as_contract(&contract_id, || {
+        let mut m: Match = env.storage().persistent().get(&DataKey::Match(id)).unwrap();
+        m.state = MatchState::Pending;
+        env.storage().persistent().set(&DataKey::Match(id), &m);
+    });
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Pending);
+    assert!(m.player1_deposited);
+    assert!(m.player2_deposited);
+
+    let p1_balance_before = token_client.balance(&player1);
+    let p2_balance_before = token_client.balance(&player2);
+
+    // Extend TTLs so storage entries survive the ledger jump
+    env.deployer().extend_ttl_for_contract_instance(
+        contract_id.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.deployer().extend_ttl_for_contract_instance(
+        token.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
+
+    // Advance ledger past the default timeout (17_280 ledgers)
+    env.ledger().set_sequence_number(100 + 17_280);
+
+    env.deployer().extend_ttl_for_contract_instance(
+        contract_id.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.deployer().extend_ttl_for_contract_instance(
+        token.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    });
+
+    client.expire_match(&id);
+
+    // Match must be Cancelled
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Cancelled);
+
+    // Both players must be fully refunded
+    assert_eq!(token_client.balance(&player1) - p1_balance_before, 100);
+    assert_eq!(token_client.balance(&player2) - p2_balance_before, 100);
+}
