@@ -73,6 +73,27 @@ fn test_initialize_emits_event() {
 }
 
 #[test]
+fn test_empty_game_id_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // initialize contract first (very important)
+    client.initialize(&oracle, &admin);
+
+    // call with empty game_id
+    let result = client.try_create_match(&"".into());
+
+    // assert error
+    assert_eq!(result, Err(Error::InvalidGameId));
+}
+
+#[test]
 fn test_is_initialized_false_before_initialize_and_true_after() {
     let env = Env::default();
     env.mock_all_auths();
