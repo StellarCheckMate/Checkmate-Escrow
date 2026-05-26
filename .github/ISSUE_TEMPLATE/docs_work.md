@@ -1,20 +1,44 @@
 ---
 name: "📚 Documentation Work"
-about: "Improve documentation, guides, inline comments, or specifications."
+about: "Improve documentation, architectural guides, inline comments, or specifications."
 title: "Docs: [Short description of the documentation task]"
 labels: ["documentation"]
 assignees: ""
 ---
 
-### Description
-Describe the updates needed, highlighting which guides, README files, or inline comments require changes.
+# 📚 Documentation Work
 
-### Target Scope
-- [ ] Project documentation (`README.md` / `CONTRIBUTING.md`)
-- [ ] Architecture and security guides (`docs/`)
-- [ ] Inline contract code documentation (Rust doc-comments)
+> [!NOTE]
+> Clear, comprehensive documentation makes contributing to Checkmate-Escrow easier for everyone.
 
-### Tasks
-- [ ] Write the updated documentation and inline code comments
-- [ ] Review documentation for clarity and correctness
-- [ ] Verify all links, layout formatting, and markdown render correctly
+---
+
+### 📝 Documentation Objective
+*Describe the updates needed, why they are necessary, and who the target audience is (e.g., external developers, integrators, or project operators).*
+
+---
+
+### 🗂️ Target Scope
+- [ ] **General Workspace:** `README.md` / `CONTRIBUTING.md`
+- [ ] **Architecture Design:** `docs/architecture.md`
+- [ ] **Security & Audits:** `docs/security.md`
+- [ ] **Oracle Integration:** `docs/oracle.md`
+- [ ] **Funding Guide:** `docs/wave-guide.md`
+- [ ] **API References:** Rust docstrings (`///`) inside contract code
+
+---
+
+### 🖋️ Key Content Requirements
+*List the new sections, diagrams (like Mermaid flowcharts), or command updates to add:*
+- 
+- 
+- 
+
+---
+
+### 📋 Checklist & Tasks
+- [ ] **Draft:** Write the updated documentation or code comments
+- [ ] **Assets:** Add code blocks, CLI configuration examples, or flow diagrams where helpful
+- [ ] **Integrity:** Verify that all markdown links, anchors, and images resolve correctly
+- [ ] **Format:** Review formatting and spelling for complete clarity and readability
+- [ ] **Validate:** Confirm that all command-line instructions have been verified locally
