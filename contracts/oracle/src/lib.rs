@@ -82,6 +82,7 @@ impl OracleContract {
             &ResultEntry {
                 game_id,
                 result: result.clone(),
+                submitter: admin.clone(),
             },
         );
         env.storage().persistent().extend_ttl(
@@ -395,6 +396,18 @@ mod tests {
         assert!(client.has_result(&0u64));
         let entry = client.get_result(&0u64);
         assert_eq!(entry.result, Winner::Player1);
+    }
+
+    /// Issue #564 — ResultEntry must record the admin address that submitted the result.
+    #[test]
+    fn test_submit_result_stores_submitter() {
+        let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.submitter, oracle_admin);
     }
 
     #[test]
