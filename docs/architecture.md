@@ -8,7 +8,7 @@ Checkmate-Escrow is a trustless chess wagering platform built on Stellar Soroban
 ┌─────────────┐     create/deposit/cancel     ┌──────────────────┐
 │   Players   │ ─────────────────────────────▶│  Escrow Contract │
 └─────────────┘                               └────────┬─────────┘
-                                                       │ submit_result / execute_payout
+                                                       │ submit_result (payout inline)
 ┌─────────────┐     verify game result                 │
 │   Oracle    │ ─────────────────────────────▶─────────┘
 └─────────────┘
@@ -115,6 +115,49 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `submit_result` | `(match_id: u64, winner: Winner)` | Oracle submits the verified match result. |
-| `verify_result` | `(match_id: u64) -> bool` | Returns `true` if a result has been submitted. |
-| `execute_payout` | `(match_id: u64)` | Transfers escrowed funds to the winner (or refunds on draw). |
+| `submit_result` | `(match_id: u64, winner: Winner)` | Oracle submits the verified match result. Payout (or draw refund) is executed atomically in the same transaction — there are no separate `verify_result` or `execute_payout` functions. |
+
+#### Read Indexes
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `get_player_matches` | `(player: Address) -> Vec<u64>` | Returns all match IDs (past and present) for a player. |
+| `get_active_matches` | `() -> Vec<u64>` | Returns match IDs currently in `Pending` or `Active` state. |
+
+## Index Behavior, TTL Caveats, and Pagination
+
+### Player-Match Index (`get_player_matches`)
+
+`get_player_matches` reads a `Vec<u64>` stored under `DataKey::PlayerMatches(player)` in persistent storage. The index is append-only: a match ID is added when `create_match` is called and is **never removed**, regardless of the match outcome. This means:
+
+- The list grows monotonically over a player's lifetime.
+- It includes `Completed` and `Cancelled` matches as well as live ones.
+- To determine a match's current state, call `get_match(match_id)` for each ID.
+
+### Active-Match Index (`get_active_matches`)
+
+`get_active_matches` reads `DataKey::ActiveMatches` from persistent storage. A match ID is added on `create_match` and removed when the match transitions to `Completed` or `Cancelled`. This index therefore reflects only live matches (`Pending` or `Active` state) at the time of the call.
+
+> **Caveat:** Because the index is stored in persistent storage and updated by separate transactions, there is a brief window where a match may appear in the active index after its terminal transition has been committed but before the index write has been confirmed. Treat `get_active_matches` as a best-effort snapshot and always verify state with `get_match` before acting on a result.
+
+### TTL Caveats
+
+Both indexes are stored in **persistent storage** with a TTL of `MATCH_TTL_LEDGERS` (~30 days at 5 s/ledger). The TTL is extended each time the index entry is written (on `create_match`, `submit_result`, `cancel_match`, `expire_match`). However:
+
+- If no matches are created or resolved for a player for ~30 days, `PlayerMatches` for that player may expire and `get_player_matches` will return an empty list.
+- `ActiveMatches` is refreshed on every match state change, so it is unlikely to expire on an active deployment.
+- Individual `Match` records in persistent storage follow the same ~30-day TTL and are extended on every write to that match.
+
+Off-chain indexers should not rely solely on these on-chain indexes for long-term history. Subscribe to contract events (`match.created`, `match.result`, `match.cancelled`) for a durable record.
+
+### Pagination
+
+Neither `get_player_matches` nor `get_active_matches` supports server-side pagination — both return the full `Vec<u64>` in a single call. For deployments with a large number of matches, apply client-side slicing:
+
+```rust
+// Example: fetch page of 20 starting at offset 40
+let all_ids = client.get_player_matches(&player);
+let page: Vec<u64> = all_ids.iter().skip(40).take(20).collect();
+```
+
+If on-chain pagination becomes necessary, the recommended approach is to introduce a `get_player_matches_page(player, offset, limit)` function that reads the stored `Vec` and returns a slice — avoiding the need to change the storage layout.
