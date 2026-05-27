@@ -653,6 +653,11 @@ impl EscrowContract {
     }
 
     /// Set the match expiry timeout in ledgers. Requires admin auth.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the admin.
+    /// - [`Error::InvalidTimeout`] — `ledgers` is zero.
+    /// - [`Error::TimeoutTooLarge`] — `ledgers` exceeds `MATCH_TTL_LEDGERS`.
     pub fn set_match_timeout(env: Env, ledgers: u32) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -660,6 +665,12 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+        if ledgers == 0 {
+            return Err(Error::InvalidTimeout);
+        }
+        if ledgers > MATCH_TTL_LEDGERS {
+            return Err(Error::TimeoutTooLarge);
+        }
         env.storage()
             .instance()
             .set(&DataKey::MatchTimeout, &ledgers);

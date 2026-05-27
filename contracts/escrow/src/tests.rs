@@ -2681,3 +2681,147 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     assert_eq!(token_client.balance(&player1) - p1_balance_before, 100);
     assert_eq!(token_client.balance(&player2) - p2_balance_before, 100);
 }
+
+// ── Task #1: expire_match emits ("match", "expired") with match_id payload ──
+#[test]
+fn test_expire_match_emits_expired_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_event_game"),
+        &Platform::Lichess,
+    );
+
+    // Extend TTLs so storage survives the ledger jump
+    for addr in [&contract_id, &token] {
+        env.deployer()
+            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer()
+            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    }
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+
+    // Advance past the default timeout
+    env.ledger().set_sequence_number(100 + DEFAULT_MATCH_TIMEOUT_LEDGERS);
+
+    for addr in [&contract_id, &token] {
+        env.deployer()
+            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer()
+            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    }
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+
+    client.expire_match(&id);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("expired").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match expired event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+}
+
+// ── Task #2: lowering timeout after match creation affects expiry immediately ─
+#[test]
+fn test_lowering_timeout_after_match_creation_affects_expiry_immediately() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "lower_timeout_game"),
+        &Platform::Lichess,
+    );
+
+    // Advance to a point that is past a short timeout (500 ledgers) but well
+    // before the default timeout (17_280 ledgers).
+    let short_timeout: u32 = 500;
+
+    // Extend TTLs so storage survives the ledger jump
+    for addr in [&contract_id, &token] {
+        env.deployer()
+            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer()
+            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    }
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+
+    env.ledger().set_sequence_number(100 + short_timeout);
+
+    for addr in [&contract_id, &token] {
+        env.deployer()
+            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer()
+            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    }
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+
+    // Before lowering the timeout, expire_match must fail (default 17_280 not elapsed).
+    let result = client.try_expire_match(&id);
+    assert_eq!(result, Err(Ok(Error::MatchNotExpired)));
+
+    // Admin lowers the timeout to 500 ledgers — now the match is already past it.
+    client.set_match_timeout(&short_timeout);
+    assert_eq!(client.get_match_timeout(), short_timeout);
+
+    // expire_match must now succeed because elapsed >= new timeout.
+    client.expire_match(&id);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
+// ── Task #3: set_match_timeout with max u32 returns TimeoutTooLarge ──────────
+#[test]
+fn test_set_match_timeout_max_u32_returns_timeout_too_large() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_set_match_timeout(&u32::MAX);
+    assert_eq!(result, Err(Ok(Error::TimeoutTooLarge)));
+}
+
+// ── Task #4: set_match_timeout(0) returns InvalidTimeout ─────────────────────
+#[test]
+fn test_set_match_timeout_zero_returns_invalid_timeout() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_set_match_timeout(&0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidTimeout)));
+}
