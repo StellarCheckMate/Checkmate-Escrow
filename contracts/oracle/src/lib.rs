@@ -82,6 +82,7 @@ impl OracleContract {
             &ResultEntry {
                 game_id,
                 result: result.clone(),
+                submitted_ledger: env.ledger().sequence(),
             },
         );
         env.storage().persistent().extend_ttl(
@@ -400,6 +401,22 @@ mod tests {
         assert!(client.has_result(&0u64));
         let entry = client.get_result(&0u64);
         assert_eq!(entry.result, Winner::Player1);
+    }
+
+    /// Issue #563 — ResultEntry must record the ledger at which the result was submitted.
+    #[test]
+    fn test_submit_result_stores_submitted_ledger() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        let ledger_before = env.ledger().sequence();
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+
+        let entry = client.get_result(&0u64);
+        assert!(
+            entry.submitted_ledger >= ledger_before,
+            "submitted_ledger must be >= ledger at call time"
+        );
     }
 
     #[test]
