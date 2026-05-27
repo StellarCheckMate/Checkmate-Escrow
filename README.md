@@ -129,9 +129,9 @@ is_funded(match_id) -> bool
 
 ```
 submit_result(match_id, winner)
-verify_result(match_id) -> bool
-execute_payout(match_id)
 ```
+
+`submit_result` is called by the trusted oracle address. It verifies the caller, records the winner, and immediately executes the payout (or refund on draw) in a single transaction. There are no separate `verify_result` or `execute_payout` functions.
 
 ## 🧪 Testing
 
