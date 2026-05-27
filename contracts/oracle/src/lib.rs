@@ -149,7 +149,22 @@ impl OracleContract {
     }
 
     /// Admin removes a previously submitted result from persistent storage.
+    ///
+    /// # Errors
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
+    /// - [`Error::ResultNotFound`] — no result exists for `match_id`.
     pub fn delete_result(env: Env, match_id: u64) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
         let admin: Address = env
             .storage()
             .instance()
@@ -779,6 +794,31 @@ mod tests {
 
         let result = client.try_delete_result(&999u64);
         assert_eq!(result, Err(Ok(Error::ResultNotFound)));
+    }
+
+    /// Test that delete_result is blocked when the contract is paused.
+    #[test]
+    fn test_delete_result_blocked_when_paused() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Submit a result so there is something to delete
+        client.submit_result(
+            &0u64,
+            &String::from_str(&env, "chess_game_99"),
+            &Winner::Player2,
+        );
+        assert!(client.has_result(&0u64));
+
+        // Pause the contract
+        client.pause();
+
+        // Attempt delete_result — must be blocked
+        let result = client.try_delete_result(&0u64);
+        assert_eq!(result, Err(Ok(Error::ContractPaused)));
+
+        // Result must still exist
+        assert!(client.has_result(&0u64));
     }
 
     #[test]
