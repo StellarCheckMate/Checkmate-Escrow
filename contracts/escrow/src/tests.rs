@@ -2681,3 +2681,68 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     assert_eq!(token_client.balance(&player1) - p1_balance_before, 100);
     assert_eq!(token_client.balance(&player2) - p2_balance_before, 100);
 }
+
+/// Issue #567 — game_id must be released after cancel so the same ID can be reused.
+#[test]
+fn test_game_id_released_after_cancel() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "rematch_game");
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+    client.cancel_match(&id, &player1);
+
+    // Same game_id must be accepted for a new match after cancellation
+    let id2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+    assert_ne!(id, id2);
+}
+
+/// Issue #567 — game_id must be released after expire so the same ID can be reused.
+#[test]
+fn test_game_id_released_after_expire() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "expired_game");
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+
+    // Advance ledger past the default timeout (17_280 ledgers)
+    env.ledger().with_mut(|li| {
+        li.sequence_number += 17_281;
+    });
+    client.expire_match(&id);
+
+    // Same game_id must be accepted for a new match after expiry
+    let id2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+    assert_ne!(id, id2);
+}
