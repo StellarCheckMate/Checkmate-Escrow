@@ -133,6 +133,63 @@ cargo test -p oracle
 - Mock external dependencies
 - Verify events are emitted correctly
 
+## Issue Labels
+
+We use labels to categorize issues and help contributors find the right work to pick up.
+
+### Type Labels
+
+| Label | Meaning |
+|---|---|
+| `bug` | Something is broken or behaving incorrectly |
+| `feature` | A new capability or enhancement to add |
+| `documentation` | Additions or improvements to docs, guides, or comments |
+| `refactor` | Code restructuring with no behaviour change |
+| `test` | Missing or improved test coverage |
+| `security` | Security-related fixes or hardening |
+| `community` | Contributor experience, onboarding, or governance |
+
+### Status Labels
+
+| Label | Meaning |
+|---|---|
+| `wave-ready` | Funded issue eligible for Drips Wave rewards |
+| `good-first-issue` | Suitable for first-time contributors |
+| `help-wanted` | Maintainers welcome outside contributions |
+| `in-progress` | Actively being worked on |
+| `blocked` | Waiting on another issue or external dependency |
+| `wont-fix` | Out of scope or intentionally not addressed |
+
+### Priority Labels
+
+| Label | Meaning |
+|---|---|
+| `priority: critical` | Breaks core functionality; must be fixed immediately |
+| `priority: high` | Important for the next release; address soon |
+| `priority: medium` | Should be addressed but not urgently blocking |
+| `priority: low` | Nice to have; address when bandwidth allows |
+
+---
+
+## Issue Sizing and Complexity
+
+Issues are sized to reflect the effort and complexity involved. This maps directly to Drips Wave point values.
+
+| Size | Points | What it typically involves |
+|---|---|---|
+| `trivial` | 100 pts | Documentation updates, typo fixes, adding simple tests, minor config changes |
+| `medium` | 150 pts | Oracle helper functions, input validation logic, moderate feature additions |
+| `high` | 200 pts | Core escrow logic, Oracle integrations, security enhancements, architectural changes |
+
+### Sizing Guidelines for Contributors
+
+- If you think an issue is mis-sized, leave a comment explaining why — maintainers will adjust
+- Do not start work on an issue without being assigned; comment to request assignment
+- Trivial issues should be completable in a single focused session
+- High complexity issues may require back-and-forth with maintainers before and during implementation
+
+---
+
 ## Drips Wave Contributions
 
 Checkmate-Escrow participates in Drips Wave contributor funding. Issues labeled `wave-ready` are eligible for funding:
