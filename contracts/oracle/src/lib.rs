@@ -82,6 +82,8 @@ impl OracleContract {
             &ResultEntry {
                 game_id,
                 result: result.clone(),
+                submitted_ledger: env.ledger().sequence(),
+                submitter: admin.clone(),
             },
         );
         env.storage().persistent().extend_ttl(
@@ -168,6 +170,7 @@ impl OracleContract {
     }
 
     /// Rotate the admin to a new address. Requires current admin auth.
+    /// Emits an `admin / admin_rot` event with `(old_admin, new_admin)`.
     ///
     /// # Errors
     /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the current admin.
@@ -180,6 +183,10 @@ impl OracleContract {
             .ok_or(Error::Unauthorized)?;
         current_admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("admin_rot")),
+            (current_admin, new_admin),
+        );
         Ok(())
     }
 
@@ -395,6 +402,34 @@ mod tests {
         assert!(client.has_result(&0u64));
         let entry = client.get_result(&0u64);
         assert_eq!(entry.result, Winner::Player1);
+    }
+
+    /// Issue #563 — ResultEntry must record the ledger at which the result was submitted.
+    #[test]
+    fn test_submit_result_stores_submitted_ledger() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        let ledger_before = env.ledger().sequence();
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+
+        let entry = client.get_result(&0u64);
+        assert!(
+            entry.submitted_ledger >= ledger_before,
+            "submitted_ledger must be >= ledger at call time"
+        );
+    }
+
+    /// Issue #564 — ResultEntry must record the admin address that submitted the result.
+    #[test]
+    fn test_submit_result_stores_submitter() {
+        let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+
+        let entry = client.get_result(&0u64);
+        assert_eq!(entry.submitter, oracle_admin);
     }
 
     #[test]
@@ -866,5 +901,32 @@ mod tests {
         );
         let entry = client.get_result(&0u64);
         assert_eq!(entry.result, Winner::Player1);
+    }
+
+    /// Issue #559 — update_admin must emit an admin_rot event with old and new admin.
+    #[test]
+    fn test_update_admin_emits_rotation_event() {
+        let (env, contract_id, _escrow_id, old_admin, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        let new_admin = Address::generate(&env);
+        client.update_admin(&new_admin);
+
+        let events = env.events().all();
+        let expected_topics = soroban_sdk::vec![
+            &env,
+            Symbol::new(&env, "admin").into_val(&env),
+            symbol_short!("admin_rot").into_val(&env),
+        ];
+        let matched = events
+            .iter()
+            .find(|(_, topics, _)| *topics == expected_topics);
+        assert!(matched.is_some(), "admin_rot event not emitted");
+
+        let (_, _, data) = matched.unwrap();
+        let (ev_old, ev_new): (Address, Address) =
+            soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+        assert_eq!(ev_old, old_admin);
+        assert_eq!(ev_new, new_admin);
     }
 }
