@@ -3,7 +3,8 @@ extern crate std;
 use super::*;
 use soroban_sdk::{
     testutils::{
-        storage::Persistent as _, Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke,
+        storage::{Instance as _, Persistent as _},
+        Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke,
     },
     token::{Client as TokenClient, StellarAssetClient},
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
@@ -2680,4 +2681,36 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     // Both players must be fully refunded
     assert_eq!(token_client.balance(&player1) - p1_balance_before, 100);
     assert_eq!(token_client.balance(&player2) - p2_balance_before, 100);
+}
+
+#[test]
+fn test_instance_ttl_refreshed_after_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_deposit_instance"),
+        &Platform::Lichess,
+    );
+
+    // Advance ledger so instance TTL would have decreased without an extend
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
+    client.deposit(&id, &player1);
+
+    let ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
