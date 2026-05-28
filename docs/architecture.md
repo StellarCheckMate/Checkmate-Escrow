@@ -8,7 +8,7 @@ Checkmate-Escrow is a trustless chess wagering platform built on Stellar Soroban
 ┌─────────────┐     create/deposit/cancel     ┌──────────────────┐
 │   Players   │ ─────────────────────────────▶│  Escrow Contract │
 └─────────────┘                               └────────┬─────────┘
-                                                       │ submit_result (payout inline)
+                                                       │ submit_result
 ┌─────────────┐     verify game result                 │
 │   Oracle    │ ─────────────────────────────▶─────────┘
 └─────────────┘
@@ -99,7 +99,7 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `create_match` | `(stake_amount: i128, token: Address, game_id: String, platform: Platform) -> u64` | Creates a new match and returns its ID. |
+| `create_match` | `(player1: Address, player2: Address, stake_amount: i128, token: Address, game_id: String, platform: Platform) -> u64` | Creates a new match and returns its ID. |
 | `get_match` | `(match_id: u64) -> Match` | Returns the current state of a match. |
 | `cancel_match` | `(match_id: u64)` | Cancels a match and refunds any deposits. |
 
@@ -115,6 +115,7 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
+
 | `submit_result` | `(match_id: u64, winner: Winner)` | Oracle submits the verified match result. Payout (or draw refund) is executed atomically in the same transaction — there are no separate `verify_result` or `execute_payout` functions. |
 
 #### Read Indexes
@@ -161,3 +162,5 @@ let page: Vec<u64> = all_ids.iter().skip(40).take(20).collect();
 ```
 
 If on-chain pagination becomes necessary, the recommended approach is to introduce a `get_player_matches_page(player, offset, limit)` function that reads the stored `Vec` and returns a slice — avoiding the need to change the storage layout.
+| `submit_result` | `(match_id: u64, winner: Winner)` | Oracle submits the verified match result and executes payout atomically. |
+
