@@ -85,6 +85,40 @@ oracle_client.submit_result(&match_id, &game_id, &MatchResult::Player1Wins);
 
 ---
 
+## Result Deletion Policy (`delete_result`)
+
+The oracle contract exposes a `delete_result` function that allows the admin to remove a previously submitted result from persistent storage:
+
+```rust
+oracle_client.delete_result(&match_id); // → Result<(), Error>
+```
+
+### Why it exists
+
+On-chain persistent storage has a finite TTL (~30 days). In normal operation results expire naturally. `delete_result` exists for two narrow operational cases:
+
+1. **Erroneous submission** — the oracle submitted a result for the wrong `match_id` (e.g., due to a bug or misconfiguration) before the escrow payout was triggered. Deletion allows the correct result to be re-submitted.
+2. **Storage reclamation** — proactively freeing storage rent for results that are no longer needed (e.g., after a dispute is fully resolved off-chain).
+
+### Trust assumptions and risks
+
+`delete_result` is an admin-only operation and is **blocked while the contract is paused**. Despite these guards, deletion carries meaningful trust implications:
+
+| Risk | Detail |
+|------|--------|
+| Audit trail removal | Deleting a result removes the on-chain record of that outcome. Anyone relying solely on `get_result` for historical verification will see `ResultNotFound` after deletion. |
+| Re-submission after deletion | Once deleted, a new result can be submitted for the same `match_id`. A compromised or malicious admin could use this to alter the apparent outcome of a match. |
+| Payout already executed | If the escrow payout has already been triggered by `submit_result`, deleting the oracle record does not reverse the payout. The escrow contract state is independent. |
+
+### Expected operational use
+
+- **Do not** use `delete_result` as routine cleanup. Results should be left to expire naturally via TTL.
+- **Do** use it only to correct a demonstrably erroneous submission, and only before the corresponding escrow `submit_result` has been called.
+- Any deletion should be logged off-chain (e.g., via the admin's operational runbook) since the on-chain event record will no longer contain the original submission after deletion.
+- In production, admin keys should be held in a multi-sig wallet so that deletion requires multiple approvals, reducing the risk of unilateral misuse.
+
+---
+
 ## has_result vs has_result_admin
 
 The oracle contract exposes two ways to check whether a result has been
