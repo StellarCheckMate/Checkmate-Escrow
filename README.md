@@ -1,6 +1,6 @@
 # Checkmate-Escrow — Competitive Chess Betting on Stellar
 
-A trustless chess wagering platform built on Stellar Soroban smart contracts. Players stake XLM or USDC before a match, and the winner is automatically paid out the moment the game ends — no middleman, no delays, no trust required.
+A trustless chess wagering platform built on Stellar Soroban smart contracts. Players stake tokens before a match, and the winner is automatically paid out the moment the game ends — no middleman, no delays, no trust required.
 
 
 ## 🎯 What is Checkmate-Escrow?
@@ -9,7 +9,7 @@ Checkmate-Escrow combines competitive chess with Stellar's fast settlement to cr
 
 Players:
 
-- Stake XLM or USDC into a Soroban escrow contract before a match begins
+- Stake tokens into a Soroban escrow contract before a match begins
 - Play their game on Lichess or Chess.com as normal
 - Receive automatic payouts the instant the match result is verified on-chain
 
@@ -24,12 +24,46 @@ This makes Checkmate-Escrow:
 
 ## 🚀 Features
 
-- **Create a Match**: Set stake amount, currency (XLM or USDC), and link a Lichess/Chess.com game ID
+- **Create a Match**: Set stake amount, token address, and link a Lichess/Chess.com game ID
+- **Flexible Token Support**: Any Stellar token address is accepted by default; once the admin adds at least one token via `add_allowed_token`, only allowlisted tokens are accepted for new matches
 - **Escrow Stakes**: Both players deposit funds into the contract before the game starts
 - **Oracle Integration**: Real-time result verification via Lichess/Chess.com APIs
 - **Automatic Payouts**: Winner receives the full pot the moment the result is confirmed
 - **Draw Handling**: Stakes are returned to both players in the event of a draw
+- **Admin Controls**: Pause/unpause, oracle rotation, admin transfer, and match timeout configuration
 - **Transparent**: All escrow balances and payout history are verifiable on-chain
+
+## 🗺️ Match Lifecycle
+
+Matches move through the following states:
+
+```
+Pending ──► Active ──► Completed
+   │                       ▲
+   └──► Cancelled ◄─────────
+         (expire_match / cancel_match)
+```
+
+| State       | Description                                              |
+|-------------|----------------------------------------------------------|
+| `Pending`   | Match created; awaiting deposits from both players       |
+| `Active`    | Both players have deposited; game is in progress         |
+| `Completed` | Oracle submitted result; payout executed                 |
+| `Cancelled` | Cancelled before activation, or expired after timeout    |
+
+### Events Reference
+
+| Topic (namespace / name)  | Emitted by          | Payload                                      |
+|---------------------------|---------------------|----------------------------------------------|
+| `escrow` / `init`         | `initialize`        | `(oracle_address, admin_address)`            |
+| `admin` / `paused`        | `pause`             | `()`                                         |
+| `admin` / `unpaused`      | `unpause`           | `()`                                         |
+| `admin` / `oracle_up`     | `update_oracle`     | `(old_oracle, new_oracle)`                   |
+| `admin` / `xfer`          | `transfer_admin`    | `(old_admin, new_admin)`                     |
+| `match` / `created`       | `create_match`      | `(match_id, player1, player2, stake_amount)` |
+| `match` / `completed`     | `submit_result`     | `(match_id, winner)`                         |
+| `match` / `cancelled`     | `cancel_match`      | `match_id`                                   |
+| `match` / `expired`       | `expire_match`      | `match_id`                                   |
 
 ## 🛠️ Quick Start
 
@@ -106,24 +140,45 @@ Follow the step-by-step guide in `demo/demo-script.md`
 - [Oracle Design](docs/oracle.md)
 - [Threat Model & Security](docs/security.md)
 - [Roadmap](docs/roadmap.md)
+- [Deployment Guide](docs/deployment.md)
 
 ## 🎓 Smart Contract API
 
 ### Match Management
 
 ```
-create_match(stake_amount, token, game_id, platform) -> u64
+create_match(player1, player2, stake_amount, token, game_id, platform) -> u64
 get_match(match_id) -> Match
-cancel_match(match_id)
+cancel_match(match_id, caller)
+expire_match(match_id)
+get_player_matches(player) -> Vec<u64>
+get_active_matches() -> Vec<u64>
 ```
 
 ### Escrow
 
 ```
-deposit(match_id)
-get_escrow_balance(match_id) -> i128
+deposit(match_id, player)
 is_funded(match_id) -> bool
+get_escrow_balance(match_id) -> i128
 ```
+
+#### `is_funded` vs `get_escrow_balance`
+
+These two functions answer different questions and are easy to confuse:
+
+- **`is_funded(match_id)`** — returns `true` only when *both* players have deposited their stake (i.e. the match has transitioned to `Active`). It reflects deposit flags, not token balances. Use this to gate game-start logic.
+
+- **`get_escrow_balance(match_id)`** — returns the total token amount currently held in escrow for the match: `0`, `1×stake`, or `2×stake` depending on how many players have deposited. Once a match is `Completed` or `Cancelled` (funds already paid out or refunded), this always returns `0` regardless of on-chain token balances.
+
+Examples:
+
+| Scenario                              | `is_funded` | `get_escrow_balance` |
+|---------------------------------------|-------------|----------------------|
+| Only player1 deposited                | `false`     | `1 × stake_amount`   |
+| Both players deposited (Active)       | `true`      | `2 × stake_amount`   |
+| Match completed (payout done)         | `true`      | `0`                  |
+| Match cancelled (refunds done)        | `false`     | `0`                  |
 
 ### Oracle & Payouts
 
@@ -131,6 +186,73 @@ is_funded(match_id) -> bool
 submit_result(match_id, winner)
 verify_result(match_id) -> bool
 execute_payout(match_id)
+```
+
+### Token Allowlist
+
+The contract uses a lazy allowlist model:
+
+- **Before any token is added**: any valid Stellar token address is accepted in `create_match`.
+- **Once the admin calls `add_allowed_token` for the first time**: the allowlist is activated and only explicitly approved token addresses are accepted for new matches.
+
+```
+add_allowed_token(token)   # admin only — also activates the allowlist
+```
+
+This means deployers can start permissionlessly and lock down accepted tokens later without a contract upgrade.
+
+### Admin & Oracle Governance
+
+The following operations are restricted to the admin address and are used to operate and maintain the contract after deployment.
+
+#### Pause / Unpause
+
+Blocks `create_match`, `deposit`, and `submit_result` while paused. Use during incidents or upgrades.
+
+```
+pause()     # admin only
+unpause()   # admin only
+is_paused() -> bool
+```
+
+#### Oracle Rotation
+
+Replace the trusted oracle address. The old oracle immediately loses the ability to submit results.
+
+```
+update_oracle(new_oracle)   # admin only
+get_oracle() -> Address
+```
+
+#### Admin Transfer
+
+Two patterns are supported:
+
+**Immediate transfer** — current admin transfers rights directly:
+```
+transfer_admin(new_admin)   # admin only — takes effect immediately
+```
+
+**Two-step transfer** — safer for multisig or DAO handoffs:
+```
+propose_admin(new_admin)    # admin only — nominates a new admin
+accept_admin()              # must be called by the nominated address
+```
+
+#### Match Timeout
+
+Controls how long a `Pending` match can sit before anyone can call `expire_match` to cancel it and refund deposits. Default is ~24 hours (17,280 ledgers at 5 s/ledger).
+
+```
+set_match_timeout(ledgers)      # admin only
+get_match_timeout() -> u32
+expire_match(match_id)          # callable by anyone after timeout elapses
+```
+
+#### Read Admin
+
+```
+get_admin() -> Address
 ```
 
 ## 🧪 Testing
@@ -172,8 +294,8 @@ cargo test
 
 ## 🗺️ Roadmap
 
-- **v1.0 (Current)**: XLM-only escrow, Lichess Oracle integration, basic match flow
-- **v1.1**: USDC and custom token support, Chess.com Oracle
+- **v1.0 (Current)**: Token-allowlist escrow, Lichess Oracle integration, basic match flow
+- **v1.1**: Chess.com Oracle, expanded token support
 - **v2.0**: Multi-game tournaments, bracket payouts
 - **v3.0**: Frontend UI with wallet integration
 - **v4.0**: Mobile app, ELO-based matchmaking, leaderboards

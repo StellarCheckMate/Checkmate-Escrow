@@ -23,5 +23,37 @@ Thumbs.db
 # Wasm build output
 *.wasm
 
-# Lock file (optional — remove if you want to commit it)
-# Cargo.lock
+# Node / frontend
+node_modules/
+dist/
+.next/
+.nuxt/
+
+# Temporary / misc
+*.tmp
+*.bak
+*.swp
+*~
+
+# Soroban / Stellar CLI cache
+.soroban/
+
+# Rust incremental compilation cache
+**/*.d
+**/*.rlib
+**/*.rmeta
+
+# Coverage reports
+lcov.info
+coverage/
+tarpaulin-report.html
+
+# Profiling
+perf.data
+perf.data.old
+flamegraph.svg
+
+# Lock files for non-Rust package managers (keep Cargo.lock)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
