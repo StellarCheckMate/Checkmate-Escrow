@@ -184,76 +184,11 @@ Examples:
 
 ```
 submit_result(match_id, winner)
-verify_result(match_id) -> bool
-execute_payout(match_id)
+has_result(match_id) -> bool
+get_result(match_id) -> ResultEntry
 ```
 
-### Token Allowlist
-
-The contract uses a lazy allowlist model:
-
-- **Before any token is added**: any valid Stellar token address is accepted in `create_match`.
-- **Once the admin calls `add_allowed_token` for the first time**: the allowlist is activated and only explicitly approved token addresses are accepted for new matches.
-
-```
-add_allowed_token(token)   # admin only — also activates the allowlist
-```
-
-This means deployers can start permissionlessly and lock down accepted tokens later without a contract upgrade.
-
-### Admin & Oracle Governance
-
-The following operations are restricted to the admin address and are used to operate and maintain the contract after deployment.
-
-#### Pause / Unpause
-
-Blocks `create_match`, `deposit`, and `submit_result` while paused. Use during incidents or upgrades.
-
-```
-pause()     # admin only
-unpause()   # admin only
-is_paused() -> bool
-```
-
-#### Oracle Rotation
-
-Replace the trusted oracle address. The old oracle immediately loses the ability to submit results.
-
-```
-update_oracle(new_oracle)   # admin only
-get_oracle() -> Address
-```
-
-#### Admin Transfer
-
-Two patterns are supported:
-
-**Immediate transfer** — current admin transfers rights directly:
-```
-transfer_admin(new_admin)   # admin only — takes effect immediately
-```
-
-**Two-step transfer** — safer for multisig or DAO handoffs:
-```
-propose_admin(new_admin)    # admin only — nominates a new admin
-accept_admin()              # must be called by the nominated address
-```
-
-#### Match Timeout
-
-Controls how long a `Pending` match can sit before anyone can call `expire_match` to cancel it and refund deposits. Default is ~24 hours (17,280 ledgers at 5 s/ledger).
-
-```
-set_match_timeout(ledgers)      # admin only
-get_match_timeout() -> u32
-expire_match(match_id)          # callable by anyone after timeout elapses
-```
-
-#### Read Admin
-
-```
-get_admin() -> Address
-```
+`submit_result` is called by the trusted oracle address. It verifies the caller, records the winner, and immediately executes the payout (or refund on draw) in a single transaction. There are no separate `verify_result` or `execute_payout` functions.
 
 ## 🧪 Testing
 
