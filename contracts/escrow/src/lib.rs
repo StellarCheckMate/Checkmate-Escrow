@@ -451,6 +451,11 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Release game_id so it can be reused in a rematch
+        env.storage()
+            .persistent()
+            .remove(&DataKey::GameId(m.game_id.clone()));
+
         // Remove from active match index
         Self::remove_from_active(&env, match_id);
 
@@ -586,6 +591,11 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+
+        // Release game_id so it can be reused in a rematch
+        env.storage()
+            .persistent()
+            .remove(&DataKey::GameId(m.game_id.clone()));
 
         // Remove from active match index
         Self::remove_from_active(&env, match_id);
