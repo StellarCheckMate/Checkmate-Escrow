@@ -53,9 +53,10 @@ Both contracts have admin addresses with elevated privileges. Compromise of admi
 
 ### Oracle Contract Admin Powers
 
-- **Pause/Unpause**: Can halt result submissions
+- **Pause/Unpause**: Can halt result submissions (and block `delete_result` while paused)
 - **Admin Rotation**: Can change the oracle admin address
 - **Result Submission**: Can submit results directly (bypassing automated oracle)
+- **Result Deletion**: Can remove a stored result via `delete_result`. This is an irreversible on-chain action — see [Result Deletion Policy](oracle.md#result-deletion-policy-delete_result) for risks and expected use.
 
 ### Risk Mitigations
 
