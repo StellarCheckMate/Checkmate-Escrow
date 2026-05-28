@@ -133,62 +133,53 @@ cargo test -p oracle
 - Mock external dependencies
 - Verify events are emitted correctly
 
-## Issue Labels
+### Testing Conventions: Prefer `try_` Over `#[should_panic]`
 
-We use labels to categorize issues and help contributors find the right work to pick up.
+When testing that a contract function returns a specific error, prefer the typed
+`try_` variant over `#[should_panic]`. The `try_` approach asserts the *exact*
+error variant, making failures easier to diagnose and preventing tests from
+accidentally passing due to an unrelated panic.
 
-### Type Labels
+**Avoid** — `#[should_panic]` only checks that *something* panicked:
 
-| Label | Meaning |
-|---|---|
-| `bug` | Something is broken or behaving incorrectly |
-| `feature` | A new capability or enhancement to add |
-| `documentation` | Additions or improvements to docs, guides, or comments |
-| `refactor` | Code restructuring with no behaviour change |
-| `test` | Missing or improved test coverage |
-| `security` | Security-related fixes or hardening |
-| `community` | Contributor experience, onboarding, or governance |
+```rust
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_create_match_with_zero_stake_fails() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
 
-### Status Labels
+    client.create_match(&player1, &player2, &0, &token,
+        &String::from_str(&env, "game"), &Platform::Lichess);
+}
+```
 
-| Label | Meaning |
-|---|---|
-| `wave-ready` | Funded issue eligible for Drips Wave rewards |
-| `good-first-issue` | Suitable for first-time contributors |
-| `help-wanted` | Maintainers welcome outside contributions |
-| `in-progress` | Actively being worked on |
-| `blocked` | Waiting on another issue or external dependency |
-| `wont-fix` | Out of scope or intentionally not addressed |
+**Prefer** — `try_` asserts the exact error variant:
 
-### Priority Labels
+```rust
+#[test]
+fn test_create_match_with_zero_stake_returns_invalid_amount() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
 
-| Label | Meaning |
-|---|---|
-| `priority: critical` | Breaks core functionality; must be fixed immediately |
-| `priority: high` | Important for the next release; address soon |
-| `priority: medium` | Should be addressed but not urgently blocking |
-| `priority: low` | Nice to have; address when bandwidth allows |
+    let result = client.try_create_match(&player1, &player2, &0, &token,
+        &String::from_str(&env, "game"), &Platform::Lichess);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+```
 
----
+Use `#[should_panic]` only for cases where the contract panics with a plain
+string message rather than a typed error (e.g. double-initialization):
 
-## Issue Sizing and Complexity
-
-Issues are sized to reflect the effort and complexity involved. This maps directly to Drips Wave point values.
-
-| Size | Points | What it typically involves |
-|---|---|---|
-| `trivial` | 100 pts | Documentation updates, typo fixes, adding simple tests, minor config changes |
-| `medium` | 150 pts | Oracle helper functions, input validation logic, moderate feature additions |
-| `high` | 200 pts | Core escrow logic, Oracle integrations, security enhancements, architectural changes |
-
-### Sizing Guidelines for Contributors
-
-- If you think an issue is mis-sized, leave a comment explaining why — maintainers will adjust
-- Do not start work on an issue without being assigned; comment to request assignment
-- Trivial issues should be completable in a single focused session
-- High complexity issues may require back-and-forth with maintainers before and during implementation
-
----
+```rust
+#[test]
+#[should_panic(expected = "Contract already initialized")]
+fn test_double_initialize_fails() {
+    // ...
+    client.initialize(&oracle, &admin);
+    client.initialize(&oracle, &admin); // panics with a string, not a typed Error
+}
+```
 
 ## Drips Wave Contributions
 
