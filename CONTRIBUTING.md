@@ -107,6 +107,10 @@ cargo test -p oracle
 - Respond to review comments promptly
 - Squash commits if requested
 
+## Issue Labels
+
+We use a shared label taxonomy to keep issue and PR triage consistent. See [docs/label-taxonomy.md](docs/label-taxonomy.md) for definitions of labels like `good first issue`, `wave-ready`, and `high priority`.
+
 ## Coding Standards
 
 ### Rust Conventions
