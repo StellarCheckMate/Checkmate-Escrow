@@ -106,6 +106,7 @@ Follow the step-by-step guide in `demo/demo-script.md`
 - [Oracle Design](docs/oracle.md)
 - [Threat Model & Security](docs/security.md)
 - [Roadmap](docs/roadmap.md)
+- [Repository Health Checklist](docs/repository-health-checklist.md)
 
 ## 🎓 Smart Contract API
 
