@@ -4,19 +4,33 @@ This document outlines the planned development phases for Checkmate-Escrow, expa
 
 ---
 
-## v1.0 — Core Escrow & Lichess Integration (Current)
+## v1.0 — Core Escrow & Lichess Integration (Complete)
 
 The foundation of trustless chess wagering on Stellar.
 
 ### Features
 
-- **XLM-only escrow**: Players stake native XLM tokens in a Soroban smart contract
-- **Match lifecycle management**: Create, deposit, activate, and complete matches
+- **Multi-token escrow**: Players stake any Stellar token (XLM, USDC, or custom assets) via a generic token interface
+- **Match lifecycle management**: Create, deposit, activate, complete, cancel, and expire matches
 - **Lichess Oracle integration**: Automated result verification via Lichess public API
+- **Chess.com platform support**: `Platform::ChessDotCom` variant supported in match creation
 - **Winner payouts**: Automatic distribution of the full pot to the winner
 - **Draw handling**: Stakes returned to both players when games end in a draw
 - **Cancellation logic**: Players can cancel unfunded matches before both deposits are made
+- **Match expiry**: Pending matches that exceed a configurable ledger timeout can be expired by anyone, refunding any deposits
+- **Token allowlist**: Admin can restrict which tokens are accepted via `add_allowed_token`
+- **Contract pause/unpause**: Admin can halt `create_match`, `deposit`, and `submit_result` in an emergency
+- **Admin management**: Two-step admin transfer (`propose_admin` / `accept_admin`) and direct `transfer_admin`
+- **Match indexing**: `get_player_matches` and `get_active_matches` for efficient on-chain lookups
 - **Basic security**: Admin-gated oracle submission, duplicate game ID prevention
+
+### Oracle Features
+
+- **Result submission**: Admin submits verified match results on-chain
+- **Result queries**: Public `has_result` and admin-gated `has_result_admin`
+- **Result deletion**: Admin can remove a previously submitted result via `delete_result`
+- **Oracle pause/unpause**: Admin can halt result submission independently of the escrow contract
+- **Admin rotation**: `update_admin` rotates the oracle admin address
 
 ### Status
 
@@ -24,24 +38,21 @@ The foundation of trustless chess wagering on Stellar.
 
 ---
 
-## v1.1 — Multi-Token Support & Chess.com
+## v1.1 — Chess.com Oracle & Token Interface Standardization
 
-Expand token support and add a second platform integration.
+Expand the off-chain oracle service to cover Chess.com and standardize the token integration.
 
 ### Features
 
-- **USDC support**: Allow players to stake USDC instead of XLM
-- **Custom token support**: Enable any Stellar asset as stake currency
-- **Chess.com Oracle**: Verify results from Chess.com games via their public API
-- **Platform validation**: Ensure game IDs match the declared platform
-- **Token interface standardization**: Abstract token operations for easier extension
+- **Chess.com Oracle**: Implement the off-chain API client for Chess.com result verification
+- **Platform validation**: Validate that game IDs match the declared platform format (numeric strings for Chess.com)
+- **Token interface documentation**: Document the generic token transfer pattern for integrators
 
 ### Technical Changes
 
-- Add `token_address` parameter to `create_match`
-- Implement generic token transfer logic using Stellar token interface
-- Add Chess.com API client to oracle service
-- Update validation to handle Chess.com game ID format (numeric strings)
+- Add Chess.com API client to the oracle off-chain service
+- Update validation to handle Chess.com game ID format
+- Document token integration patterns
 
 ### Timeline
 

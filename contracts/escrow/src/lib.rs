@@ -222,6 +222,9 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS / 2, MATCH_TTL_LEDGERS);
         // Mark game_id as used
         env.storage()
             .persistent()

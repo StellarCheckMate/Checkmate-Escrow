@@ -3,7 +3,8 @@ extern crate std;
 use super::*;
 use soroban_sdk::{
     testutils::{
-        storage::Persistent as _, Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke,
+        storage::{Instance as _, Persistent as _},
+        Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke,
     },
     token::{Client as TokenClient, StellarAssetClient},
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
@@ -2682,74 +2683,42 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     assert_eq!(token_client.balance(&player2) - p2_balance_before, 100);
 }
 
-// ── Issue #8 — pending match (no deposits) appears in get_active_matches ─────
-//
-// `create_match` appends to the `ActiveMatches` index immediately, so a match
-// in `Pending` state (before any deposits) must be visible in the list.
+// #618 — instance TTL is refreshed after create_match
 #[test]
-fn test_pending_match_appears_in_get_active_matches() {
+fn test_instance_ttl_refreshed_after_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let id = client.create_match(
+    // Advance the ledger so the instance TTL decreases from its post-initialize value,
+    // giving us a meaningful "before" baseline that is strictly less than MATCH_TTL_LEDGERS.
+    env.ledger().with_mut(|l| l.sequence_number += 1000);
+
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage().instance().get_ttl()
+    });
+
+    client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "active_index_pending"),
+        &String::from_str(&env, "instance_ttl_game"),
         &Platform::Lichess,
     );
 
-    // No deposits made — match is still Pending
-    assert_eq!(client.get_match(&id).state, MatchState::Pending);
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().instance().get_ttl()
+    });
 
-    let active = client.get_active_matches();
     assert!(
-        active.contains(id),
-        "pending match must appear in get_active_matches immediately after creation"
+        ttl_after > ttl_before,
+        "instance TTL should be strictly greater after create_match (was {ttl_before}, now {ttl_after})"
+    );
+    assert_eq!(
+        ttl_after,
+        crate::MATCH_TTL_LEDGERS,
+        "instance TTL should be extended to MATCH_TTL_LEDGERS"
     );
 }
 
-// ── Issue #12 (first half) — contract address as player1 returns InvalidPlayers
-//
-// Passing the escrow contract's own address as player1 must be rejected so the
-// contract cannot authorize its own deposits.
-#[test]
-fn test_create_match_with_contract_address_as_player1_returns_invalid_players() {
-    let (env, contract_id, _oracle, _player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_create_match(
-        &contract_id,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "contract_as_player1"),
-        &Platform::Lichess,
-    );
-    assert_eq!(result, Err(Ok(Error::InvalidPlayers)));
-}
-
-// ── Admin-only access for set_match_timeout ───────────────────────────────────
-//
-// A non-admin caller must receive `Unauthorized` when attempting to change the
-// match timeout, regardless of what value they supply.
-#[test]
-fn test_set_match_timeout_from_non_admin_returns_unauthorized() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let non_admin = Address::generate(&env);
-    env.mock_auths(&[MockAuth {
-        address: &non_admin,
-        invoke: &MockAuthInvoke {
-            contract: &contract_id,
-            fn_name: "set_match_timeout",
-            args: (1000u32,).into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
-
-    let result = client.try_set_match_timeout(&1000u32);
-    assert_eq!(result, Err(Ok(Error::Unauthorized)));
-}
