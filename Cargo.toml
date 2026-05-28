@@ -4,6 +4,7 @@ members = [
     "contracts/oracle",
 ]
 resolver = "2"
+license = "MIT"
 
 [workspace.dependencies]
 soroban-sdk = "21.7.5"
