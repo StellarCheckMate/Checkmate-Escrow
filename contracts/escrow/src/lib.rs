@@ -146,6 +146,11 @@ impl EscrowContract {
             return Err(Error::InvalidPlayers);
         }
 
+        let self_addr = env.current_contract_address();
+        if player1 == self_addr || player2 == self_addr {
+            return Err(Error::InvalidPlayers);
+        }
+
         if game_id.is_empty() {
             return Err(Error::InvalidGameId);
         }
