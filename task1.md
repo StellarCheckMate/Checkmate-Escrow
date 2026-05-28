@@ -1,11 +1,14 @@
-# #622 Add Test: active/live index TTL refreshes on append and removal
-[StellarCheckMate/Checkmate-Escrow](https://github.com/StellarCheckMate/Checkmate-Escrow)
+#618 Add Test: escrow instance TTL is refreshed after create_match
+Repo Avatar
+StellarCheckMate/Checkmate-Escrow
+Status: Open - unassigned
+Labels: testing, storage
+Priority: Medium
 
-**Status:** Open - unassigned**Labels:** `testing`, `storage`**Priority:** Low
+Description:
+Coverage for issue #3 should include creation paths.
 
-**Description:**The active/live list should survive both additions and removals over time.
+Tasks:
 
-**Tasks:**
-
-- Create and complete a match
-- Assert index TTL changes on both transitions
+Inspect instance TTL before and after create_match
+Assert refresh
