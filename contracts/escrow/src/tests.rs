@@ -2681,3 +2681,37 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     assert_eq!(token_client.balance(&player1) - p1_balance_before, 100);
     assert_eq!(token_client.balance(&player2) - p2_balance_before, 100);
 }
+
+#[test]
+fn test_remove_allowed_token_last_token_disables_allowlist() {
+    let (env, contract_id, _oracle, _player1, _player2, token_addr, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Add the single token — allowlist becomes enabled
+    client.add_allowed_token(&token_addr);
+
+    // Remove it — allowlist must be disabled
+    client.remove_allowed_token(&token_addr);
+
+    // AllowedToken entry must be gone
+    env.as_contract(&contract_id, || {
+        assert!(!env
+            .storage()
+            .persistent()
+            .has(&DataKey::AllowedToken(token_addr.clone())));
+        // AllowlistEnabled must be false
+        assert!(!env
+            .storage()
+            .instance()
+            .get::<DataKey, bool>(&DataKey::AllowlistEnabled)
+            .unwrap_or(false));
+        // Count must be zero
+        assert_eq!(
+            env.storage()
+                .instance()
+                .get::<DataKey, u32>(&DataKey::AllowedTokenCount)
+                .unwrap_or(0),
+            0
+        );
+    });
+}
