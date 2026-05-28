@@ -55,4 +55,11 @@ pub enum Error {
 
     /// (16) The token address is not on the allowlist.
     InvalidToken = 16,
+
+    /// (17) `set_match_timeout` was called with a value of zero.
+    InvalidTimeout = 17,
+
+    /// (18) `set_match_timeout` was called with a value exceeding the maximum
+    /// allowed timeout (~30 days / `MATCH_TTL_LEDGERS`).
+    TimeoutTooLarge = 18,
 }

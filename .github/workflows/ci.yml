@@ -11,6 +11,22 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  check-links:
+    name: Check Markdown Links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate local Markdown links
+        run: bash scripts/check_links.sh
+
+  check-api-refs:
+    name: Check API References
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate contract API names in docs
+        run: bash scripts/check_api_refs.sh
+
   test:
     name: Test
     runs-on: ubuntu-latest
