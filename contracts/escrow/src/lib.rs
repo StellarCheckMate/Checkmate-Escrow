@@ -146,6 +146,11 @@ impl EscrowContract {
             return Err(Error::InvalidPlayers);
         }
 
+        let self_addr = env.current_contract_address();
+        if player1 == self_addr || player2 == self_addr {
+            return Err(Error::InvalidPlayers);
+        }
+
         if game_id.is_empty() {
             return Err(Error::InvalidGameId);
         }
@@ -217,6 +222,9 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS / 2, MATCH_TTL_LEDGERS);
         // Mark game_id as used
         env.storage()
             .persistent()
@@ -653,6 +661,11 @@ impl EscrowContract {
     }
 
     /// Set the match expiry timeout in ledgers. Requires admin auth.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the admin.
+    /// - [`Error::InvalidTimeout`] — `ledgers` is zero.
+    /// - [`Error::TimeoutTooLarge`] — `ledgers` exceeds `MATCH_TTL_LEDGERS`.
     pub fn set_match_timeout(env: Env, ledgers: u32) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -660,6 +673,12 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+        if ledgers == 0 {
+            return Err(Error::InvalidTimeout);
+        }
+        if ledgers > MATCH_TTL_LEDGERS {
+            return Err(Error::TimeoutTooLarge);
+        }
         env.storage()
             .instance()
             .set(&DataKey::MatchTimeout, &ledgers);

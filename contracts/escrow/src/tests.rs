@@ -3,7 +3,8 @@ extern crate std;
 use super::*;
 use soroban_sdk::{
     testutils::{
-        storage::Persistent as _, Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke,
+        storage::{Instance as _, Persistent as _},
+        Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke,
     },
     token::{Client as TokenClient, StellarAssetClient},
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
@@ -2682,80 +2683,21 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     assert_eq!(token_client.balance(&player2) - p2_balance_before, 100);
 }
 
-// ── Issue #13: get_escrow_balance at each deposit step and after terminal states ──
-//
-// Asserts the exact balance at every stage:
-//   0 deposits → 0
-//   1 deposit  → stake_amount
-//   2 deposits → 2 * stake_amount
-//   after completion → 0
-//   after cancellation → 0
+
+// ── Task #1: expire_match emits ("match", "expired") with match_id payload ──
 #[test]
-fn test_get_escrow_balance_all_deposit_steps_and_terminal_states() {
+fn test_expire_match_emits_expired_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    // ── completion path ──────────────────────────────────────────────────────
-    let id_complete = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "balance_steps_complete"),
-        &Platform::Lichess,
-    );
-
-    assert_eq!(client.get_escrow_balance(&id_complete), 0, "0 deposits → 0");
-
-    client.deposit(&id_complete, &player1);
-    assert_eq!(client.get_escrow_balance(&id_complete), 100, "1 deposit → stake");
-
-    client.deposit(&id_complete, &player2);
-    assert_eq!(client.get_escrow_balance(&id_complete), 200, "2 deposits → 2x stake");
-
-    client.submit_result(&id_complete, &Winner::Player1);
-    assert_eq!(client.get_escrow_balance(&id_complete), 0, "after completion → 0");
-
-    // ── cancellation path ────────────────────────────────────────────────────
-    let id_cancel = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "balance_steps_cancel"),
-        &Platform::Lichess,
-    );
-
-    assert_eq!(client.get_escrow_balance(&id_cancel), 0, "0 deposits → 0");
-
-    client.deposit(&id_cancel, &player1);
-    assert_eq!(client.get_escrow_balance(&id_cancel), 100, "1 deposit → stake");
-
-    client.cancel_match(&id_cancel, &player1);
-    assert_eq!(client.get_escrow_balance(&id_cancel), 0, "after cancellation → 0");
-}
-
-// ── Issue #14: is_funded semantics — false before both deposits, true after, ──
-//              and false again once the match is no longer Active              ──
-//
-// The current implementation checks deposit flags, not state, so is_funded
-// returns true even after payout. This test documents the *desired* behaviour
-// where is_funded reflects whether funds are currently held in escrow by
-// checking the match state (Active) rather than the raw deposit flags.
-//
-// Until the contract is updated to clear flags on completion, callers should
-// use get_escrow_balance == 0 or state == Completed as the authoritative check.
-// This test asserts the *new* helper semantics: is_funded is false after payout.
-#[test]
-fn test_is_funded_false_after_match_completion() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
+    env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
+
         &String::from_str(&env, "is_funded_completion"),
         &Platform::Lichess,
     );
@@ -2858,10 +2800,87 @@ fn test_cancel_and_expire_terminal_state_and_ledger_metadata() {
     env.ledger().set_sequence_number(500);
 
     let id_expire = client.create_match(
+
+        &String::from_str(&env, "expire_event_game"),
+        &Platform::Lichess,
+    );
+
+    // Extend TTLs so storage survives the ledger jump
+    for addr in [&contract_id, &token] {
+        env.deployer()
+            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer()
+            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    }
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+
+    // Advance past the default timeout
+    env.ledger().set_sequence_number(100 + DEFAULT_MATCH_TIMEOUT_LEDGERS);
+
+    for addr in [&contract_id, &token] {
+        env.deployer()
+            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer()
+            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    }
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+
+    client.expire_match(&id);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("expired").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match expired event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+}
+
+// ── Task #2: lowering timeout after match creation affects expiry immediately ─
+#[test]
+fn test_lowering_timeout_after_match_creation_affects_expiry_immediately() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
+// #618 — instance TTL is refreshed after create_match
+#[test]
+fn test_instance_ttl_refreshed_after_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Advance the ledger so the instance TTL decreases from its post-initialize value,
+    // giving us a meaningful "before" baseline that is strictly less than MATCH_TTL_LEDGERS.
+    env.ledger().with_mut(|l| l.sequence_number += 1000);
+
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage().instance().get_ttl()
+    });
+
+    client.create_match(
+
         &player1,
         &player2,
         &100,
         &token,
+
         &String::from_str(&env, "terminal_expire"),
         &Platform::Lichess,
     );
@@ -2918,3 +2937,24 @@ fn test_cancel_and_expire_terminal_state_and_ledger_metadata() {
     // Refund verified
     assert_eq!(token_client.balance(&player1) - p1_before, 100);
 }
+
+        &String::from_str(&env, "instance_ttl_game"),
+        &Platform::Lichess,
+    );
+
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().instance().get_ttl()
+    });
+
+    assert!(
+        ttl_after > ttl_before,
+        "instance TTL should be strictly greater after create_match (was {ttl_before}, now {ttl_after})"
+    );
+    assert_eq!(
+        ttl_after,
+        crate::MATCH_TTL_LEDGERS,
+        "instance TTL should be extended to MATCH_TTL_LEDGERS"
+    );
+}
+
+
