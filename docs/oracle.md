@@ -1,7 +1,33 @@
 # Oracle Integration Guide
 
-This document describes how the off-chain oracle service interacts with the
-Checkmate Escrow smart contracts, with a focus on the `game_id` field.
+This document describes the current oracle architecture used by Checkmate
+Escrow. It explains the two distinct on-chain oracle components and how they
+work together with the off-chain oracle service.
+
+The current design has:
+- an `EscrowContract` that stores a trusted `oracle` address and authorises
+  result submissions for on-chain payout,
+- an `OracleContract` that stores an independent, auditable copy of verified
+  match results.
+
+The escrow contract uses its configured oracle address as the authoritative
+permission for submitting results to trigger payouts. The oracle contract is
+supplementary: it does not authorise escrow payouts or act as a gatekeeper for
+escrow result submission. It provides an audit log and an independent on-chain
+record of results that can be queried later.
+
+The off-chain oracle service today is the trusted operator that:
+1. verifies the platform result for `game_id` using an external chess API,
+2. calls `EscrowContract::submit_result(match_id, winner)` from the escrow-side
+   oracle address,
+3. records the same result in `OracleContract` for auditing and optional
+   verification.
+
+The two contracts are separate:
+- `EscrowContract` enforces match state, funding, and oracle address
+  authentication.
+- `OracleContract` enforces admin-only result storage and exposes public or
+  admin-gated read interfaces.
 
 ---
 
@@ -69,19 +95,28 @@ Invalid examples: `"abc"` (non-numeric), `""` (empty)
 
 ## Submitting a Result
 
-Once a game is finished, the oracle calls `submit_result` on the escrow
-contract with the `match_id`, `game_id`, and `Winner` enum:
+Once a game is finished, the off-chain oracle service verifies the result via
+an external chess platform API and then submits the verified outcome to the
+escrow contract from the configured oracle address.
 
 ```rust
 // Winner::Player1 | Winner::Player2 | Winner::Draw
-escrow_client.submit_result(&match_id, &winner, &oracle_address);
+escrow_client.submit_result(&match_id, &winner);
 ```
 
-The oracle also records the result independently via `OracleContract::submit_result`:
+That escrow submission is the authoritative payout trigger. The escrow contract
+trusts only its configured oracle address when authorising `submit_result`.
+
+Separately, the oracle service records the same result in the on-chain
+`OracleContract` for auditability and later verification.
 
 ```rust
 oracle_client.submit_result(&match_id, &game_id, &MatchResult::Player1Wins);
 ```
+
+This means the current oracle contract is supplementary: it stores an
+independent result entry and exposes read APIs, but it is not the primary
+authority used by the escrow contract to execute payouts.
 
 ---
 
