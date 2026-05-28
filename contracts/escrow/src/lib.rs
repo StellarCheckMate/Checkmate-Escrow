@@ -498,6 +498,29 @@ impl EscrowContract {
         Ok(m)
     }
 
+    /// Read multiple matches by ID in one call. Each ID in `ids` that exists
+    /// produces one entry in the returned `Vec`; missing IDs are silently
+    /// skipped. Duplicate IDs each produce their own entry, so the output
+    /// length may be less than or equal to `ids.len()`.
+    pub fn get_matches(env: Env, ids: Vec<u64>) -> Vec<Match> {
+        let mut out: Vec<Match> = Vec::new(&env);
+        for id in ids.iter() {
+            if let Some(m) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(id))
+            {
+                env.storage().persistent().extend_ttl(
+                    &DataKey::Match(id),
+                    MATCH_TTL_LEDGERS,
+                    MATCH_TTL_LEDGERS,
+                );
+                out.push_back(m);
+            }
+        }
+        out
+    }
+
     /// Return whether the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
         env.storage()
