@@ -248,6 +248,11 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::ActiveMatches, &active);
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -685,10 +690,19 @@ impl EscrowContract {
 
     /// Return all currently active (non-cancelled, non-completed) match IDs.
     pub fn get_active_matches(env: Env) -> Vec<u64> {
-        env.storage()
+        let active: Vec<u64> = env
+            .storage()
             .persistent()
             .get(&DataKey::ActiveMatches)
-            .unwrap_or_else(|| vec![&env])
+            .unwrap_or_else(|| vec![&env]);
+        if !active.is_empty() {
+            env.storage().persistent().extend_ttl(
+                &DataKey::ActiveMatches,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+        active
     }
 
     /// Add a token to the allowlist. Requires admin auth.
@@ -721,6 +735,11 @@ impl EscrowContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::ActiveMatches, &active);
+            env.storage().persistent().extend_ttl(
+                &DataKey::ActiveMatches,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
         }
     }
 }

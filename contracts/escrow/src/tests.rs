@@ -1371,6 +1371,67 @@ fn test_ttl_extended_on_deposit() {
 }
 
 #[test]
+fn test_active_matches_ttl_refreshed_on_append_and_removal() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_active_append_remove_1"),
+        &Platform::Lichess,
+    );
+
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
+    let _match2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_active_append_remove_2"),
+        &Platform::Lichess,
+    );
+
+    let ttl_after_append = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
+    });
+    assert_eq!(ttl_after_append, crate::MATCH_TTL_LEDGERS);
+
+    client.deposit(&match1, &player1);
+    client.deposit(&match1, &player2);
+
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
+    client.submit_result(&match1, &Winner::Player1);
+
+    let ttl_after_removal = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
+    });
+    assert_eq!(ttl_after_removal, crate::MATCH_TTL_LEDGERS);
+}
+
+#[test]
 fn test_ttl_extended_on_submit_result() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
