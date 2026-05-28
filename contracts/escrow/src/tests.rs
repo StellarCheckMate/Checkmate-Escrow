@@ -3,7 +3,8 @@ extern crate std;
 use super::*;
 use soroban_sdk::{
     testutils::{
-        storage::Persistent as _, Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke,
+        storage::{Instance as _, Persistent as _},
+        Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke,
     },
     token::{Client as TokenClient, StellarAssetClient},
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
@@ -2681,3 +2682,43 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     assert_eq!(token_client.balance(&player1) - p1_balance_before, 100);
     assert_eq!(token_client.balance(&player2) - p2_balance_before, 100);
 }
+
+// #618 — instance TTL is refreshed after create_match
+#[test]
+fn test_instance_ttl_refreshed_after_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Advance the ledger so the instance TTL decreases from its post-initialize value,
+    // giving us a meaningful "before" baseline that is strictly less than MATCH_TTL_LEDGERS.
+    env.ledger().with_mut(|l| l.sequence_number += 1000);
+
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage().instance().get_ttl()
+    });
+
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "instance_ttl_game"),
+        &Platform::Lichess,
+    );
+
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().instance().get_ttl()
+    });
+
+    assert!(
+        ttl_after > ttl_before,
+        "instance TTL should be strictly greater after create_match (was {ttl_before}, now {ttl_after})"
+    );
+    assert_eq!(
+        ttl_after,
+        crate::MATCH_TTL_LEDGERS,
+        "instance TTL should be extended to MATCH_TTL_LEDGERS"
+    );
+}
+
+
