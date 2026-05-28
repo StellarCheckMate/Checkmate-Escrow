@@ -8,7 +8,7 @@ Checkmate-Escrow is a trustless chess wagering platform built on Stellar Soroban
 ┌─────────────┐     create/deposit/cancel     ┌──────────────────┐
 │   Players   │ ─────────────────────────────▶│  Escrow Contract │
 └─────────────┘                               └────────┬─────────┘
-                                                       │ submit_result / execute_payout
+                                                       │ submit_result
 ┌─────────────┐     verify game result                 │
 │   Oracle    │ ─────────────────────────────▶─────────┘
 └─────────────┘
@@ -99,7 +99,7 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `create_match` | `(stake_amount: i128, token: Address, game_id: String, platform: Platform) -> u64` | Creates a new match and returns its ID. |
+| `create_match` | `(player1: Address, player2: Address, stake_amount: i128, token: Address, game_id: String, platform: Platform) -> u64` | Creates a new match and returns its ID. |
 | `get_match` | `(match_id: u64) -> Match` | Returns the current state of a match. |
 | `cancel_match` | `(match_id: u64)` | Cancels a match and refunds any deposits. |
 
@@ -115,6 +115,4 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `submit_result` | `(match_id: u64, winner: Winner)` | Oracle submits the verified match result. |
-| `verify_result` | `(match_id: u64) -> bool` | Returns `true` if a result has been submitted. |
-| `execute_payout` | `(match_id: u64)` | Transfers escrowed funds to the winner (or refunds on draw). |
+| `submit_result` | `(match_id: u64, winner: Winner)` | Oracle submits the verified match result and executes payout atomically. |
