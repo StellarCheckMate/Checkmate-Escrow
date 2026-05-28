@@ -140,6 +140,54 @@ We use a shared label taxonomy to keep issue and PR triage consistent. See [docs
 - Mock external dependencies
 - Verify events are emitted correctly
 
+### Testing Conventions: Prefer `try_` Over `#[should_panic]`
+
+When testing that a contract function returns a specific error, prefer the typed
+`try_` variant over `#[should_panic]`. The `try_` approach asserts the *exact*
+error variant, making failures easier to diagnose and preventing tests from
+accidentally passing due to an unrelated panic.
+
+**Avoid** — `#[should_panic]` only checks that *something* panicked:
+
+```rust
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_create_match_with_zero_stake_fails() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.create_match(&player1, &player2, &0, &token,
+        &String::from_str(&env, "game"), &Platform::Lichess);
+}
+```
+
+**Prefer** — `try_` asserts the exact error variant:
+
+```rust
+#[test]
+fn test_create_match_with_zero_stake_returns_invalid_amount() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(&player1, &player2, &0, &token,
+        &String::from_str(&env, "game"), &Platform::Lichess);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+```
+
+Use `#[should_panic]` only for cases where the contract panics with a plain
+string message rather than a typed error (e.g. double-initialization):
+
+```rust
+#[test]
+#[should_panic(expected = "Contract already initialized")]
+fn test_double_initialize_fails() {
+    // ...
+    client.initialize(&oracle, &admin);
+    client.initialize(&oracle, &admin); // panics with a string, not a typed Error
+}
+```
+
 ## Drips Wave Contributions
 
 Checkmate-Escrow participates in Drips Wave contributor funding. Issues labeled `wave-ready` are eligible for funding:
