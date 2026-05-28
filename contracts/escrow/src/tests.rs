@@ -2585,6 +2585,88 @@ fn test_initialize_rejects_self_as_oracle() {
     assert_eq!(result, Err(Ok(Error::InvalidAddress)));
 }
 
+/// PlayerMatches index TTL is refreshed when a new match is appended (write path).
+#[test]
+fn test_player_match_index_ttl_refreshes_on_append() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_index_append_1"),
+        &Platform::Lichess,
+    );
+
+    // Advance ledger so TTL would have decayed without an extend
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
+    // Appending a second match must refresh the index TTL
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_index_append_2"),
+        &Platform::Lichess,
+    );
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::PlayerMatches(player1.clone()))
+    });
+    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+}
+
+/// PlayerMatches index TTL is refreshed when the index is read (getter path).
+#[test]
+fn test_player_match_index_ttl_refreshes_on_read() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_index_read"),
+        &Platform::Lichess,
+    );
+
+    // Advance ledger so TTL would have decayed without an extend
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
+    client.get_player_matches(&player1);
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::PlayerMatches(player1.clone()))
+    });
+    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+}
+
 #[test]
 fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();

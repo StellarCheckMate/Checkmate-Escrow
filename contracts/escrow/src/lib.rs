@@ -236,6 +236,11 @@ impl EscrowContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::PlayerMatches(p.clone()), &ids);
+            env.storage().persistent().extend_ttl(
+                &DataKey::PlayerMatches(p.clone()),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
         }
 
         // Update active match index
@@ -677,10 +682,23 @@ impl EscrowContract {
 
     /// Return all match IDs for a given player.
     pub fn get_player_matches(env: Env, player: Address) -> Vec<u64> {
-        env.storage()
+        let ids = env
+            .storage()
             .persistent()
-            .get(&DataKey::PlayerMatches(player))
-            .unwrap_or_else(|| vec![&env])
+            .get(&DataKey::PlayerMatches(player.clone()))
+            .unwrap_or_else(|| vec![&env]);
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::PlayerMatches(player.clone()))
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::PlayerMatches(player),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+        ids
     }
 
     /// Return all currently active (non-cancelled, non-completed) match IDs.
