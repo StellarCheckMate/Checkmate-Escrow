@@ -146,6 +146,11 @@ impl EscrowContract {
             return Err(Error::InvalidPlayers);
         }
 
+        let self_addr = env.current_contract_address();
+        if player1 == self_addr || player2 == self_addr {
+            return Err(Error::InvalidPlayers);
+        }
+
         if game_id.is_empty() {
             return Err(Error::InvalidGameId);
         }
@@ -217,6 +222,9 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+        env.storage()
+            .instance()
+            .extend_ttl(MATCH_TTL_LEDGERS / 2, MATCH_TTL_LEDGERS);
         // Mark game_id as used
         env.storage()
             .persistent()
@@ -248,6 +256,11 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::ActiveMatches, &active);
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -446,6 +459,11 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Release game_id so it can be reused in a rematch
+        env.storage()
+            .persistent()
+            .remove(&DataKey::GameId(m.game_id.clone()));
+
         // Remove from active match index
         Self::remove_from_active(&env, match_id);
 
@@ -582,6 +600,11 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Release game_id so it can be reused in a rematch
+        env.storage()
+            .persistent()
+            .remove(&DataKey::GameId(m.game_id.clone()));
+
         // Remove from active match index
         Self::remove_from_active(&env, match_id);
 
@@ -656,6 +679,11 @@ impl EscrowContract {
     }
 
     /// Set the match expiry timeout in ledgers. Requires admin auth.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the admin.
+    /// - [`Error::InvalidTimeout`] — `ledgers` is zero.
+    /// - [`Error::TimeoutTooLarge`] — `ledgers` exceeds `MATCH_TTL_LEDGERS`.
     pub fn set_match_timeout(env: Env, ledgers: u32) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -663,6 +691,12 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+        if ledgers == 0 {
+            return Err(Error::InvalidTimeout);
+        }
+        if ledgers > MATCH_TTL_LEDGERS {
+            return Err(Error::TimeoutTooLarge);
+        }
         env.storage()
             .instance()
             .set(&DataKey::MatchTimeout, &ledgers);
@@ -688,10 +722,19 @@ impl EscrowContract {
 
     /// Return all currently active (non-cancelled, non-completed) match IDs.
     pub fn get_active_matches(env: Env) -> Vec<u64> {
-        env.storage()
+        let active: Vec<u64> = env
+            .storage()
             .persistent()
             .get(&DataKey::ActiveMatches)
-            .unwrap_or_else(|| vec![&env])
+            .unwrap_or_else(|| vec![&env]);
+        if !active.is_empty() {
+            env.storage().persistent().extend_ttl(
+                &DataKey::ActiveMatches,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+        active
     }
 
     /// Add a token to the allowlist. Requires admin auth.
@@ -724,6 +767,11 @@ impl EscrowContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::ActiveMatches, &active);
+            env.storage().persistent().extend_ttl(
+                &DataKey::ActiveMatches,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
         }
     }
 }
