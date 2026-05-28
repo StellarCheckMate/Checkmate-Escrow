@@ -129,8 +129,8 @@ is_funded(match_id) -> bool
 
 ```
 submit_result(match_id, winner)
-verify_result(match_id) -> bool
-execute_payout(match_id)
+has_result(match_id) -> bool
+get_result(match_id) -> ResultEntry
 ```
 
 ## 🧪 Testing
