@@ -81,4 +81,5 @@ pub enum DataKey {
     ActiveMatches,
     AllowedToken(Address),
     AllowlistEnabled,
+    AllowedTokenCount,
 }

@@ -700,12 +700,63 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+        let already = env
+            .storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
         env.storage()
             .persistent()
             .set(&DataKey::AllowedToken(token), &true);
+        if !already {
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowedTokenCount)
+                .unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokenCount, &(count + 1));
+        }
         env.storage()
             .instance()
             .set(&DataKey::AllowlistEnabled, &true);
+        Ok(())
+    }
+
+    /// Remove a token from the allowlist. Requires admin auth.
+    /// When the last token is removed, the allowlist is disabled.
+    pub fn remove_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        let present = env
+            .storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
+        if present {
+            env.storage()
+                .persistent()
+                .remove(&DataKey::AllowedToken(token));
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowedTokenCount)
+                .unwrap_or(1);
+            let new_count = count.saturating_sub(1);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokenCount, &new_count);
+            if new_count == 0 {
+                env.storage()
+                    .instance()
+                    .set(&DataKey::AllowlistEnabled, &false);
+            }
+        }
         Ok(())
     }
 
