@@ -2681,3 +2681,48 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     assert_eq!(token_client.balance(&player1) - p1_balance_before, 100);
     assert_eq!(token_client.balance(&player2) - p2_balance_before, 100);
 }
+
+#[test]
+fn test_get_matches_duplicate_ids_returns_one_entry_per_occurrence() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "dup_test_game"),
+        &Platform::Lichess,
+    );
+
+    // Query the same ID twice; expect two entries with identical data.
+    let ids = vec![&env, id, id];
+    let results = client.get_matches(&ids);
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results.get(0).unwrap(), results.get(1).unwrap());
+    assert_eq!(results.get(0).unwrap().id, id);
+}
+
+#[test]
+fn test_get_matches_missing_ids_are_skipped() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "skip_test_game"),
+        &Platform::Lichess,
+    );
+
+    // id exists, 999 does not — only the existing match is returned.
+    let ids = vec![&env, id, 999u64];
+    let results = client.get_matches(&ids);
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results.get(0).unwrap().id, id);
+}
