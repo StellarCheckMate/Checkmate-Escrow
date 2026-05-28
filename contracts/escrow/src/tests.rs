@@ -2683,6 +2683,79 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     assert_eq!(token_client.balance(&player2) - p2_balance_before, 100);
 }
 
+
+// ── Task #1: expire_match emits ("match", "expired") with match_id payload ──
+#[test]
+fn test_expire_match_emits_expired_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_event_game"),
+        &Platform::Lichess,
+    );
+
+    // Extend TTLs so storage survives the ledger jump
+    for addr in [&contract_id, &token] {
+        env.deployer()
+            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer()
+            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    }
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+
+    // Advance past the default timeout
+    env.ledger().set_sequence_number(100 + DEFAULT_MATCH_TIMEOUT_LEDGERS);
+
+    for addr in [&contract_id, &token] {
+        env.deployer()
+            .extend_ttl_for_contract_instance(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.deployer()
+            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    }
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    });
+
+    client.expire_match(&id);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("expired").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match expired event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+}
+
+// ── Task #2: lowering timeout after match creation affects expiry immediately ─
+#[test]
+fn test_lowering_timeout_after_match_creation_affects_expiry_immediately() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
 // #618 — instance TTL is refreshed after create_match
 #[test]
 fn test_instance_ttl_refreshed_after_create_match() {
@@ -2698,6 +2771,7 @@ fn test_instance_ttl_refreshed_after_create_match() {
     });
 
     client.create_match(
+
         &player1,
         &player2,
         &100,
