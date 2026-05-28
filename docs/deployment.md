@@ -78,6 +78,30 @@ stellar contract invoke \
   --deployer <DEPLOYER_ADDRESS>
 ```
 
+### 5. Configure Token Allowlist (Optional but Recommended for Production)
+
+By default the allowlist is **not enforced** — any token address is accepted in `create_match`. The allowlist activates automatically the moment the first token is added via `add_allowed_token`. Once active, `create_match` rejects any token not on the list with `InvalidToken`.
+
+Add each token you want to permit (e.g. XLM native asset contract, USDC):
+
+```bash
+# Allow XLM (native asset contract address)
+stellar contract invoke \
+  --id $ESCROW_CONTRACT_ID \
+  --source <ESCROW_ADMIN_KEYPAIR> \
+  -- add_allowed_token \
+  --token <XLM_CONTRACT_ADDRESS>
+
+# Allow USDC (or any other token)
+stellar contract invoke \
+  --id $ESCROW_CONTRACT_ID \
+  --source <ESCROW_ADMIN_KEYPAIR> \
+  -- add_allowed_token \
+  --token <USDC_CONTRACT_ADDRESS>
+```
+
+> **Note:** After the first `add_allowed_token` call, `AllowlistEnabled` is set to `true` on-chain and cannot be unset. Any token not explicitly added will be rejected by `create_match`.
+
 ---
 
 ## Security Notes
