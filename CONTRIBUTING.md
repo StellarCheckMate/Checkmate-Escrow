@@ -84,6 +84,9 @@ cargo test -p oracle
 - Update relevant documentation in `docs/` for architectural changes
 - Add inline comments for non-obvious code
 - Update README.md if adding new features or changing setup steps
+- Check repository health and link validity with `./scripts/repository_health_check.sh`
+
+See [docs/repository-health-checklist.md](docs/repository-health-checklist.md) for checklist details.
 
 ## Submitting a Pull Request
 
