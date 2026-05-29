@@ -213,7 +213,7 @@ impl EscrowContract {
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
             completed_ledger: None,
-            winner: Winner::Draw,
+            winner: Winner::None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -394,6 +394,7 @@ impl EscrowContract {
                 client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
                 client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
             }
+            Winner::None => return Err(Error::InvalidWinner),
         }
 
         m.state = MatchState::Completed;

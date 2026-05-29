@@ -62,4 +62,8 @@ pub enum Error {
     /// (18) `set_match_timeout` was called with a value exceeding the maximum
     /// allowed timeout (~30 days / `MATCH_TTL_LEDGERS`).
     TimeoutTooLarge = 18,
+
+    /// (19) `submit_result` was called with `Winner::None`, which is reserved
+    /// as the initial unresolved state and is not a valid submitted outcome.
+    InvalidWinner = 19,
 }
