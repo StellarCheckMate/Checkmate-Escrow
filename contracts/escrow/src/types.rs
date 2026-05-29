@@ -22,6 +22,9 @@ pub enum Winner {
     Player1,
     Player2,
     Draw,
+    /// Match has not yet been resolved. Used as the initial value on new matches
+    /// so that unresolved and drawn matches are distinguishable.
+    None,
 }
 
 /// Represents a single wagered chess match held in escrow.
@@ -63,7 +66,8 @@ pub struct Match {
     pub created_ledger: u32,
     /// Ledger sequence number at which the match was completed or cancelled, if applicable.
     pub completed_ledger: Option<u32>,
-    /// Outcome of the match. Defaults to `Winner::Draw` until a result is submitted.
+    /// Outcome of the match. `Winner::None` until a result is submitted; set to
+    /// `Player1`, `Player2`, or `Draw` by `submit_result`.
     pub winner: Winner,
 }
 
