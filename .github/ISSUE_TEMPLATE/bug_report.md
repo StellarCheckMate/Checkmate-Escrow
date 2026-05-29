@@ -9,65 +9,53 @@ assignees: ""
 # 🐛 Bug Report
 
 > [!IMPORTANT]
-> Please provide as much technical context as possible to help us identify and resolve the issue.
+> Please provide enough technical detail to reproduce the issue and evaluate the impact.
 
----
+### Summary
+*One-sentence summary of the bug.*
 
-### 📝 Problem Summary
-*Provide a clear, one-sentence summary of the bug.*
+### Affected Area
+- **Affected Contract:** `contracts/escrow` / `contracts/oracle` / `tooling` / `docs`
+- **Target Function(s):** e.g. `deposit`, `submit_result`, `create_match`
+- **Affected State/Mode:** `Pending` / `Active` / `Completed` / `Cancelled` / `Init`
+- **Severity:** High / Medium / Low
 
----
+### Expected Behavior
+*What should happen when this code executes successfully?*
 
-### 🔍 Technical Breakdown
+### Actual Behavior
+*What happens instead? Include errors, state changes, or unexpected contract behavior.*
 
-| Category | Details |
-| :--- | :--- |
-| **Affected Contract** | `contracts/escrow` / `contracts/oracle` / `tooling` |
-| **Target Function(s)** | e.g., `deposit`, `submit_result`, `create_match` |
-| **Severity / Priority** | High / Medium / Low |
+### Reproduction Steps
+1. ...
+2. ...
+3. ...
 
-#### 💥 Observed Behavior
-> Describe what actually happens when this issue is triggered.
+### Environment
+- **Rust Version:** `rustc --version`
+- **Soroban / Stellar CLI Version:** `stellar --version`
+- **Network:** Local Sandbox / Testnet / Futurenet / Other
+- **OS / Platform:** Linux / macOS / Windows / Other
 
-#### 🎯 Expected Behavior
-> Describe what the correct contract execution or state transition should be.
-
----
-
-### 💻 Environment & Tooling
-*Please specify the versions of the development tools used:*
-
-* **Rust Version:** `rustc --version`
-* **Soroban / Stellar CLI Version:** `stellar --version`
-* **Network Context:** Local Sandbox / Testnet / Futurenet
-
----
-
-### 🧪 Reproduction Steps & Diagnostic Output
-1. Step one to trigger the issue
-2. Step two to trigger the issue
-3. Observed command line output
-
-<details>
-<summary><b>📋 Diagnostic Logs & Stack Traces</b> (Click to expand)</summary>
-
-```rust
-// Paste terminal logs, compiler errors, or panic stack traces here
+### Diagnostic Output
+```text
+# Paste compiler errors, panic output, or terminal logs here
 ```
-</details>
 
----
+### Impact
+- [ ] Security
+- [ ] Correctness
+- [ ] Performance or gas
+- [ ] UX or tooling
+- [ ] Documentation
 
-### 🛠️ Proposed Remediation
-*Describe any thoughts or potential solutions you have for resolving this issue.*
+### Suggested Fix
+*If you have an idea for a fix, describe it here.*
 
----
-
-### 📋 Checklist & Tasks
-- [ ] **Analyze:** Investigate the source code logic in the affected file
-- [ ] **Reproduce:** Add a targeted unit test verifying the failure path
-- [ ] **Harden:** Enforce necessary safety guards, boundary validations, or authorization checks
-- [ ] **Resolve:** Implement the fix within the contract logic
-- [ ] **Verify Events:** Confirm any affected on-chain events are published correctly
-- [ ] **Lint & Format:** Execute `cargo fmt` and `cargo clippy` to ensure code quality
-- [ ] **Assure:** Execute the full test suite (`cargo test`) to guarantee zero regressions
+### Checklist
+- [ ] Reproduced the bug locally
+- [ ] Added a regression test covering this failure mode
+- [ ] Verified authorization and state guards
+- [ ] Confirmed event emission and storage behavior
+- [ ] Ran `cargo fmt` and `cargo clippy`
+- [ ] Ran `cargo test`
