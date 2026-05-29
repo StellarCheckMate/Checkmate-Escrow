@@ -623,6 +623,7 @@ impl EscrowContract {
         }
 
         m.state = MatchState::Cancelled;
+        m.completed_ledger = Some(env.ledger().sequence());
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
