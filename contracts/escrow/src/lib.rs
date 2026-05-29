@@ -131,6 +131,9 @@ impl EscrowContract {
     /// - [`Error::InvalidAmount`] — `stake_amount` is zero or negative.
     /// - [`Error::AlreadyExists`] — a match with the derived ID already exists.
     /// - [`Error::Overflow`] — the internal match-ID counter would overflow.
+    /// - [`Error::InvalidPlayers`] — `player1` equals `player2`, or either player
+    ///   is the escrow contract's own address. Allowing the contract address as a
+    ///   player would let it satisfy `require_auth()` trivially and drain the pot.
     pub fn create_match(
         env: Env,
         player1: Address,
