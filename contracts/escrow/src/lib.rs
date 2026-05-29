@@ -740,6 +740,15 @@ impl EscrowContract {
             .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS))
     }
 
+    /// Return the total number of matches ever created (including cancelled and completed).
+    /// Useful for frontend pagination and analytics.
+    pub fn get_match_count(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0)
+    }
+
     /// Return all match IDs for a given player.
     pub fn get_player_matches(env: Env, player: Address) -> Vec<u64> {
         let ids = env
