@@ -32,3 +32,25 @@ fn test_add_allowed_token_emits_event() {
     let ev_token: Address = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_token, token);
 }
+
+#[test]
+fn test_removed_tokens_can_no_longer_be_used_for_new_matches() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+    client.remove_allowed_token(&token);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "removed_token_game"),
+        &Platform::Lichess,
+    );
+    assert!(
+        result.is_err(),
+        "create_match should reject removed token"
+    );
+}
