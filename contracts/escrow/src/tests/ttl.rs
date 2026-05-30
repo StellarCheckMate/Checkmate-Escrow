@@ -360,3 +360,65 @@ fn test_player_match_index_ttl_refreshes_on_read() {
     });
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
+
+#[test]
+fn test_get_player_matches_ttl_returns_correct_value() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Before any matches, TTL should be 0
+    let ttl_before = client.get_player_matches_ttl(&player1);
+    assert_eq!(ttl_before, 0);
+
+    // Create a match
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_getter_test"),
+        &Platform::Lichess,
+    );
+
+    // After creating a match, TTL should be set to MATCH_TTL_LEDGERS
+    let ttl_after = client.get_player_matches_ttl(&player1);
+    assert_eq!(ttl_after, crate::MATCH_TTL_LEDGERS);
+
+    // Advance ledger by 1000
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
+    // TTL should have decreased by approximately 1000 ledgers
+    let ttl_decreased = client.get_player_matches_ttl(&player1);
+    assert!(
+        ttl_decreased < ttl_after,
+        "TTL should decrease after ledger advancement"
+    );
+    assert!(
+        ttl_decreased >= ttl_after - 1000,
+        "TTL should be approximately 1000 less"
+    );
+
+    // Reading player matches should refresh TTL back to MATCH_TTL_LEDGERS
+    client.get_player_matches(&player1);
+    let ttl_refreshed = client.get_player_matches_ttl(&player1);
+    assert_eq!(ttl_refreshed, crate::MATCH_TTL_LEDGERS);
+}
+
+#[test]
+fn test_get_player_matches_ttl_for_nonexistent_player() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let random_player = Address::generate(&env);
+    let ttl = client.get_player_matches_ttl(&random_player);
+    assert_eq!(ttl, 0, "TTL should be 0 for player with no match history");
+}

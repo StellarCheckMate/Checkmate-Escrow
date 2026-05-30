@@ -808,6 +808,23 @@ impl EscrowContract {
         ids
     }
 
+    /// Return the remaining TTL (in ledgers) for a player's match history index.
+    /// Returns 0 if the player has no match history.
+    pub fn get_player_matches_ttl(env: Env, player: Address) -> u32 {
+        extend_instance_ttl(&env);
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::PlayerMatches(player.clone()))
+        {
+            env.storage()
+                .persistent()
+                .get_ttl(&DataKey::PlayerMatches(player))
+        } else {
+            0
+        }
+    }
+
     /// Return all currently active (non-cancelled, non-completed) match IDs.
     pub fn get_active_matches(env: Env) -> Vec<u64> {
         extend_instance_ttl(&env);
