@@ -257,8 +257,7 @@ fn test_duplicate_submit_returns_already_submitted() {
 }
 
 #[test]
-#[should_panic]
-fn test_double_initialize_fails() {
+fn test_double_initialize_returns_already_initialized() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
@@ -266,7 +265,8 @@ fn test_double_initialize_fails() {
     let client = OracleContractClient::new(&env, &contract_id);
 
     client.initialize(&admin);
-    client.initialize(&admin);
+    let result = client.try_initialize(&admin);
+    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
 }
 
 #[test]
