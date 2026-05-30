@@ -349,3 +349,27 @@ fn test_set_match_timeout_emits_event() {
     assert_eq!(ev_old, old_timeout);
     assert_eq!(ev_new, new_timeout);
 }
+
+#[test]
+fn test_remove_allowed_token_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+    client.remove_allowed_token(&token);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("token_removed").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "token_removed event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_token: Address = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_token, token);
+}
