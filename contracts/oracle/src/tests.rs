@@ -852,3 +852,108 @@ fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
     let m = escrow_client.get_match(&match_id);
     assert_eq!(m.state, MatchState::Active);
 }
+
+
+// ── Test #599: delete_result emits event ────────────────────────────────
+
+#[test]
+fn test_delete_result_emits_deletion_event() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "chess_game_42"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    client.delete_result(&0u64);
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("deleted").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "deletion event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_id: u64 = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, 0u64);
+}
+
+
+// ── Test #600: delete_result leaves has_result false ──────────────────────
+
+#[test]
+fn test_delete_result_leaves_has_result_false() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "chess_game_42"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert!(client.has_result(&0u64));
+
+    client.delete_result(&0u64);
+    assert!(!client.has_result(&0u64));
+}
+
+
+// ── Test #598: unpause emits event ───────────────────────────────────────
+
+#[test]
+fn test_unpause_emits_unpaused_event() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.pause();
+    client.unpause();
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("unpaused").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "unpaused event not emitted");
+}
+
+
+// ── Test #597: update_admin emits event ──────────────────────────────────
+
+#[test]
+fn test_update_admin_emits_rotation_event() {
+    let (env, contract_id, _escrow_id, old_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+    client.update_admin(&new_admin);
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("admin_rot").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "admin_rot event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_old, ev_new): (Address, Address) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_old, old_admin);
+    assert_eq!(ev_new, new_admin);
+}
