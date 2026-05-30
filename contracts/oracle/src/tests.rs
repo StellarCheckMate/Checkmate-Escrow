@@ -690,3 +690,14 @@ fn test_result_entry_stores_submission_ledger() {
         "submitted_ledger must be >= ledger at call time"
     );
 }
+
+// ── Issue #604: Empty game_id rejection uses try_submit_result ──────────────
+
+#[test]
+fn test_empty_game_id_rejection_with_try_submit_result() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let result = client.try_submit_result(&0u64, &String::from_str(&env, ""), &Winner::Player1);
+    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+}
