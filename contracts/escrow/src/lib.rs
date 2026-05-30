@@ -28,10 +28,11 @@ impl EscrowContract {
     /// trivially, permanently compromising result submission.
     ///
     /// # Errors
+    /// - [`Error::AlreadyInitialized`] — contract has already been initialized.
     /// - [`Error::InvalidAddress`] — `oracle` is the escrow contract's own address.
     pub fn initialize(env: Env, oracle: Address, admin: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Oracle) {
-            panic!("Contract already initialized");
+            return Err(Error::AlreadyInitialized);
         }
         if oracle == env.current_contract_address() {
             return Err(Error::InvalidAddress);
