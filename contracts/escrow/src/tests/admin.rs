@@ -534,3 +534,43 @@ fn test_current_admin_retains_privileges_after_propose_before_accept() {
     client.pause();
     assert!(client.is_paused());
 }
+
+
+// #596 - proposing a second pending admin cleanly replaces the first proposal
+#[test]
+fn test_second_pending_admin_replaces_first_proposal() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let pending_admin_a = Address::generate(&env);
+    let pending_admin_b = Address::generate(&env);
+
+    client.propose_admin(&pending_admin_a);
+    client.propose_admin(&pending_admin_b);
+
+    env.mock_auths(&[MockAuth {
+        address: &pending_admin_a,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_accept_admin();
+    assert!(result.is_err(), "pending_admin_a should not be able to accept");
+
+    env.mock_auths(&[MockAuth {
+        address: &pending_admin_b,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.accept_admin();
+    assert_eq!(client.get_admin(), pending_admin_b);
+}
