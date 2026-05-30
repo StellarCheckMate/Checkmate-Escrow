@@ -1611,3 +1611,107 @@ fn test_match_count_increments_and_get_match_returns_correct_data() {
         assert_eq!(m.state, MatchState::Pending, "match.state must be Pending for id {i}");
     }
 }
+
+
+#[test]
+fn test_create_match_rejects_contract_address_as_player2() {
+    let (env, contract_id, _oracle, player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(
+        &player1,
+        &contract_id,
+        &100,
+        &token,
+        &String::from_str(&env, "invalid_player2"),
+        &Platform::Lichess,
+    );
+
+    assert_eq!(result, Err(Ok(Error::InvalidPlayers)));
+}
+
+#[test]
+fn test_cancel_match_sets_completed_ledger() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancel_ledger_test"),
+        &Platform::Lichess,
+    );
+
+    let ledger_before = env.ledger().sequence();
+    client.cancel_match(&id, &player1);
+    let ledger_after = env.ledger().sequence();
+
+    let m = client.get_match(&id);
+    assert!(m.completed_ledger.is_some());
+    let completed = m.completed_ledger.unwrap();
+    assert!(completed >= ledger_before && completed <= ledger_after);
+}
+
+#[test]
+fn test_expire_match_sets_completed_ledger() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_ledger_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+
+    // Advance ledger past timeout
+    env.ledger().set_sequence_number(env.ledger().sequence() + 518_400);
+
+    let ledger_before = env.ledger().sequence();
+    client.expire_match(&id);
+    let ledger_after = env.ledger().sequence();
+
+    let m = client.get_match(&id);
+    assert!(m.completed_ledger.is_some());
+    let completed = m.completed_ledger.unwrap();
+    assert!(completed >= ledger_before && completed <= ledger_after);
+}
+
+#[test]
+fn test_get_live_matches_returns_only_fully_funded_matches() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create pending match
+    let pending_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pending_match"),
+        &Platform::Lichess,
+    );
+
+    // Create and fund active match
+    let active_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "active_match"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&active_id, &player1);
+    client.deposit(&active_id, &player2);
+
+    let live_matches = client.get_live_matches();
+    assert_eq!(live_matches.len(), 1);
+    assert_eq!(live_matches.get(0).unwrap().id, active_id);
+}
