@@ -637,3 +637,23 @@ fn test_update_admin_emits_rotation_event() {
     assert_eq!(ev_old, old_admin);
     assert_eq!(ev_new, new_admin);
 }
+
+// ── Issue #601: Deleted results can be resubmitted ──────────────────────────
+
+#[test]
+fn test_deleted_result_can_be_resubmitted() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(&0u64, &String::from_str(&env, "game_abc"), &Winner::Player1);
+    assert!(client.has_result(&0u64));
+
+    client.delete_result(&0u64);
+    assert!(!client.has_result(&0u64));
+
+    client.submit_result(&0u64, &String::from_str(&env, "game_abc"), &Winner::Player2);
+    assert!(client.has_result(&0u64));
+
+    let entry = client.get_result(&0u64);
+    assert_eq!(entry.result, Winner::Player2);
+}
