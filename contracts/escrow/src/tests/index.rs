@@ -90,3 +90,63 @@ fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
     assert_eq!(active_matches.len(), 1);
     assert_eq!(active_matches.get(0).unwrap(), match_id_3);
 }
+
+/// Test #582: active/live index ordering stays stable after cancellation gaps
+#[test]
+fn test_active_index_ordering_stable_after_cancellation_gaps() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create several matches that enter the same index
+    let match_id_1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_1"),
+        &Platform::Lichess,
+    );
+
+    let match_id_2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_2"),
+        &Platform::Lichess,
+    );
+
+    let match_id_3 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_3"),
+        &Platform::Lichess,
+    );
+
+    let match_id_4 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_4"),
+        &Platform::Lichess,
+    );
+
+    // Deposit for all to make them active
+    for match_id in [match_id_1, match_id_2, match_id_3, match_id_4].iter() {
+        client.deposit(match_id, &player1);
+        client.deposit(match_id, &player2);
+    }
+
+    // Cancel one in the middle
+    client.cancel_match(&match_id_2, &player1);
+
+    // Assert remaining IDs preserve documented ordering
+    let active_matches = client.get_active_matches();
+    assert_eq!(active_matches.len(), 3);
+    assert_eq!(active_matches.get(0).unwrap(), match_id_1);
+    assert_eq!(active_matches.get(1).unwrap(), match_id_3);
+    assert_eq!(active_matches.get(2).unwrap(), match_id_4);
+}
