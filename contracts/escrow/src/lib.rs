@@ -105,6 +105,11 @@ impl EscrowContract {
             return Err(Error::InvalidGameId);
         }
 
+        // Reject if player2 is the contract address
+        if player2 == env.current_contract_address() {
+            return Err(Error::InvalidPlayers);
+        }
+
         if env.storage().persistent().has(&DataKey::GameId(game_id.clone())) {
             return Err(Error::DuplicateGameId);
         }
@@ -131,6 +136,7 @@ impl EscrowContract {
             player1_deposited: false,
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
+            completed_ledger: None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -276,6 +282,7 @@ impl EscrowContract {
         }
 
         m.state = MatchState::Completed;
+        m.completed_ledger = Some(env.ledger().sequence());
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -324,6 +331,7 @@ impl EscrowContract {
         }
 
         m.state = MatchState::Cancelled;
+        m.completed_ledger = Some(env.ledger().sequence());
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -370,6 +378,7 @@ impl EscrowContract {
         }
 
         m.state = MatchState::Cancelled;
+        m.completed_ledger = Some(env.ledger().sequence());
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -427,6 +436,30 @@ impl EscrowContract {
         let depositors: i128 = if m.player1_deposited { 1 } else { 0 }
             + if m.player2_deposited { 1 } else { 0 };
         Ok(depositors * m.stake_amount)
+    }
+
+    /// Return all matches that are in Active state (fully funded).
+    pub fn get_live_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        let mut live_matches = soroban_sdk::vec![&env];
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+
+        for i in 0..count {
+            if let Ok(m) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(i))
+            {
+                if m.state == MatchState::Active {
+                    live_matches.push_back(m);
+                }
+            }
+        }
+
+        Ok(live_matches)
     }
 }
 
