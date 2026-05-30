@@ -274,3 +274,51 @@ fn test_deposit_emits_event_for_player1() {
     assert_eq!(ev_match_id, match_id);
     assert_eq!(ev_player, player1);
 }
+
+#[test]
+fn test_deposit_emits_event_for_player2_and_includes_final_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "deposit_p2_event"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+
+    let events = env.events().all();
+    let deposit_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("deposit").into_val(&env),
+    ];
+    let deposit_events: Vec<_> = events
+        .iter()
+        .filter(|(_, topics, _)| *topics == deposit_topics)
+        .collect();
+    assert_eq!(deposit_events.len(), 2, "two deposit events should be emitted");
+
+    let (_, _, data) = deposit_events[1];
+    let (ev_match_id, ev_player): (u64, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_match_id, match_id);
+    assert_eq!(ev_player, player2);
+
+    let activated_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("activated").into_val(&env),
+    ];
+    let activated_matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == activated_topics);
+    assert!(
+        activated_matched.is_some(),
+        "activated event should be emitted after player2 deposits"
+    );
+}
