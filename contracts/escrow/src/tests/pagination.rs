@@ -1,5 +1,44 @@
 use super::*;
 
+/// Test #580: player-match pagination handles empty and partial pages
+#[test]
+fn test_player_match_pagination_handles_empty_and_partial_pages() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create 25 matches for player1
+    let mut match_ids = Vec::new();
+    for i in 0..25 {
+        let match_id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, &format!("game_{}", i)),
+            &Platform::Lichess,
+        );
+        match_ids.push(match_id);
+    }
+
+    // Query player1's matches
+    let player1_matches = client.get_player_matches(&player1);
+    assert_eq!(player1_matches.len(), 25);
+
+    // Verify all match IDs are present in order
+    for (i, match_id) in match_ids.iter().enumerate() {
+        assert_eq!(player1_matches.get(i as u32).unwrap(), *match_id);
+    }
+
+    // Query player2's matches (should have 25 as well)
+    let player2_matches = client.get_player_matches(&player2);
+    assert_eq!(player2_matches.len(), 25);
+
+    // Query a player with no matches
+    let player3 = Address::generate(&env);
+    let player3_matches = client.get_player_matches(&player3);
+    assert_eq!(player3_matches.len(), 0);
+}
+
 /// Test #579: player history index excludes unrelated matches for other players
 #[test]
 fn test_player_history_index_excludes_unrelated_matches() {
