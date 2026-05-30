@@ -23,14 +23,18 @@ pub struct OracleContract;
 #[contractimpl]
 impl OracleContract {
     /// Initialize with a trusted admin (the off-chain oracle service).
-    pub fn initialize(env: Env, admin: Address) {
+    ///
+    /// # Errors
+    /// - [`Error::AlreadyInitialized`] — contract has already been initialized.
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
         extend_instance_ttl(&env);
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("Contract already initialized");
+            return Err(Error::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.events()
             .publish((Symbol::new(&env, "oracle"), symbol_short!("init")), &admin);
+        Ok(())
     }
 
     /// Admin submits a verified match result on-chain.

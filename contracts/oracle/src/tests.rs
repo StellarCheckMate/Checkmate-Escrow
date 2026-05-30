@@ -80,6 +80,22 @@ fn test_initialize_emits_event() {
     assert_eq!(ev_admin, admin);
 }
 
+#[test]
+fn test_duplicate_initialize_returns_already_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin1);
+    let result = client.try_initialize(&admin2);
+    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
+}
+}
+
 // ── has_result (public, unauthenticated) ─────────────────────────────────
 
 #[test]
