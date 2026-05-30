@@ -101,6 +101,7 @@ fn test_has_result_is_public_and_unauthenticated() {
     client.submit_result(
         &0u64,
         &String::from_str(&env, "test_game"),
+        &Platform::Lichess,
         &Winner::Player1,
     );
 
@@ -127,6 +128,7 @@ fn test_has_result_admin_returns_true_after_submission() {
     client.submit_result(
         &0u64,
         &String::from_str(&env, "test_game"),
+        &Platform::Lichess,
         &Winner::Player1,
     );
 
@@ -149,11 +151,17 @@ fn test_submit_and_get_result() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
 
     assert!(client.has_result(&0u64));
     let entry = client.get_result(&0u64);
     assert_eq!(entry.result, Winner::Player1);
+    assert_eq!(entry.platform, Platform::Lichess);
 }
 
 #[test]
@@ -162,7 +170,12 @@ fn test_submit_result_stores_submitted_ledger() {
     let client = OracleContractClient::new(&env, &contract_id);
 
     let ledger_before = env.ledger().sequence();
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
 
     let entry = client.get_result(&0u64);
     assert!(
@@ -176,7 +189,12 @@ fn test_submit_result_stores_submitter() {
     let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
 
     let entry = client.get_result(&0u64);
     assert_eq!(entry.submitter, oracle_admin);
@@ -187,7 +205,12 @@ fn test_submit_result_emits_event() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
 
     let events = env.events().all();
     let expected_topics = soroban_sdk::vec![
@@ -212,7 +235,12 @@ fn test_submit_draw_result_emits_event() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Draw,
+    );
 
     let events = env.events().all();
     let expected_topics = soroban_sdk::vec![
@@ -241,8 +269,18 @@ fn test_duplicate_submit_fails() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Draw,
+    );
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Draw,
+    );
 }
 
 #[test]
@@ -250,9 +288,18 @@ fn test_duplicate_submit_returns_already_submitted() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
-    let result =
-        client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Draw);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Draw,
+    );
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Draw,
+    );
     assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
 }
 
@@ -276,8 +323,12 @@ fn test_submit_result_on_uninitialized_contract_returns_unauthorized() {
     let contract_id = env.register_contract(None, OracleContract);
     let client = OracleContractClient::new(&env, &contract_id);
 
-    let result =
-        client.try_submit_result(&0u64, &String::from_str(&env, "game_abc"), &Winner::Player1);
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "game_abc"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
@@ -299,7 +350,12 @@ fn test_ttl_extended_on_submit_result() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
 
     let ttl = env.as_contract(&contract_id, || {
         env.storage().persistent().get_ttl(&DataKey::Result(0u64))
@@ -334,8 +390,12 @@ fn test_pause_admin_only() {
 
     client.pause();
 
-    let result =
-        client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
@@ -347,7 +407,12 @@ fn test_unpause_admin_only() {
     client.pause();
     client.unpause();
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
     assert!(client.has_result(&0u64));
 }
 
@@ -358,8 +423,12 @@ fn test_submit_result_blocked_when_paused() {
 
     client.pause();
 
-    let result =
-        client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
     assert!(!client.has_result(&0u64));
@@ -372,13 +441,22 @@ fn test_submit_result_works_after_unpause() {
 
     client.pause();
 
-    let result =
-        client.try_submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
     client.unpause();
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
     assert!(client.has_result(&0u64));
     let entry = client.get_result(&0u64);
     assert_eq!(entry.result, Winner::Player1);
@@ -389,23 +467,41 @@ fn test_pause_unpause_state_transitions() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
     assert!(client.has_result(&0u64));
 
     client.pause();
 
-    let result =
-        client.try_submit_result(&1u64, &String::from_str(&env, "def456"), &Winner::Player2);
+    let result = client.try_submit_result(
+        &1u64,
+        &String::from_str(&env, "def456"),
+        &Platform::Lichess,
+        &Winner::Player2,
+    );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
     client.unpause();
 
-    client.submit_result(&1u64, &String::from_str(&env, "def456"), &Winner::Player2);
+    client.submit_result(
+        &1u64,
+        &String::from_str(&env, "def456"),
+        &Platform::Lichess,
+        &Winner::Player2,
+    );
     assert!(client.has_result(&1u64));
 
     client.pause();
-    let result =
-        client.try_submit_result(&2u64, &String::from_str(&env, "ghi789"), &Winner::Draw);
+    let result = client.try_submit_result(
+        &2u64,
+        &String::from_str(&env, "ghi789"),
+        &Platform::Lichess,
+        &Winner::Draw,
+    );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
@@ -414,7 +510,12 @@ fn test_get_result_extends_ttl() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "abc123"), &Winner::Player1);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
 
     let entry = client.get_result(&0u64);
     assert_eq!(entry.result, Winner::Player1);
@@ -440,16 +541,6 @@ fn test_pause_twice_is_idempotent() {
             .unwrap_or(false)
     });
     assert!(is_paused);
-}
-
-#[test]
-fn test_unpause_emits_no_event() {
-    let (env, contract_id, ..) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    client.pause();
-    client.unpause();
-    // Test passes if unpause completes without panic
 }
 
 #[test]
@@ -481,6 +572,7 @@ fn test_oracle_to_escrow_full_payout_flow() {
     oracle_client.submit_result(
         &0u64,
         &String::from_str(&env, "test_game"),
+        &Platform::Lichess,
         &Winner::Player1,
     );
     assert!(oracle_client.has_result(&0u64));
@@ -500,6 +592,7 @@ fn test_delete_result_removes_from_storage() {
     client.submit_result(
         &0u64,
         &String::from_str(&env, "chess_game_42"),
+        &Platform::Lichess,
         &Winner::Player1,
     );
     assert!(client.has_result(&0u64));
@@ -525,6 +618,7 @@ fn test_delete_result_blocked_when_paused() {
     client.submit_result(
         &0u64,
         &String::from_str(&env, "chess_game_99"),
+        &Platform::Lichess,
         &Winner::Player2,
     );
     assert!(client.has_result(&0u64));
@@ -553,7 +647,12 @@ fn test_instance_ttl_extended_on_submit_result() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "ttl_game"), &Winner::Player1);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "ttl_game"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
 
     let ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
@@ -573,7 +672,13 @@ fn test_transfer_admin_old_rejected_new_accepted() {
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (0u64, String::from_str(&env, "test_game"), Winner::Player1).into_val(&env),
+            args: (
+                0u64,
+                String::from_str(&env, "test_game"),
+                Platform::Lichess,
+                Winner::Player1,
+            )
+                .into_val(&env),
             sub_invokes: &[],
         },
     }]);
@@ -581,6 +686,7 @@ fn test_transfer_admin_old_rejected_new_accepted() {
     let result = client.try_submit_result(
         &0u64,
         &String::from_str(&env, "test_game"),
+        &Platform::Lichess,
         &Winner::Player1,
     );
     assert!(
@@ -593,7 +699,13 @@ fn test_transfer_admin_old_rejected_new_accepted() {
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (0u64, String::from_str(&env, "test_game"), Winner::Player1).into_val(&env),
+            args: (
+                0u64,
+                String::from_str(&env, "test_game"),
+                Platform::Lichess,
+                Winner::Player1,
+            )
+                .into_val(&env),
             sub_invokes: &[],
         },
     }]);
@@ -601,6 +713,7 @@ fn test_transfer_admin_old_rejected_new_accepted() {
     client.submit_result(
         &0u64,
         &String::from_str(&env, "test_game"),
+        &Platform::Lichess,
         &Winner::Player1,
     );
 

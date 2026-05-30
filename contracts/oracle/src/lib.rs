@@ -45,6 +45,7 @@ impl OracleContract {
         env: Env,
         match_id: u64,
         game_id: String,
+        platform: escrow::types::Platform,
         result: Winner,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
@@ -77,6 +78,7 @@ impl OracleContract {
             &DataKey::Result(match_id),
             &ResultEntry {
                 game_id,
+                platform,
                 result: result.clone(),
                 submitted_ledger: env.ledger().sequence(),
                 submitter: admin.clone(),
