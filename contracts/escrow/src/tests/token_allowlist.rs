@@ -54,3 +54,52 @@ fn test_removed_tokens_can_no_longer_be_used_for_new_matches() {
         "create_match should reject removed token"
     );
 }
+
+#[test]
+fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enabled() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+    let asset_client2 = StellarAssetClient::new(&env, &token2_addr);
+    asset_client2.mint(&player1, &1000);
+    asset_client2.mint(&player2, &1000);
+
+    client.add_allowed_token(&token);
+    client.add_allowed_token(&token2_addr);
+
+    let id1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_token1"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id1, 0, "first match with token1 should succeed");
+
+    let id2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token2_addr,
+        &String::from_str(&env, "game_token2"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id2, 1, "second match with token2 should succeed");
+
+    let unknown_token = Address::generate(&env);
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &unknown_token,
+        &String::from_str(&env, "game_unknown"),
+        &Platform::Lichess,
+    );
+    assert!(
+        result.is_err(),
+        "create_match should reject unknown token when allowlist is enforced"
+    );
+}
