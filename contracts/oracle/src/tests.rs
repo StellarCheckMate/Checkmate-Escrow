@@ -544,6 +544,26 @@ fn test_pause_twice_is_idempotent() {
 }
 
 #[test]
+fn test_unpause_emits_unpaused_event() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.pause();
+    client.unpause();
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("unpaused").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "unpaused event not emitted");
+}
+
+#[test]
 fn test_pause_emits_paused_event() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);

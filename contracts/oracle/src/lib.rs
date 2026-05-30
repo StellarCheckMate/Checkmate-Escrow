@@ -234,7 +234,7 @@ impl OracleContract {
         env.storage().instance().has(&DataKey::Admin)
     }
 
-    /// Unpause the oracle — admin only. Does not emit an event.
+    /// Unpause the oracle — admin only. Emits an `admin / unpaused` event.
     ///
     /// # Errors
     /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
@@ -247,6 +247,8 @@ impl OracleContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.events()
+            .publish((Symbol::new(&env, "admin"), symbol_short!("unpaused")), ());
         Ok(())
     }
 }
