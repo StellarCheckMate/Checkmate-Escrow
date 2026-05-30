@@ -149,6 +149,7 @@ impl OracleContract {
     }
 
     /// Admin removes a previously submitted result from persistent storage.
+    /// Emits a `oracle / deleted` event with the `match_id`.
     ///
     /// # Errors
     /// - [`Error::ContractPaused`] — contract is paused.
@@ -179,6 +180,12 @@ impl OracleContract {
         env.storage()
             .persistent()
             .remove(&DataKey::Result(match_id));
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("deleted")),
+            match_id,
+        );
+
         Ok(())
     }
 

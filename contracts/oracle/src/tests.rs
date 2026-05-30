@@ -632,6 +632,37 @@ fn test_delete_result_blocked_when_paused() {
 }
 
 #[test]
+fn test_delete_result_emits_deletion_event() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "chess_game_42"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert!(client.has_result(&0u64));
+
+    client.delete_result(&0u64);
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("deleted").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "deletion event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_id: u64 = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, 0u64);
+}
+
+#[test]
 #[should_panic]
 fn test_delete_result_requires_admin_auth() {
     let env = Env::default();
