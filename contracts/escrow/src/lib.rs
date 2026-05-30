@@ -15,6 +15,14 @@ const MATCH_TTL_LEDGERS: u32 = 518_400;
 /// Default match expiry timeout (~24 hours at 5s/ledger).
 const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = 17_280;
 
+/// Extend instance storage TTL on every invocation so Admin, Oracle, Paused, and other
+/// instance keys never expire.
+fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(MATCH_TTL_LEDGERS / 2, MATCH_TTL_LEDGERS);
+}
+
 #[contract]
 pub struct EscrowContract;
 
@@ -31,6 +39,7 @@ impl EscrowContract {
     /// - [`Error::AlreadyInitialized`] — contract has already been initialized.
     /// - [`Error::InvalidAddress`] — `oracle` is the escrow contract's own address.
     pub fn initialize(env: Env, oracle: Address, admin: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         if env.storage().instance().has(&DataKey::Oracle) {
             return Err(Error::AlreadyInitialized);
         }
@@ -50,6 +59,7 @@ impl EscrowContract {
 
     /// Return whether the escrow contract has been initialized.
     pub fn is_initialized(env: Env) -> bool {
+        extend_instance_ttl(&env);
         env.storage().instance().has(&DataKey::Oracle)
     }
 
@@ -58,6 +68,7 @@ impl EscrowContract {
     /// # Errors
     /// - [`Error::Unauthorized`] — caller is not the admin.
     pub fn pause(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -75,6 +86,7 @@ impl EscrowContract {
     /// # Errors
     /// - [`Error::Unauthorized`] — caller is not the admin.
     pub fn unpause(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -93,6 +105,7 @@ impl EscrowContract {
     /// - [`Error::Unauthorized`] — caller is not the admin.
     /// - [`Error::InvalidAddress`] — `new_oracle` is the escrow contract's own address.
     pub fn update_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let current_oracle: Address = env
             .storage()
             .instance()
@@ -144,6 +157,7 @@ impl EscrowContract {
         game_id: String,
         platform: Platform,
     ) -> Result<u64, Error> {
+        extend_instance_ttl(&env);
         player1.require_auth();
 
         if player1 == player2 {
@@ -288,6 +302,7 @@ impl EscrowContract {
     /// - [`Error::Unauthorized`] — `player` is not player1 or player2.
     /// - [`Error::AlreadyFunded`] — `player` has already deposited.
     pub fn deposit(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         player.require_auth();
 
         if env
@@ -358,6 +373,7 @@ impl EscrowContract {
     /// - [`Error::NotFunded`] — one or both players have not deposited.
     /// - [`Error::InvalidState`] — match is not in `Active` state.
     pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let oracle: Address = env
             .storage()
             .instance()
@@ -430,6 +446,7 @@ impl EscrowContract {
     /// - [`Error::MatchAlreadyActive`] — match is no longer in `Pending` state.
     /// - [`Error::Unauthorized`] — `caller` is not player1 or player2.
     pub fn cancel_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let mut m: Match = env
             .storage()
             .persistent()
@@ -490,6 +507,7 @@ impl EscrowContract {
     /// # Errors
     /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
+        extend_instance_ttl(&env);
         let m = env
             .storage()
             .persistent()
@@ -508,6 +526,7 @@ impl EscrowContract {
     /// skipped. Duplicate IDs each produce their own entry, so the output
     /// length may be less than or equal to `ids.len()`.
     pub fn get_matches(env: Env, ids: Vec<u64>) -> Vec<Match> {
+        extend_instance_ttl(&env);
         let mut out: Vec<Match> = Vec::new(&env);
         for id in ids.iter() {
             if let Some(m) = env
@@ -528,6 +547,7 @@ impl EscrowContract {
 
     /// Return whether the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
+        extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::Paused)
@@ -539,6 +559,7 @@ impl EscrowContract {
     /// # Errors
     /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
+        extend_instance_ttl(&env);
         let m: Match = env
             .storage()
             .persistent()
@@ -557,6 +578,7 @@ impl EscrowContract {
     /// # Errors
     /// - [`Error::Unauthorized`] — contract has not been initialized.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::Oracle)
@@ -568,6 +590,7 @@ impl EscrowContract {
     /// # Errors
     /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
+        extend_instance_ttl(&env);
         let m: Match = env
             .storage()
             .persistent()
@@ -593,6 +616,7 @@ impl EscrowContract {
     /// - [`Error::InvalidState`] — match is not in `Pending` state.
     /// - [`Error::MatchNotExpired`] — the timeout period has not yet elapsed.
     pub fn expire_match(env: Env, match_id: u64) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let mut m: Match = env
             .storage()
             .persistent()
@@ -655,6 +679,7 @@ impl EscrowContract {
     /// # Errors
     /// - [`Error::Unauthorized`] — caller is not the current admin.
     pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let current_admin: Address = env
             .storage()
             .instance()
@@ -676,6 +701,7 @@ impl EscrowContract {
     /// Propose a new admin. Current admin must authorize. Transfer is not
     /// complete until the nominee calls `accept_admin`.
     pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let current_admin: Address = env
             .storage()
             .instance()
@@ -690,6 +716,7 @@ impl EscrowContract {
 
     /// Accept a pending admin proposal. Must be called by the proposed address.
     pub fn accept_admin(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let pending: Address = env
             .storage()
             .instance()
@@ -706,6 +733,7 @@ impl EscrowContract {
     /// # Errors
     /// - [`Error::Unauthorized`] — contract has not been initialized.
     pub fn get_admin(env: Env) -> Result<Address, Error> {
+        extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::Admin)
@@ -719,6 +747,7 @@ impl EscrowContract {
     /// - [`Error::InvalidTimeout`] — `ledgers` is zero.
     /// - [`Error::TimeoutTooLarge`] — `ledgers` exceeds `MATCH_TTL_LEDGERS`.
     pub fn set_match_timeout(env: Env, ledgers: u32) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -739,6 +768,7 @@ impl EscrowContract {
 
     /// Return the match timeout value in ledgers.
     pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
+        extend_instance_ttl(&env);
         Ok(env
             .storage()
             .instance()
@@ -749,6 +779,7 @@ impl EscrowContract {
     /// Return the total number of matches ever created (including cancelled and completed).
     /// Useful for frontend pagination and analytics.
     pub fn get_match_count(env: Env) -> u64 {
+        extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&DataKey::MatchCount)
@@ -757,6 +788,7 @@ impl EscrowContract {
 
     /// Return all match IDs for a given player.
     pub fn get_player_matches(env: Env, player: Address) -> Vec<u64> {
+        extend_instance_ttl(&env);
         let ids = env
             .storage()
             .persistent()
@@ -778,6 +810,7 @@ impl EscrowContract {
 
     /// Return all currently active (non-cancelled, non-completed) match IDs.
     pub fn get_active_matches(env: Env) -> Vec<u64> {
+        extend_instance_ttl(&env);
         let active: Vec<u64> = env
             .storage()
             .persistent()
@@ -796,6 +829,7 @@ impl EscrowContract {
     /// Add a token to the allowlist. Requires admin auth.
     /// Once any token is added, the allowlist is enforced on `create_match`.
     pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -829,6 +863,7 @@ impl EscrowContract {
     /// Remove a token from the allowlist. Requires admin auth.
     /// When the last token is removed, the allowlist is disabled.
     pub fn remove_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
