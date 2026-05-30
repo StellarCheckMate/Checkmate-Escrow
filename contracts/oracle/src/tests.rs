@@ -885,3 +885,23 @@ fn test_delete_result_emits_deletion_event() {
     let ev_id: u64 = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_id, 0u64);
 }
+
+
+// ── Test #600: delete_result leaves has_result false ──────────────────────
+
+#[test]
+fn test_delete_result_leaves_has_result_false() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "chess_game_42"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert!(client.has_result(&0u64));
+
+    client.delete_result(&0u64);
+    assert!(!client.has_result(&0u64));
+}
