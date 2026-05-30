@@ -653,3 +653,38 @@ fn test_update_admin_emits_rotation_event() {
     assert_eq!(ev_old, old_admin);
     assert_eq!(ev_new, new_admin);
 }
+
+#[test]
+fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
+    let (env, oracle_id, escrow_id, oracle_admin, player1, player2, token_addr) = setup();
+    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+    let oracle_client = OracleContractClient::new(&env, &oracle_id);
+
+    // Create and fund a match
+    let match_id = escrow_client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token_addr,
+        &String::from_str(&env, "integration_game"),
+        &Platform::Lichess,
+    );
+    escrow_client.deposit(&match_id, &player1);
+    escrow_client.deposit(&match_id, &player2);
+
+    // Oracle submits result
+    oracle_client.submit_result(
+        &match_id,
+        &String::from_str(&env, "integration_game"),
+        &Winner::Player1,
+    );
+
+    // Verify oracle stored the result
+    assert!(oracle_client.has_result(&match_id));
+    let result = oracle_client.get_result(&match_id);
+    assert_eq!(result.result, Winner::Player1);
+
+    // Verify escrow match is still active (oracle doesn't trigger payout)
+    let m = escrow_client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Active);
+}

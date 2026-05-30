@@ -86,4 +86,5 @@ pub enum DataKey {
     AllowedToken(Address),
     AllowlistEnabled,
     AllowedTokenCount,
+    OracleRecord(u64),
 }

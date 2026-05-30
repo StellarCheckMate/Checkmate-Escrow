@@ -422,6 +422,38 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Submit result with oracle record integration.
+    /// This is the canonical path for oracle-initiated payouts.
+    /// The oracle contract calls this to atomically store the result and execute payout.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — caller is not the oracle.
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
+    /// - [`Error::NotFunded`] — one or both players have not deposited.
+    /// - [`Error::InvalidState`] — match is not in `Active` state.
+    pub fn submit_result_with_oracle_record(
+        env: Env,
+        match_id: u64,
+        winner: Winner,
+        game_id: String,
+    ) -> Result<(), Error> {
+        // Validate and execute payout via standard submit_result
+        Self::submit_result(env.clone(), match_id, winner)?;
+
+        // Store oracle record in a canonical location for audit trail
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleRecord(match_id), &game_id);
+        env.storage().persistent().extend_ttl(
+            &DataKey::OracleRecord(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Ok(())
+    }
+
     /// Cancel a pending match and refund any deposits.
     /// Either player can cancel a pending match.
     ///
