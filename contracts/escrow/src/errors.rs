@@ -19,4 +19,5 @@ pub enum Error {
     MatchNotExpired = 14,
     InvalidGameId = 15,
     InvalidPlayers = 16,
+    TokenNotAllowed = 17,
 }

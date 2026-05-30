@@ -12,6 +12,7 @@ mod events;
 mod index;
 mod lifecycle;
 mod ttl;
+mod token_allowlist;
 
 pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let env = Env::default();
