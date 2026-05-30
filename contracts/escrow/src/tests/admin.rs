@@ -510,3 +510,27 @@ fn test_accept_admin_finalizes_transfer_and_emits_event() {
     let ev_new_admin: Address = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_new_admin, new_admin);
 }
+
+
+// #595 - current admin retains privileges after propose_admin and before accept_admin
+#[test]
+fn test_current_admin_retains_privileges_after_propose_before_accept() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+    client.propose_admin(&new_admin);
+
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.pause();
+    assert!(client.is_paused());
+}
