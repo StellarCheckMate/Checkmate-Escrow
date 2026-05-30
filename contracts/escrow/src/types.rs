@@ -39,6 +39,8 @@ pub struct Match {
     pub player2_deposited: bool,
     /// Ledger sequence number at match creation. Used for timeout and ordering logic.
     pub created_ledger: u32,
+    /// Ledger sequence number when match reached terminal state (Completed or Cancelled).
+    pub completed_ledger: Option<u32>,
 }
 
 #[contracttype]
@@ -49,4 +51,5 @@ pub enum DataKey {
     Admin,
     Paused,
     GameId(String),
+    LiveMatches,
 }
