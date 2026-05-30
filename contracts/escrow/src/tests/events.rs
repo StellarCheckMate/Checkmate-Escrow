@@ -322,3 +322,30 @@ fn test_deposit_emits_event_for_player2_and_includes_final_state() {
         "activated event should be emitted after player2 deposits"
     );
 }
+
+#[test]
+fn test_set_match_timeout_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let old_timeout = 518_400u32;
+    let new_timeout = 1_036_800u32;
+
+    client.set_match_timeout(&new_timeout);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("timeout").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "timeout event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_old, ev_new): (u32, u32) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_old, old_timeout);
+    assert_eq!(ev_new, new_timeout);
+}
