@@ -101,6 +101,27 @@ if env.storage().instance().has(&DataKey::Oracle) {
 
 Prior to fix [#216], contracts had no deployer guard, allowing front-running attacks where malicious actors could initialize contracts with their own admin/oracle addresses immediately after deployment.
 
+## Panic vs Error Behavior
+
+The current contract surface uses a deliberate mix of explicit panics and typed errors:
+
+- `initialize()` in both `EscrowContract` and `OracleContract` contains an explicit `panic!("Contract already initialized")` path when initialization is attempted a second time.
+- All other public contract operations return `Result<_, Error>` and map failures to typed contract errors such as `Unauthorized`, `MatchNotFound`, `ContractPaused`, `InvalidGameId`, and `AlreadySubmitted`.
+- Authorization failures from `require_auth()` are surfaced as contract errors through the Soroban runtime, not as Rust panics.
+- `get_result()` returns `Error::ResultNotFound` for missing entries rather than panicking.
+
+For client implementations, the preferred strategy is to use generated `try_` wrappers where available. These wrappers convert contract error outcomes into host-language `Result` values and make it possible to handle failure paths explicitly.
+
+### Migration Guidance
+
+Clients and test code should prefer `try_` variants for contract invocation whenever possible:
+
+- Use `try_initialize` instead of `initialize` to safely detect duplicate initialization without triggering a hard contract panic.
+- Use `try_submit_result`, `try_create_match`, `try_deposit`, and similar wrappers so that authorization and state validation failures can be inspected programmatically.
+- When `try_` wrappers are unavailable, ensure the host-side caller explicitly handles the contract error code produced by failed invocations.
+
+This document should be revisited after issues #1 and #2 land to capture any contract or API surface changes that affect panic/error semantics and migration steps.
+
 ## Pause Mechanism
 
 Both contracts implement emergency pause functionality for rapid response to security incidents.
@@ -250,5 +271,5 @@ For security-related issues or concerns:
 ## Version History
 
 - **v1.0.0**: Initial security documentation
-- **Last Updated**: April 27, 2026</content>
+- **Last Updated**: May 28, 2026</content>
 <parameter name="filePath">/home/farouq/Desktop/Checkmate-Escrow/docs/security.md
