@@ -1642,3 +1642,32 @@ fn test_winner_is_draw_default_before_result_submitted() {
         "winner must default to Draw (Undecided) before any result is submitted"
     );
 }
+
+#[test]
+fn test_get_pending_matches_returns_newly_created_matches() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pending_game_1"),
+        &Platform::Lichess,
+    );
+
+    let id2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pending_game_2"),
+        &Platform::Lichess,
+    );
+
+    let pending = client.get_pending_matches();
+    assert_eq!(pending.len(), 2);
+    assert!(pending.contains(&id1));
+    assert!(pending.contains(&id2));
+}

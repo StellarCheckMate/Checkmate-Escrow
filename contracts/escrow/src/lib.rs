@@ -793,6 +793,24 @@ impl EscrowContract {
         active
     }
 
+    /// Return all pending (unfunded) match IDs.
+    pub fn get_pending_matches(env: Env) -> Vec<u64> {
+        let active = Self::get_active_matches(env.clone());
+        let mut pending = vec![&env];
+        for id in active.iter() {
+            if let Some(m) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(id))
+            {
+                if m.state == MatchState::Pending {
+                    pending.push_back(id);
+                }
+            }
+        }
+        pending
+    }
+
     /// Add a token to the allowlist. Requires admin auth.
     /// Once any token is added, the allowlist is enforced on `create_match`.
     pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
