@@ -9,6 +9,7 @@ pub use soroban_sdk::{
 
 mod admin;
 mod events;
+mod index;
 mod lifecycle;
 mod ttl;
 
