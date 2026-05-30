@@ -471,3 +471,42 @@ fn test_propose_admin_stores_pending_admin_and_emits_event() {
     let ev_pending: Address = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_pending, new_admin);
 }
+
+
+// #594 - accept_admin finalizes the transfer and emits an event
+#[test]
+fn test_accept_admin_finalizes_transfer_and_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+    client.propose_admin(&new_admin);
+
+    env.mock_auths(&[MockAuth {
+        address: &new_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.accept_admin();
+    assert_eq!(client.get_admin(), new_admin);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("xfer").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "xfer event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_new_admin: Address = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_new_admin, new_admin);
+}
