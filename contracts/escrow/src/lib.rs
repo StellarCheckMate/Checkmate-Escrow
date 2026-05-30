@@ -499,6 +499,45 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)
     }
 
+    /// Propose a new admin. Current admin only. Stores pending admin without transferring authority.
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("propose")),
+            new_admin,
+        );
+        Ok(())
+    }
+
+    /// Accept pending admin proposal. Pending admin only. Finalizes the transfer.
+    pub fn accept_admin(env: Env) -> Result<(), Error> {
+        let pending_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(Error::Unauthorized)?;
+        pending_admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Admin, &pending_admin);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("xfer")),
+            pending_admin,
+        );
+        Ok(())
+    }
+
     /// Read a match by ID.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
         env.storage()
