@@ -241,3 +241,36 @@ fn test_submit_result_emits_completed_event_with_correct_winner() {
     assert_eq!(ev_match_id, match_id);
     assert_eq!(ev_winner, Winner::Player1);
 }
+
+#[test]
+fn test_deposit_emits_event_for_player1() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "deposit_p1_event"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("deposit").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "deposit event not emitted for player1");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_match_id, ev_player): (u64, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_match_id, match_id);
+    assert_eq!(ev_player, player1);
+}
