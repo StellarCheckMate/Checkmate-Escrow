@@ -83,6 +83,7 @@ cargo test -p oracle
 
 - Update relevant documentation in `docs/` for architectural changes
 - Add inline comments for non-obvious code
+- Add or update Soroban contract guidance in `docs/contributing-contracts.md` when changing contract storage, TTL, or auth behavior
 - Update README.md if adding new features or changing setup steps
 - Check repository health and link validity with `./scripts/repository_health_check.sh`
 
