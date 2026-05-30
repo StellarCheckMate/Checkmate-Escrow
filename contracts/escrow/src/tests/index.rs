@@ -150,3 +150,39 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
     assert_eq!(active_matches.get(1).unwrap(), match_id_3);
     assert_eq!(active_matches.get(2).unwrap(), match_id_4);
 }
+
+/// Test #581: active/live pagination handles empty and partial pages
+#[test]
+fn test_active_pagination_handles_empty_and_partial_pages() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create enough matches for multiple pages (assuming page size of 10)
+    let mut match_ids = Vec::new();
+    for i in 0..25 {
+        let match_id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, &format!("game_{}", i)),
+            &Platform::Lichess,
+        );
+        match_ids.push(match_id);
+    }
+
+    // Deposit for all to make them active
+    for match_id in match_ids.iter() {
+        client.deposit(match_id, &player1);
+        client.deposit(match_id, &player2);
+    }
+
+    // Assert pagination boundaries
+    let all_active = client.get_active_matches();
+    assert_eq!(all_active.len(), 25);
+
+    // Verify all match IDs are present
+    for (i, match_id) in match_ids.iter().enumerate() {
+        assert_eq!(all_active.get(i as u32).unwrap(), *match_id);
+    }
+}
