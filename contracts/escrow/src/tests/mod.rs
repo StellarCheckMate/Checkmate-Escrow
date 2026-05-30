@@ -11,6 +11,7 @@ mod admin;
 mod events;
 mod index;
 mod lifecycle;
+mod pagination;
 mod ttl;
 mod token_allowlist;
 
