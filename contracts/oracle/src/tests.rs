@@ -673,3 +673,20 @@ fn test_result_entry_stores_platform() {
     assert_eq!(entry.result, Winner::Player1);
     assert_eq!(entry.game_id, String::from_str(&env, "lichess_game"));
 }
+
+// ── Issue #603: ResultEntry stores submission ledger ────────────────────────
+
+#[test]
+fn test_result_entry_stores_submission_ledger() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let ledger_before = env.ledger().sequence();
+    client.submit_result(&0u64, &String::from_str(&env, "game_123"), &Winner::Draw);
+
+    let entry = client.get_result(&0u64);
+    assert!(
+        entry.submitted_ledger >= ledger_before,
+        "submitted_ledger must be >= ledger at call time"
+    );
+}
