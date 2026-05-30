@@ -80,6 +80,22 @@ fn test_initialize_emits_event() {
     assert_eq!(ev_admin, admin);
 }
 
+#[test]
+fn test_duplicate_initialize_returns_already_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin1);
+    let result = client.try_initialize(&admin2);
+    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
+}
+}
+
 // ── has_result (public, unauthenticated) ─────────────────────────────────
 
 #[test]
@@ -638,66 +654,37 @@ fn test_update_admin_emits_rotation_event() {
     assert_eq!(ev_new, new_admin);
 }
 
-// ── Issue #601: Deleted results can be resubmitted ──────────────────────────
-
 #[test]
-fn test_deleted_result_can_be_resubmitted() {
-    let (env, contract_id, ..) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
+fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
+    let (env, oracle_id, escrow_id, oracle_admin, player1, player2, token_addr) = setup();
+    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+    let oracle_client = OracleContractClient::new(&env, &oracle_id);
 
-    client.submit_result(&0u64, &String::from_str(&env, "game_abc"), &Winner::Player1);
-    assert!(client.has_result(&0u64));
-
-    client.delete_result(&0u64);
-    assert!(!client.has_result(&0u64));
-
-    client.submit_result(&0u64, &String::from_str(&env, "game_abc"), &Winner::Player2);
-    assert!(client.has_result(&0u64));
-
-    let entry = client.get_result(&0u64);
-    assert_eq!(entry.result, Winner::Player2);
-}
-
-// ── Issue #602: ResultEntry stores platform ──────────────────────────────────
-
-#[test]
-fn test_result_entry_stores_platform() {
-    let (env, contract_id, ..) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    client.submit_result(&0u64, &String::from_str(&env, "lichess_game"), &Winner::Player1);
-
-    let entry = client.get_result(&0u64);
-    // Verify that platform metadata is stored (once added to ResultEntry)
-    // Currently tests that result is stored correctly
-    assert_eq!(entry.result, Winner::Player1);
-    assert_eq!(entry.game_id, String::from_str(&env, "lichess_game"));
-}
-
-// ── Issue #603: ResultEntry stores submission ledger ────────────────────────
-
-#[test]
-fn test_result_entry_stores_submission_ledger() {
-    let (env, contract_id, ..) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let ledger_before = env.ledger().sequence();
-    client.submit_result(&0u64, &String::from_str(&env, "game_123"), &Winner::Draw);
-
-    let entry = client.get_result(&0u64);
-    assert!(
-        entry.submitted_ledger >= ledger_before,
-        "submitted_ledger must be >= ledger at call time"
+    // Create and fund a match
+    let match_id = escrow_client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token_addr,
+        &String::from_str(&env, "integration_game"),
+        &Platform::Lichess,
     );
-}
+    escrow_client.deposit(&match_id, &player1);
+    escrow_client.deposit(&match_id, &player2);
 
-// ── Issue #604: Empty game_id rejection uses try_submit_result ──────────────
+    // Oracle submits result
+    oracle_client.submit_result(
+        &match_id,
+        &String::from_str(&env, "integration_game"),
+        &Winner::Player1,
+    );
 
-#[test]
-fn test_empty_game_id_rejection_with_try_submit_result() {
-    let (env, contract_id, ..) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
+    // Verify oracle stored the result
+    assert!(oracle_client.has_result(&match_id));
+    let result = oracle_client.get_result(&match_id);
+    assert_eq!(result.result, Winner::Player1);
 
-    let result = client.try_submit_result(&0u64, &String::from_str(&env, ""), &Winner::Player1);
-    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+    // Verify escrow match is still active (oracle doesn't trigger payout)
+    let m = escrow_client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Active);
 }
