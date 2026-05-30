@@ -63,6 +63,58 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Add a token to the allowlist — admin only.
+    pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::AllowedToken(token.clone()), &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::AllowedToken(token.clone()), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("token_add")),
+            token,
+        );
+        Ok(())
+    }
+
+    /// Remove a token from the allowlist — admin only.
+    pub fn remove_allowed_token(env: Env, token: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::AllowedToken(token.clone()));
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("token_remove")),
+            token,
+        );
+        Ok(())
+    }
+
+    /// Check if a token is allowed.
+    pub fn is_token_allowed(env: Env, token: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AllowedToken(token))
+            .unwrap_or(false)
+    }
+
     /// Create a new match. Both players must call `deposit` before the game starts.
     ///
     /// # Parameters
@@ -98,6 +150,17 @@ impl EscrowContract {
         {
             return Err(Error::ContractPaused);
         }
+
+        // Check allowlist enforcement
+        let allowlist_enforced: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowlistEnforced)
+            .unwrap_or(false);
+        if allowlist_enforced && !Self::is_token_allowed(env.clone(), token.clone()) {
+            return Err(Error::TokenNotAllowed);
+        }
+
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
@@ -465,6 +528,45 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)
+    }
+
+    /// Propose a new admin. Current admin only. Stores pending admin without transferring authority.
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("propose")),
+            new_admin,
+        );
+        Ok(())
+    }
+
+    /// Accept pending admin proposal. Pending admin only. Finalizes the transfer.
+    pub fn accept_admin(env: Env) -> Result<(), Error> {
+        let pending_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(Error::Unauthorized)?;
+        pending_admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Admin, &pending_admin);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("xfer")),
+            pending_admin,
+        );
+        Ok(())
     }
 
     /// Read a match by ID.
