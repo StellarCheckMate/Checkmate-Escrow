@@ -445,3 +445,29 @@ fn test_is_paused_cycle() {
     client.unpause();
     assert!(!client.is_paused());
 }
+
+
+// #593 - propose_admin stores the pending admin and emits an event
+#[test]
+fn test_propose_admin_stores_pending_admin_and_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+    client.propose_admin(&new_admin);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("propose").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "propose event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_pending: Address = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_pending, new_admin);
+}
