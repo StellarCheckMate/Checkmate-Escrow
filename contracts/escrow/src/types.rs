@@ -53,6 +53,8 @@ pub enum DataKey {
     Paused,
     GameId(String),
     LiveMatches,
+    PlayerMatches(Address),
+    MatchTimeout,
     AllowedToken(Address),
     AllowlistEnforced,
     OracleRecord(u64),
