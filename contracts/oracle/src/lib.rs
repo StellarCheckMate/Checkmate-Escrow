@@ -23,32 +23,33 @@ pub struct OracleContract;
 #[contractimpl]
 impl OracleContract {
     /// Initialize with a trusted admin (the off-chain oracle service).
-    pub fn initialize(env: Env, admin: Address) {
+    ///
+    /// # Errors
+    /// - [`Error::AlreadyInitialized`] — contract has already been initialized.
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
         extend_instance_ttl(&env);
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("Contract already initialized");
+            return Err(Error::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.events()
             .publish((Symbol::new(&env, "oracle"), symbol_short!("init")), &admin);
+        Ok(())
     }
 
     /// Admin submits a verified match result on-chain.
     /// Invariant: No results can be submitted while the contract is paused.
     ///
-    /// The `match_id` must correspond to a valid escrow match. This function performs
-    /// a cross-contract call to the escrow contract to verify the match exists before
-    /// storing the result.
-    ///
     /// # Errors
     /// - [`Error::ContractPaused`] — contract is paused.
     /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
     /// - [`Error::AlreadySubmitted`] — a result for `match_id` has already been recorded.
-    /// - [`Error::MatchNotFound`] — the `match_id` does not correspond to a valid escrow match.
+    /// - [`Error::InvalidGameId`] — `game_id` is empty.
     pub fn submit_result(
         env: Env,
         match_id: u64,
         game_id: String,
+        platform: escrow::types::Platform,
         result: Winner,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
@@ -81,6 +82,7 @@ impl OracleContract {
             &DataKey::Result(match_id),
             &ResultEntry {
                 game_id,
+                platform,
                 result: result.clone(),
                 submitted_ledger: env.ledger().sequence(),
                 submitter: admin.clone(),
@@ -151,6 +153,7 @@ impl OracleContract {
     }
 
     /// Admin removes a previously submitted result from persistent storage.
+    /// Emits a `oracle / deleted` event with the `match_id`.
     ///
     /// # Errors
     /// - [`Error::ContractPaused`] — contract is paused.
@@ -181,6 +184,12 @@ impl OracleContract {
         env.storage()
             .persistent()
             .remove(&DataKey::Result(match_id));
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("deleted")),
+            match_id,
+        );
+
         Ok(())
     }
 
@@ -229,7 +238,7 @@ impl OracleContract {
         env.storage().instance().has(&DataKey::Admin)
     }
 
-    /// Unpause the oracle — admin only. Does not emit an event.
+    /// Unpause the oracle — admin only. Emits an `admin / unpaused` event.
     ///
     /// # Errors
     /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
@@ -242,6 +251,8 @@ impl OracleContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.events()
+            .publish((Symbol::new(&env, "admin"), symbol_short!("unpaused")), ());
         Ok(())
     }
 }
