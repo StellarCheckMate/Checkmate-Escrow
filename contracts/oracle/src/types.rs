@@ -1,4 +1,5 @@
 use soroban_sdk::{contracttype, Address, String};
+use escrow::types::Platform;
 
 /// Canonical result enum shared conceptually with the escrow contract.
 /// Variants mirror escrow's `Winner` enum for consistency.
@@ -14,6 +15,7 @@ pub enum Winner {
 #[derive(Clone, Debug)]
 pub struct ResultEntry {
     pub game_id: String,
+    pub platform: Platform,
     pub result: Winner,
     /// Ledger sequence number at which this result was submitted.
     pub submitted_ledger: u32,
