@@ -643,9 +643,11 @@ impl EscrowContract {
         Ok(depositors * m.stake_amount)
     }
 
-    /// Return all matches that are in Active state (fully funded).
-    pub fn get_live_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
-        let mut live_matches = soroban_sdk::vec![&env];
+    fn collect_matches_by_state(
+        env: &Env,
+        state: MatchState,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        let mut matches = soroban_sdk::vec![env];
         let count: u64 = env
             .storage()
             .instance()
@@ -658,29 +660,24 @@ impl EscrowContract {
                 .persistent()
                 .get::<DataKey, Match>(&DataKey::Match(i))
             {
-                if m.state == MatchState::Active {
-                    live_matches.push_back(m);
+                if m.state == state {
+                    matches.push_back(m);
                 }
             }
         }
 
-        Ok(live_matches)
+        Ok(matches)
     }
 
-    /// Return the total number of active matches created, ordered by match ID ascending.
-    pub fn get_active_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
-        Self::get_live_matches(env)
-    }
-
-    /// Return a paginated page of active matches ordered by match ID ascending.
-    pub fn get_active_matches_paginated(
-        env: Env,
+    fn collect_matches_by_state_paginated(
+        env: &Env,
+        state: MatchState,
         offset: u32,
         limit: u32,
     ) -> Result<soroban_sdk::Vec<Match>, Error> {
-        let mut active_matches = soroban_sdk::vec![&env];
+        let mut matches = soroban_sdk::vec![env];
         if limit == 0 {
-            return Ok(active_matches);
+            return Ok(matches);
         }
 
         let count: u64 = env
@@ -697,14 +694,14 @@ impl EscrowContract {
                 .persistent()
                 .get::<DataKey, Match>(&DataKey::Match(i))
             {
-                if m.state != MatchState::Active {
+                if m.state != state {
                     continue;
                 }
                 if skipped < offset {
                     skipped = skipped.saturating_add(1);
                     continue;
                 }
-                active_matches.push_back(m);
+                matches.push_back(m);
                 added = added.saturating_add(1);
                 if added >= limit {
                     break;
@@ -712,7 +709,40 @@ impl EscrowContract {
             }
         }
 
-        Ok(active_matches)
+        Ok(matches)
+    }
+
+    /// Return all matches currently in Pending state (created and awaiting deposits).
+    pub fn get_pending_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state(&env, MatchState::Pending)
+    }
+
+    /// Return a paginated page of pending matches ordered by match ID ascending.
+    pub fn get_pending_matches_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state_paginated(&env, MatchState::Pending, offset, limit)
+    }
+
+    /// Return all matches that are in Active state (fully funded).
+    pub fn get_active_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state(&env, MatchState::Active)
+    }
+
+    /// Return all matches that are in Active state (fully funded).
+    pub fn get_live_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::get_active_matches(env)
+    }
+
+    /// Return a paginated page of active matches ordered by match ID ascending.
+    pub fn get_active_matches_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state_paginated(&env, MatchState::Active, offset, limit)
     }
 
     /// Alias for `get_active_matches_paginated` with a live-match naming convention.
