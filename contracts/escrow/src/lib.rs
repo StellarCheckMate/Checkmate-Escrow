@@ -7,8 +7,11 @@ use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
 use types::{DataKey, Match, MatchState, Platform, Winner};
 
-/// ~30 days at 5s/ledger. Used as both the TTL threshold and the extend-to value.
+/// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
+
+/// Default match expiration timeout used when no explicit timeout is configured.
+const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = MATCH_TTL_LEDGERS;
 
 /// Maximum allowed byte length for a game_id string.
 ///
@@ -164,11 +167,7 @@ impl EscrowContract {
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        // Reject empty game IDs — an empty string cannot identify any real game.
-        if game_id.is_empty() {
-            return Err(Error::InvalidGameId);
-        }
-        if game_id.len() > MAX_GAME_ID_LEN {
+        if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
         }
 
@@ -493,8 +492,9 @@ impl EscrowContract {
         }
 
         let elapsed = env.ledger().sequence().saturating_sub(m.created_ledger);
+        let timeout = Self::current_match_timeout(&env);
 
-        if elapsed < MATCH_TTL_LEDGERS {
+        if elapsed < timeout {
             return Err(Error::MatchNotExpired);
         }
 
@@ -532,6 +532,42 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)
+    }
+
+    /// Return the oracle address currently configured on the contract.
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)
+    }
+
+    fn current_match_timeout(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MatchTimeout)
+            .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS)
+    }
+
+    pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
+        Ok(Self::current_match_timeout(&env))
+    }
+
+    pub fn set_match_timeout(env: Env, timeout: u32) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let old_timeout = Self::current_match_timeout(&env);
+        env.storage().instance().set(&DataKey::MatchTimeout, &timeout);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("timeout")),
+            (old_timeout, timeout),
+        );
+        Ok(())
     }
 
     /// Propose a new admin. Current admin only. Stores pending admin without transferring authority.
@@ -629,6 +665,63 @@ impl EscrowContract {
         }
 
         Ok(live_matches)
+    }
+
+    /// Return the total number of active matches created, ordered by match ID ascending.
+    pub fn get_active_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::get_live_matches(env)
+    }
+
+    /// Return a paginated page of active matches ordered by match ID ascending.
+    pub fn get_active_matches_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        let mut active_matches = soroban_sdk::vec![&env];
+        if limit == 0 {
+            return Ok(active_matches);
+        }
+
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+        let mut skipped = 0u32;
+        let mut added = 0u32;
+
+        for i in 0..count {
+            if let Ok(m) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(i))
+            {
+                if m.state != MatchState::Active {
+                    continue;
+                }
+                if skipped < offset {
+                    skipped = skipped.saturating_add(1);
+                    continue;
+                }
+                active_matches.push_back(m);
+                added = added.saturating_add(1);
+                if added >= limit {
+                    break;
+                }
+            }
+        }
+
+        Ok(active_matches)
+    }
+
+    /// Alias for `get_active_matches_paginated` with a live-match naming convention.
+    pub fn get_live_matches_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::get_active_matches_paginated(env, offset, limit)
     }
 
     /// Return the total number of matches created.
