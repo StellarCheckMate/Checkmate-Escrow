@@ -164,6 +164,10 @@ impl EscrowContract {
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
+        // Reject empty game IDs — an empty string cannot identify any real game.
+        if game_id.is_empty() {
+            return Err(Error::InvalidGameId);
+        }
         if game_id.len() > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
         }
