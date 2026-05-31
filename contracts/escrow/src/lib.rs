@@ -164,7 +164,7 @@ impl EscrowContract {
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        if game_id.len() > MAX_GAME_ID_LEN {
+        if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
         }
 
@@ -527,6 +527,14 @@ impl EscrowContract {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)
+    }
+
+    /// Return the oracle address currently configured on the contract.
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
             .ok_or(Error::Unauthorized)
     }
 
