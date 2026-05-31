@@ -627,6 +627,16 @@ impl EscrowContract {
         Ok(m.player1_deposited && m.player2_deposited)
     }
 
+    /// Return the number of players who have deposited for a match (0, 1, or 2).
+    pub fn get_depositor_count(env: Env, match_id: u64) -> Result<u32, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        Ok(Self::depositor_count(&m) as u32)
+    }
+
     /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
         let m: Match = env
@@ -638,9 +648,12 @@ impl EscrowContract {
             return Ok(0);
         }
         // Count depositors explicitly — avoids fragile bool-to-integer casting.
-        let depositors: i128 = if m.player1_deposited { 1 } else { 0 }
-            + if m.player2_deposited { 1 } else { 0 };
+        let depositors: i128 = Self::depositor_count(&m);
         Ok(depositors * m.stake_amount)
+    }
+
+    fn depositor_count(m: &Match) -> i128 {
+        if m.player1_deposited { 1 } else { 0 } + if m.player2_deposited { 1 } else { 0 }
     }
 
     /// Return all matches that are in Active state (fully funded).
