@@ -643,6 +643,16 @@ impl EscrowContract {
         Ok(depositors * m.stake_amount)
     }
 
+    /// Return the ledger interval between match creation and terminal completion/cancellation.
+    pub fn get_match_duration(env: Env, match_id: u64) -> Result<Option<u32>, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        Ok(m.completed_ledger.map(|completed| completed.saturating_sub(m.created_ledger)))
+    }
+
     /// Return all matches that are in Active state (fully funded).
     pub fn get_live_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
         let mut live_matches = soroban_sdk::vec![&env];

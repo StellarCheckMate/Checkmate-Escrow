@@ -1655,6 +1655,53 @@ fn test_cancel_match_sets_completed_ledger() {
 }
 
 #[test]
+fn test_get_match_duration_after_cancelled_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "duration_cancel_test"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id, &player1);
+    let duration = client.get_match_duration(&id).unwrap();
+    let m = client.get_match(&id);
+
+    assert_eq!(duration, Some(m.completed_ledger.unwrap().saturating_sub(m.created_ledger)));
+    assert!(duration.is_some());
+}
+
+#[test]
+fn test_get_match_duration_after_completion() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "duration_complete_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1, &oracle);
+
+    let duration = client.get_match_duration(&id).unwrap();
+    let m = client.get_match(&id);
+
+    assert_eq!(duration, Some(m.completed_ledger.unwrap().saturating_sub(m.created_ledger)));
+    assert!(duration.is_some());
+}
+
+#[test]
 fn test_expire_match_sets_completed_ledger() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
