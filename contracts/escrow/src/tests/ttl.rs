@@ -25,6 +25,56 @@ fn test_ttl_extended_on_create_match() {
 }
 
 #[test]
+fn test_add_allowed_token_extends_ttl() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::AllowedToken(token.clone()))
+    });
+    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+}
+
+#[test]
+fn test_is_token_allowed_extends_ttl_on_read() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
+
+    let ttl_before = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::AllowedToken(token.clone()))
+    });
+    assert!(ttl_before < crate::MATCH_TTL_LEDGERS);
+
+    assert!(client.is_token_allowed(&token));
+
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::AllowedToken(token.clone()))
+    });
+    assert_eq!(ttl_after, crate::MATCH_TTL_LEDGERS);
+}
+
+#[test]
 fn test_ttl_extended_on_deposit() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
