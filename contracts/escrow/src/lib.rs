@@ -226,6 +226,11 @@ impl EscrowContract {
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
         env.storage().persistent().set(&DataKey::GameId(m.game_id.clone()), &true);
+        env.storage().persistent().extend_ttl(
+            &DataKey::GameId(m.game_id.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
 
         // Add match ID to both players' match lists
         let mut player1_matches: soroban_sdk::Vec<u64> = env
