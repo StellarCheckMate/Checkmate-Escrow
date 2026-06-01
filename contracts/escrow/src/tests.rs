@@ -107,6 +107,29 @@ fn test_deposit_and_activate() {
 }
 
 #[test]
+fn test_get_depositor_count_tracks_player_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "depositor_count_test"),
+        &Platform::Lichess,
+    );
+
+    assert_eq!(client.get_depositor_count(&id), 0);
+
+    client.deposit(&id, &player1);
+    assert_eq!(client.get_depositor_count(&id), 1);
+
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_depositor_count(&id), 2);
+}
+
+#[test]
 fn test_deposit_emits_activated_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
