@@ -631,7 +631,14 @@ impl EscrowContract {
             .ok_or(Error::MatchNotFound)
     }
 
-    /// Check whether both players have deposited.
+    /// Check whether both players have deposited their stakes.
+    /// 
+    /// This returns `true` as long as both `player1_deposited` and `player2_deposited` flags
+    /// are set, regardless of match state. Specifically, it remains `true` after payout
+    /// (when state transitions to `Completed`) because the deposit flags are never cleared.
+    /// 
+    /// This indicates historical deposit status, not current escrowed funds.
+    /// To check if funds are currently held in escrow, use [`is_currently_escrowed`].
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
         let m: Match = env
             .storage()
