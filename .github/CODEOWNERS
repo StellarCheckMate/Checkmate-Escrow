@@ -1,0 +1,27 @@
+# CODEOWNERS — Reviewer routing for Checkmate-Escrow
+# Syntax: <pattern> <@owner-or-team>
+# GitHub automatically requests reviews from these owners when a PR touches the matched paths.
+# Replace placeholder handles with real GitHub usernames or team slugs (e.g. @StellarCheckMate/contracts).
+
+# Global fallback — catches anything not matched below
+*                               @StellarCheckMate/maintainers
+
+# Escrow smart contract
+/contracts/escrow/              @StellarCheckMate/contracts
+
+# Oracle smart contract
+/contracts/oracle/              @StellarCheckMate/contracts
+
+# Documentation
+/docs/                          @StellarCheckMate/docs
+
+# CI/CD and GitHub configuration
+/.github/                       @StellarCheckMate/maintainers
+
+# Scripts
+/scripts/                       @StellarCheckMate/maintainers
+
+# Root config and workspace files
+/Cargo.toml                     @StellarCheckMate/contracts
+/Cargo.lock                     @StellarCheckMate/contracts
+/environments.toml              @StellarCheckMate/maintainers
