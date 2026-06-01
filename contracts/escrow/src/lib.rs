@@ -312,6 +312,7 @@ impl EscrowContract {
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
             );
+            Self::add_live_match(env.clone(), match_id);
         }
 
         env.storage()
@@ -377,6 +378,8 @@ impl EscrowContract {
                 client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
             }
         }
+
+        Self::remove_live_match(env.clone(), match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
@@ -643,31 +646,91 @@ impl EscrowContract {
         Ok(depositors * m.stake_amount)
     }
 
+    fn get_live_match_ids(env: Env) -> soroban_sdk::Vec<u64> {
+        let has_key = env.storage().persistent().has(&DataKey::LiveMatches);
+        let ids: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::LiveMatches)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        if has_key {
+            env.storage().persistent().extend_ttl(
+                &DataKey::LiveMatches,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+        ids
+    }
+
+    fn set_live_match_ids(env: Env, ids: &soroban_sdk::Vec<u64>) {
+        env.storage().persistent().set(&DataKey::LiveMatches, ids);
+        env.storage().persistent().extend_ttl(
+            &DataKey::LiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    }
+
+    fn add_live_match(env: Env, match_id: u64) {
+        let ids = Self::get_live_match_ids(env.clone());
+        let mut updated = soroban_sdk::vec![&env];
+        let mut inserted = false;
+
+        for i in 0..ids.len() {
+            let current = *ids.get(i).unwrap();
+            if !inserted && current > match_id {
+                updated.push_back(match_id);
+                inserted = true;
+            }
+            if current != match_id {
+                updated.push_back(current);
+            } else {
+                inserted = true;
+            }
+        }
+
+        if !inserted {
+            updated.push_back(match_id);
+        }
+
+        Self::set_live_match_ids(env, &updated);
+    }
+
+    fn remove_live_match(env: Env, match_id: u64) {
+        let ids = Self::get_live_match_ids(env.clone());
+        let mut updated = soroban_sdk::vec![&env];
+
+        for i in 0..ids.len() {
+            let current = *ids.get(i).unwrap();
+            if current != match_id {
+                updated.push_back(current);
+            }
+        }
+
+        Self::set_live_match_ids(env, &updated);
+    }
+
     /// Return all matches that are in Active state (fully funded).
     pub fn get_live_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        let ids = Self::get_live_match_ids(env.clone());
         let mut live_matches = soroban_sdk::vec![&env];
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::MatchCount)
-            .unwrap_or(0);
 
-        for i in 0..count {
+        for i in 0..ids.len() {
+            let match_id = *ids.get(i).unwrap();
             if let Ok(m) = env
                 .storage()
                 .persistent()
-                .get::<DataKey, Match>(&DataKey::Match(i))
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
             {
-                if m.state == MatchState::Active {
-                    live_matches.push_back(m);
-                }
+                live_matches.push_back(m);
             }
         }
 
         Ok(live_matches)
     }
 
-    /// Return the total number of active matches created, ordered by match ID ascending.
+    /// Return all active matches ordered by match ID ascending.
     pub fn get_active_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
         Self::get_live_matches(env)
     }
@@ -683,27 +746,21 @@ impl EscrowContract {
             return Ok(active_matches);
         }
 
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::MatchCount)
-            .unwrap_or(0);
+        let ids = Self::get_live_match_ids(env.clone());
         let mut skipped = 0u32;
         let mut added = 0u32;
 
-        for i in 0..count {
+        for i in 0..ids.len() {
+            if skipped < offset {
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            let match_id = *ids.get(i).unwrap();
             if let Ok(m) = env
                 .storage()
                 .persistent()
-                .get::<DataKey, Match>(&DataKey::Match(i))
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
             {
-                if m.state != MatchState::Active {
-                    continue;
-                }
-                if skipped < offset {
-                    skipped = skipped.saturating_add(1);
-                    continue;
-                }
                 active_matches.push_back(m);
                 added = added.saturating_add(1);
                 if added >= limit {
