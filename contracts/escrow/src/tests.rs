@@ -811,6 +811,83 @@ fn test_non_admin_cannot_pause() {
     );
 }
 
+// ── Issue: transfer_admin and two-step admin transfer remain mutually consistent ──
+//
+// Two admin-transfer paths exist:
+//   1. transfer_admin  — one-step, immediate.
+//   2. propose_admin + accept_admin — two-step, requires new admin to accept.
+//
+// After using one path followed by the other the final admin must be exactly the
+// address that completed the last transfer. Both paths must produce identical
+// observable state: get_admin() returns the new admin, and admin-only operations
+// accept the new admin and reject the previous one.
+#[test]
+fn test_transfer_admin_and_two_step_transfer_are_mutually_consistent() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, _original_admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin_a = Address::generate(&env);
+    let admin_b = Address::generate(&env);
+
+    // ── Path 1: one-step transfer_admin → admin_a ─────────────────────────────
+    client.transfer_admin(&admin_a);
+    assert_eq!(
+        client.get_admin(),
+        admin_a,
+        "after transfer_admin, admin_a must be the current admin"
+    );
+
+    // ── Path 2: two-step propose+accept → admin_b (from admin_a) ──────────────
+    // admin_a proposes admin_b; admin_a must remain in control until accept
+    client.propose_admin(&admin_b);
+    assert_eq!(
+        client.get_admin(),
+        admin_a,
+        "admin_a remains active while accept is pending"
+    );
+
+    // admin_b accepts — admin_b becomes the new admin
+    client.accept_admin();
+    assert_eq!(
+        client.get_admin(),
+        admin_b,
+        "after accept_admin, admin_b must be the current admin"
+    );
+
+    // ── Final state: admin_a (path-1 recipient) must be rejected ──────────────
+    // Provide explicit auth for admin_a; the contract checks admin_b, so it must fail.
+    env.mock_auths(&[MockAuth {
+        address: &admin_a,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = client.try_pause();
+    assert!(
+        result.is_err(),
+        "admin_a must be rejected from admin operations after ceding to admin_b"
+    );
+
+    // ── Final state: admin_b (path-2 recipient) must be accepted ──────────────
+    env.mock_auths(&[MockAuth {
+        address: &admin_b,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.pause();
+    assert!(
+        client.is_paused(),
+        "admin_b must be able to exercise admin rights after two-step transfer"
+    );
+}
+
 #[test]
 fn test_non_admin_cannot_unpause() {
     let env = Env::default();
