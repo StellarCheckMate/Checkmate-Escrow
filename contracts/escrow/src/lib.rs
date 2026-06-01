@@ -122,10 +122,18 @@ impl EscrowContract {
 
     /// Check if a token is allowed.
     pub fn is_token_allowed(env: Env, token: Address) -> bool {
-        env.storage()
+        let key = DataKey::AllowedToken(token.clone());
+        let allowed: bool = env
+            .storage()
             .persistent()
-            .get(&DataKey::AllowedToken(token))
-            .unwrap_or(false)
+            .get(&key)
+            .unwrap_or(false);
+        if allowed {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        }
+        allowed
     }
 
     /// Create a new match. Both players must call `deposit` before the game starts.
