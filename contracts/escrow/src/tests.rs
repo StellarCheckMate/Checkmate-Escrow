@@ -107,6 +107,29 @@ fn test_deposit_and_activate() {
 }
 
 #[test]
+fn test_get_depositor_count_tracks_player_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "depositor_count_test"),
+        &Platform::Lichess,
+    );
+
+    assert_eq!(client.get_depositor_count(&id), 0);
+
+    client.deposit(&id, &player1);
+    assert_eq!(client.get_depositor_count(&id), 1);
+
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_depositor_count(&id), 2);
+}
+
+#[test]
 fn test_deposit_emits_activated_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -1652,6 +1675,53 @@ fn test_cancel_match_sets_completed_ledger() {
     assert!(m.completed_ledger.is_some());
     let completed = m.completed_ledger.unwrap();
     assert!(completed >= ledger_before && completed <= ledger_after);
+}
+
+#[test]
+fn test_get_match_duration_after_cancelled_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "duration_cancel_test"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id, &player1);
+    let duration = client.get_match_duration(&id).unwrap();
+    let m = client.get_match(&id);
+
+    assert_eq!(duration, Some(m.completed_ledger.unwrap().saturating_sub(m.created_ledger)));
+    assert!(duration.is_some());
+}
+
+#[test]
+fn test_get_match_duration_after_completion() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "duration_complete_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1, &oracle);
+
+    let duration = client.get_match_duration(&id).unwrap();
+    let m = client.get_match(&id);
+
+    assert_eq!(duration, Some(m.completed_ledger.unwrap().saturating_sub(m.created_ledger)));
+    assert!(duration.is_some());
 }
 
 #[test]
