@@ -123,7 +123,8 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `get_player_matches` | `(player: Address) -> Vec<u64>` | Returns all match IDs (past and present) for a player. |
-| `get_active_matches` | `() -> Vec<u64>` | Returns match IDs currently in `Pending` or `Active` state. |
+| `get_pending_matches` | `() -> Vec<Match>` | Returns pending matches currently in `Pending` state, awaiting deposit completion. |
+| `get_active_matches` | `() -> Vec<Match>` | Returns active matches currently in `Active` state, fully funded and ready for result submission. |
 
 ## Index Behavior, TTL Caveats, and Pagination
 
@@ -135,32 +136,35 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 - It includes `Completed` and `Cancelled` matches as well as live ones.
 - To determine a match's current state, call `get_match(match_id)` for each ID.
 
-### Active-Match Index (`get_active_matches`)
+### Pending-Match Query (`get_pending_matches`)
 
-`get_active_matches` reads `DataKey::ActiveMatches` from persistent storage. A match ID is added on `create_match` and removed when the match transitions to `Completed` or `Cancelled`. This index therefore reflects only live matches (`Pending` or `Active` state) at the time of the call.
+`get_pending_matches` scans all created matches and returns those currently in `Pending` state. A pending match has been created but has not yet reached full funding; it may have zero, one, or both deposits recorded, but it remains pending until the second player deposits.
 
-> **Caveat:** Because the index is stored in persistent storage and updated by separate transactions, there is a brief window where a match may appear in the active index after its terminal transition has been committed but before the index write has been confirmed. Treat `get_active_matches` as a best-effort snapshot and always verify state with `get_match` before acting on a result.
+### Active-Match Query (`get_active_matches`)
+
+`get_active_matches` scans all created matches and returns those currently in `Active` state. An active match is fully funded and ready for result submission. It excludes pending, completed, and cancelled matches.
+
+> **Note:** Because these query methods scan per-match storage, off-chain consumers should still verify a match's current state with `get_match(match_id)` before taking critical action.
 
 ### TTL Caveats
 
-Both indexes are stored in **persistent storage** with a TTL of `MATCH_TTL_LEDGERS` (~30 days at 5 s/ledger). The TTL is extended each time the index entry is written (on `create_match`, `submit_result`, `cancel_match`, `expire_match`). However:
+`get_player_matches` is a persistent append-only index stored under `DataKey::PlayerMatches(player)`. The index is updated on `create_match` and carries a TTL of `MATCH_TTL_LEDGERS` (~30 days at 5 s/ledger). If no matches are created or resolved for a player for ~30 days, that player-specific index may expire and `get_player_matches` can return an empty list.
 
-- If no matches are created or resolved for a player for ~30 days, `PlayerMatches` for that player may expire and `get_player_matches` will return an empty list.
-- `ActiveMatches` is refreshed on every match state change, so it is unlikely to expire on an active deployment.
-- Individual `Match` records in persistent storage follow the same ~30-day TTL and are extended on every write to that match.
+`get_pending_matches` and `get_active_matches` are filtered getters that scan all `Match` records by state. They do not rely on separate persistent index entries and therefore reflect current match state directly from stored match data.
 
-Off-chain indexers should not rely solely on these on-chain indexes for long-term history. Subscribe to contract events (`match.created`, `match.result`, `match.cancelled`) for a durable record.
+Individual `Match` records in persistent storage follow the same ~30-day TTL and are extended on every write to that match.
+
+Off-chain indexers should not rely solely on these on-chain values for long-term history. Subscribe to contract events (`match.created`, `match.result`, `match.cancelled`) for a durable record.
 
 ### Pagination
 
-Neither `get_player_matches` nor `get_active_matches` supports server-side pagination — both return the full `Vec<u64>` in a single call. For deployments with a large number of matches, apply client-side slicing:
+`get_pending_matches` and `get_active_matches` return the full filtered result set in a single call. Use `get_pending_matches_paginated(player, offset, limit)` or `get_active_matches_paginated(offset, limit)` to fetch bounded pages of pending or active matches respectively.
+
+`get_player_matches` also returns the full vector of match IDs for a player. For large player histories, apply client-side slicing on the returned `Vec<u64>`.
 
 ```rust
 // Example: fetch page of 20 starting at offset 40
 let all_ids = client.get_player_matches(&player);
 let page: Vec<u64> = all_ids.iter().skip(40).take(20).collect();
 ```
-
-If on-chain pagination becomes necessary, the recommended approach is to introduce a `get_player_matches_page(player, offset, limit)` function that reads the stored `Vec` and returns a slice — avoiding the need to change the storage layout.
-| `submit_result` | `(match_id: u64, winner: Winner)` | Oracle submits the verified match result and executes payout atomically. |
 

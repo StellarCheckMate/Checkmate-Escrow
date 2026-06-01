@@ -7,6 +7,8 @@ pub use soroban_sdk::{
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
 
+pub mod helpers;
+
 mod admin;
 mod events;
 mod index;
