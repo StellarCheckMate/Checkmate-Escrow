@@ -25,6 +25,27 @@ fn test_ttl_extended_on_create_match() {
 }
 
 #[test]
+fn test_game_id_ttl_extended_on_match_reservation() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let game_id = String::from_str(&env, "reserved_game_ttl");
+
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::GameId(game_id.clone()))
+    });
+    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+}
+
+#[test]
 fn test_ttl_extended_on_deposit() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
