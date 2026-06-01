@@ -20,14 +20,31 @@ fn test_player_match_pagination_handles_empty_and_partial_pages() {
         match_ids.push(match_id);
     }
 
-    // Query player1's matches
+    // Query player1's matches with paginated API
+    let player1_page_0 = client.get_player_matches_paginated(&player1, &0, &5);
+    assert_eq!(player1_page_0.len(), 5);
+    for (i, match_id) in player1_page_0.iter().enumerate() {
+        assert_eq!(*match_id, match_ids[i]);
+    }
+
+    let player1_page_1 = client.get_player_matches_paginated(&player1, &5, &10);
+    assert_eq!(player1_page_1.len(), 10);
+    for (i, match_id) in player1_page_1.iter().enumerate() {
+        assert_eq!(*match_id, match_ids[5 + i]);
+    }
+
+    let player1_page_2 = client.get_player_matches_paginated(&player1, &20, &10);
+    assert_eq!(player1_page_2.len(), 5);
+    for (i, match_id) in player1_page_2.iter().enumerate() {
+        assert_eq!(*match_id, match_ids[20 + i]);
+    }
+
+    let player1_page_3 = client.get_player_matches_paginated(&player1, &25, &10);
+    assert_eq!(player1_page_3.len(), 0);
+
+    // Verify the existing getter still returns the full list for compatibility.
     let player1_matches = client.get_player_matches(&player1);
     assert_eq!(player1_matches.len(), 25);
-
-    // Verify all match IDs are present in order
-    for (i, match_id) in match_ids.iter().enumerate() {
-        assert_eq!(player1_matches.get(i as u32).unwrap(), *match_id);
-    }
 
     // Query player2's matches (should have 25 as well)
     let player2_matches = client.get_player_matches(&player2);
@@ -37,6 +54,38 @@ fn test_player_match_pagination_handles_empty_and_partial_pages() {
     let player3 = Address::generate(&env);
     let player3_matches = client.get_player_matches(&player3);
     assert_eq!(player3_matches.len(), 0);
+}
+
+/// Test #581: player match pagination returns empty page for zero limit and offset beyond end
+#[test]
+fn test_player_match_pagination_zero_limit_and_offset_beyond_end() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create 10 matches for player1
+    let mut match_ids = Vec::new();
+    for i in 0..10 {
+        let match_id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, &format!("game_{}", i)),
+            &Platform::Lichess,
+        );
+        match_ids.push(match_id);
+    }
+
+    let zero_limit = client.get_player_matches_paginated(&player1, &0, &0);
+    assert_eq!(zero_limit.len(), 0);
+
+    let beyond_offset = client.get_player_matches_paginated(&player1, &15, &5);
+    assert_eq!(beyond_offset.len(), 0);
+
+    let partial_page = client.get_player_matches_paginated(&player1, &8, &5);
+    assert_eq!(partial_page.len(), 2);
+    assert_eq!(partial_page.get(0).unwrap(), match_ids[8]);
+    assert_eq!(partial_page.get(1).unwrap(), match_ids[9]);
 }
 
 /// Test #579: player history index excludes unrelated matches for other players

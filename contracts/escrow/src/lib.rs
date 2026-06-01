@@ -734,12 +734,49 @@ impl EscrowContract {
     }
 
     /// Return all match IDs for a given player (past and present).
+    ///
+    /// Deprecated: use `get_player_matches_paginated` to avoid unbounded return sizes.
     pub fn get_player_matches(env: Env, player: Address) -> Result<soroban_sdk::Vec<u64>, Error> {
         Ok(env
             .storage()
             .persistent()
             .get(&DataKey::PlayerMatches(player))
             .unwrap_or_else(|| soroban_sdk::vec![&env]))
+    }
+
+    /// Return a page of match IDs for a given player.
+    pub fn get_player_matches_paginated(
+        env: Env,
+        player: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<u64>, Error> {
+        let player_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        if limit == 0 {
+            return Ok(soroban_sdk::vec![&env]);
+        }
+
+        let mut page = soroban_sdk::vec![&env];
+        let mut skipped = 0u32;
+        let total = player_matches.len();
+
+        for i in 0..total {
+            if skipped < offset {
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            page.push_back(player_matches.get(i).unwrap());
+            if page.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(page)
     }
 }
 
