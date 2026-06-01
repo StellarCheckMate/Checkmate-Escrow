@@ -149,19 +149,23 @@ Follow the step-by-step guide in `demo/demo-script.md`
 ```
 create_match(player1, player2, stake_amount, token, game_id, platform) -> u64
 get_match(match_id) -> Match
-cancel_match(match_id, caller)
-expire_match(match_id)
+cancel_match(match_id, caller) -> Result<(), Error>
+expire_match(match_id) -> Result<(), Error>
 get_player_matches(player) -> Vec<u64>
 get_pending_matches() -> Vec<Match>
 get_active_matches() -> Vec<Match>
 ```
 
+- `create_match` must be authorized by `player1`.
+- `cancel_match` may be called by either matched player.
+- `expire_match` may be called by anyone once the match timeout elapses.
+
 ### Escrow
 
 ```
-deposit(match_id, player)
-is_funded(match_id) -> bool
-get_escrow_balance(match_id) -> i128
+deposit(match_id, player) -> Result<(), Error>
+is_funded(match_id) -> Result<bool, Error>
+get_escrow_balance(match_id) -> Result<i128, Error>
 ```
 
 #### `is_funded` vs `get_escrow_balance`
@@ -184,12 +188,14 @@ Examples:
 ### Oracle & Payouts
 
 ```
-submit_result(match_id, winner)
-has_result(match_id) -> bool
-get_result(match_id) -> ResultEntry
+submit_result(match_id, winner, caller) -> Result<(), Error>
+submit_result_with_oracle_record(match_id, winner, game_id) -> Result<(), Error>
 ```
 
-`submit_result` is called by the trusted oracle address. It verifies the caller, records the winner, and immediately executes the payout (or refund on draw) in a single transaction. There are no separate `verify_result` or `execute_payout` functions.
+- `submit_result` is called by the configured oracle address and requires oracle authorization.
+- `submit_result_with_oracle_record` is the canonical oracle integration path and stores the verified `game_id` for audit.
+
+`submit_result` verifies the caller, records the winner, and immediately executes the payout (or refund on draw) in a single transaction. There are no separate `verify_result` or `execute_payout` functions.
 
 ## 🧪 Testing
 
