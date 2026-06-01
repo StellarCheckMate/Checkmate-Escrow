@@ -101,7 +101,7 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
     );
 
     let ttl_after_append = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
+        env.storage().persistent().get_ttl(&DataKey::LiveMatches)
     });
     assert_eq!(ttl_after_append, crate::MATCH_TTL_LEDGERS);
 
@@ -122,7 +122,7 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
     client.submit_result(&match1, &Winner::Player1);
 
     let ttl_after_removal = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
+        env.storage().persistent().get_ttl(&DataKey::LiveMatches)
     });
     assert_eq!(ttl_after_removal, crate::MATCH_TTL_LEDGERS);
 }

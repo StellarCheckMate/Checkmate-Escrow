@@ -1784,4 +1784,37 @@ fn test_get_live_matches_returns_only_fully_funded_matches() {
     let live_matches = client.get_live_matches();
     assert_eq!(live_matches.len(), 1);
     assert_eq!(live_matches.get(0).unwrap().id, active_id);
+    assert_ne!(live_matches.get(0).unwrap().id, pending_id);
+}
+
+#[test]
+fn test_get_active_matches_excludes_pending_matches() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create pending match and active match.
+    let pending_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pending_match_exclusion"),
+        &Platform::Lichess,
+    );
+
+    let active_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "active_match_exclusion"),
+        &Platform::Lichess,
+    );
+    client.deposit(&active_id, &player1);
+    client.deposit(&active_id, &player2);
+
+    let active_matches = client.get_active_matches();
+    assert_eq!(active_matches.len(), 1);
+    assert_eq!(active_matches.get(0).unwrap().id, active_id);
+    assert_ne!(active_matches.get(0).unwrap().id, pending_id);
 }

@@ -404,6 +404,8 @@ impl EscrowContract {
             }
         }
 
+        Self::remove_live_match(env.clone(), match_id);
+
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
         Self::remove_active_match(&env, match_id);
@@ -749,11 +751,12 @@ impl EscrowContract {
             .get(&DataKey::MatchCount)
             .unwrap_or(0);
 
-        for i in 0..count {
+        for i in 0..ids.len() {
+            let match_id = *ids.get(i).unwrap();
             if let Ok(m) = env
                 .storage()
                 .persistent()
-                .get::<DataKey, Match>(&DataKey::Match(i))
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
             {
                 if m.state == state {
                     matches.push_back(m);
@@ -779,11 +782,16 @@ impl EscrowContract {
         let mut skipped = 0u32;
         let mut added = 0u32;
 
-        for i in 0..count {
+        for i in 0..ids.len() {
+            if skipped < offset {
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            let match_id = *ids.get(i).unwrap();
             if let Ok(m) = env
                 .storage()
                 .persistent()
-                .get::<DataKey, Match>(&DataKey::Match(i))
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
             {
                 if m.state != state {
                     continue;
