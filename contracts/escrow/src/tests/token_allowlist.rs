@@ -34,11 +34,18 @@ fn test_add_allowed_token_emits_event() {
 }
 
 #[test]
-fn test_removed_tokens_can_no_longer_be_used_for_new_matches() {
+fn test_removed_tokens_are_rejected_when_other_allowed_tokens_remain() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+    let asset_client2 = StellarAssetClient::new(&env, &token2_addr);
+    asset_client2.mint(&player1, &1000);
+    asset_client2.mint(&player2, &1000);
+
     client.add_allowed_token(&token);
+    client.add_allowed_token(&token2_addr);
     client.remove_allowed_token(&token);
 
     let result = client.try_create_match(
@@ -49,10 +56,58 @@ fn test_removed_tokens_can_no_longer_be_used_for_new_matches() {
         &String::from_str(&env, "removed_token_game"),
         &Platform::Lichess,
     );
-    assert!(
-        result.is_err(),
-        "create_match should reject removed token"
+    assert!(result.is_err(), "create_match should reject removed token");
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token2_addr,
+        &String::from_str(&env, "remaining_token_game"),
+        &Platform::Lichess,
     );
+    assert_eq!(id, 0, "remaining allowed token should still be accepted");
+}
+
+#[test]
+fn test_removing_last_allowed_token_disables_allowlist_enforcement() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+    client.remove_allowed_token(&token);
+
+    assert!(!client.is_token_allowed(&token));
+
+    let unknown_token = Address::generate(&env);
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &unknown_token,
+        &String::from_str(&env, "rollback_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id, 0, "create_match should accept any token after last allowed token is removed");
+}
+
+#[test]
+fn test_remove_allowed_token_requires_admin_auth() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let attacker = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "remove_allowed_token",
+            args: (token.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert_eq!(client.try_remove_allowed_token(&token), Err(Ok(Error::Unauthorized)));
 }
 
 #[test]

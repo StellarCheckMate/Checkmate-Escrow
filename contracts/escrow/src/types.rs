@@ -56,6 +56,7 @@ pub enum DataKey {
     PlayerMatches(Address),
     MatchTimeout,
     AllowedToken(Address),
+    AllowedTokenCount,
     AllowlistEnforced,
     OracleRecord(u64),
 }

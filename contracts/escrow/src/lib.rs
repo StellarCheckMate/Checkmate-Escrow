@@ -36,6 +36,8 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
+        env.storage().instance().set(&DataKey::AllowedTokenCount, &0u64);
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
@@ -75,6 +77,22 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
+        let token_already_allowed: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
+        if !token_already_allowed {
+            let count: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowedTokenCount)
+                .unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokenCount, &(count + 1));
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::AllowedToken(token.clone()), &true);
@@ -98,6 +116,26 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+
+        let token_was_allowed: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
+        if token_was_allowed {
+            let count: u64 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowedTokenCount)
+                .unwrap_or(0);
+            let next_count = count.saturating_sub(1);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokenCount, &next_count);
+            if next_count == 0 {
+                env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
+            }
+        }
 
         env.storage()
             .persistent()
