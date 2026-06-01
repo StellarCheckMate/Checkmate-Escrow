@@ -324,6 +324,7 @@ impl EscrowContract {
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
             );
+            Self::append_active_match(&env, match_id);
         }
 
         env.storage()
@@ -392,6 +393,7 @@ impl EscrowContract {
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
+        Self::remove_active_match(&env, match_id);
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -563,6 +565,56 @@ impl EscrowContract {
             .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS)
     }
 
+    fn get_active_match_ids(env: &Env) -> soroban_sdk::Vec<u64> {
+        if let Some(active_matches) = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveMatches)
+        {
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+            active_matches
+        } else {
+            soroban_sdk::vec![env]
+        }
+    }
+
+    fn set_active_match_ids(env: &Env, active_matches: &soroban_sdk::Vec<u64>) {
+        if active_matches.is_empty() {
+            env.storage().persistent().remove(&DataKey::ActiveMatches);
+        } else {
+            env.storage()
+                .persistent()
+                .set(&DataKey::ActiveMatches, active_matches);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        }
+    }
+
+    fn append_active_match(env: &Env, match_id: u64) {
+        let mut active_matches = Self::get_active_match_ids(env);
+        active_matches.push_back(match_id);
+        Self::set_active_match_ids(env, &active_matches);
+    }
+
+    fn remove_active_match(env: &Env, match_id: u64) {
+        let active_matches = Self::get_active_match_ids(env);
+        if active_matches.is_empty() {
+            return;
+        }
+
+        let mut updated = soroban_sdk::vec![env];
+        for id in active_matches.iter() {
+            if *id != match_id {
+                updated.push_back(*id);
+            }
+        }
+
+        Self::set_active_match_ids(env, &updated);
+    }
+
     pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
         Ok(Self::current_match_timeout(&env))
     }
@@ -710,11 +762,7 @@ impl EscrowContract {
             return Ok(matches);
         }
 
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::MatchCount)
-            .unwrap_or(0);
+        let active_ids = Self::get_active_match_ids(&env);
         let mut skipped = 0u32;
         let mut added = 0u32;
 
