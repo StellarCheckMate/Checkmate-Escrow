@@ -91,6 +91,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::AllowedToken(token.clone()), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        Self::append_allowed_token(&env, &token);
         env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
 
         env.events().publish(
@@ -112,6 +113,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .remove(&DataKey::AllowedToken(token.clone()));
+        Self::remove_allowed_token_from_list(&env, &token);
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("token_remove")),
@@ -132,8 +134,77 @@ impl EscrowContract {
             env.storage()
                 .persistent()
                 .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+            if env.storage().persistent().has(&DataKey::AllowedTokens) {
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&DataKey::AllowedTokens, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+            }
         }
         allowed
+    }
+
+    /// Return the current allowlist as an ordered list.
+    pub fn get_allowed_tokens(env: Env) -> Result<soroban_sdk::Vec<Address>, Error> {
+        Ok(Self::get_allowed_token_list(&env))
+    }
+
+    fn get_allowed_token_list(env: &Env) -> soroban_sdk::Vec<Address> {
+        if let Some(allowed_tokens) = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllowedTokens)
+        {
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::AllowedTokens, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+            allowed_tokens
+        } else {
+            soroban_sdk::vec![env]
+        }
+    }
+
+    fn set_allowed_token_list(env: &Env, allowed_tokens: &soroban_sdk::Vec<Address>) {
+        if allowed_tokens.is_empty() {
+            env.storage().persistent().remove(&DataKey::AllowedTokens);
+        } else {
+            env.storage()
+                .persistent()
+                .set(&DataKey::AllowedTokens, allowed_tokens);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::AllowedTokens, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        }
+    }
+
+    fn append_allowed_token(env: &Env, token: &Address) {
+        let mut allowed_tokens: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| soroban_sdk::vec![env]);
+        if !allowed_tokens.iter().any(|existing| existing == token) {
+            allowed_tokens.push_back(token.clone());
+            Self::set_allowed_token_list(env, &allowed_tokens);
+        } else if env.storage().persistent().has(&DataKey::AllowedTokens) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::AllowedTokens, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        }
+    }
+
+    fn remove_allowed_token_from_list(env: &Env, token: &Address) {
+        let allowed_tokens = Self::get_allowed_token_list(env);
+        if allowed_tokens.is_empty() {
+            return;
+        }
+
+        let mut updated = soroban_sdk::vec![env];
+        for existing in allowed_tokens.iter() {
+            if existing != token {
+                updated.push_back(existing.clone());
+            }
+        }
+        Self::set_allowed_token_list(env, &updated);
     }
 
     /// Create a new match. Both players must call `deposit` before the game starts.
