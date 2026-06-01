@@ -22,6 +22,14 @@ const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = MATCH_TTL_LEDGERS;
 /// Both formats fit well within this limit.
 const MAX_GAME_ID_LEN: u32 = 64;
 
+/// Extend instance storage TTL on every invocation so Admin, Oracle, Paused, and other
+/// instance keys never expire.
+fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(MATCH_TTL_LEDGERS / 2, MATCH_TTL_LEDGERS);
+}
+
 #[contract]
 pub struct EscrowContract;
 
@@ -40,6 +48,7 @@ impl EscrowContract {
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
     pub fn pause(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -54,6 +63,7 @@ impl EscrowContract {
 
     /// Unpause the contract — admin only.
     pub fn unpause(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -143,6 +153,7 @@ impl EscrowContract {
         game_id: String,
         platform: Platform,
     ) -> Result<u64, Error> {
+        extend_instance_ttl(&env);
         player1.require_auth();
 
         if env
@@ -257,6 +268,7 @@ impl EscrowContract {
 
     /// Player deposits their stake into escrow.
     pub fn deposit(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         player.require_auth();
 
         if env
@@ -430,6 +442,7 @@ impl EscrowContract {
     /// Cancel a pending match and refund any deposits.
     /// Either player can cancel a pending match.
     pub fn cancel_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let mut m: Match = env
             .storage()
             .persistent()
@@ -481,6 +494,7 @@ impl EscrowContract {
     /// Expire a pending match that has not been fully funded within MATCH_TIMEOUT_LEDGERS.
     /// Anyone can call this; funds are returned to whoever deposited.
     pub fn expire_match(env: Env, match_id: u64) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let mut m: Match = env
             .storage()
             .persistent()
