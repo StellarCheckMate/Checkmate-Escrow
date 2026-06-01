@@ -56,6 +56,48 @@ fn test_removed_tokens_can_no_longer_be_used_for_new_matches() {
 }
 
 #[test]
+fn test_remove_last_allowed_token_disables_allowlist() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+    client.remove_allowed_token(&token);
+
+    let other_token = Address::generate(&env);
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &other_token,
+        &String::from_str(&env, "allowlist_disabled_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id, 0, "create_match should accept new token once the allowlist is disabled");
+}
+
+#[test]
+fn test_remove_allowed_token_requires_admin() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+
+    let attacker = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "remove_allowed_token",
+            args: (token.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_remove_allowed_token(&token);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
 fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enabled() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
