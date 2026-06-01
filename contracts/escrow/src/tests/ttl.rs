@@ -107,6 +107,34 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
 }
 
 #[test]
+fn test_active_matches_read_extends_ttl_after_ledger_advancement() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ttl_active_read"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    env.ledger().set_sequence_number(env.ledger().sequence() + 1000);
+
+    let active_matches = client.get_active_matches();
+    assert_eq!(active_matches.len(), 1);
+    assert_eq!(active_matches.get(0).unwrap().id, id);
+
+    let ttl = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
+    });
+    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+}
+
+#[test]
 fn test_ttl_extended_on_submit_result() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);

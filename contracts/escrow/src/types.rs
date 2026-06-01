@@ -52,7 +52,7 @@ pub enum DataKey {
     PendingAdmin,
     Paused,
     GameId(String),
-    LiveMatches,
+    ActiveMatches,
     PlayerMatches(Address),
     MatchTimeout,
     AllowedToken(Address),
