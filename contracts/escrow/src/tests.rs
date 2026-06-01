@@ -2096,6 +2096,83 @@ fn test_two_step_admin_transfer() {
     assert!(result.is_err());
 }
 
+// ── Issue: transfer_admin and two-step admin transfer remain mutually consistent ──
+//
+// Two admin-transfer paths exist:
+//   1. transfer_admin  — one-step, immediate.
+//   2. propose_admin + accept_admin — two-step, requires new admin to accept.
+//
+// After using one path followed by the other the final admin must be exactly the
+// address that completed the last transfer. Both paths must produce identical
+// observable state: get_admin() returns the new admin, and admin-only operations
+// accept the new admin and reject the previous one.
+#[test]
+fn test_transfer_admin_and_two_step_transfer_are_mutually_consistent() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, _original_admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin_a = Address::generate(&env);
+    let admin_b = Address::generate(&env);
+
+    // ── Path 1: one-step transfer_admin → admin_a ─────────────────────────────
+    client.transfer_admin(&admin_a);
+    assert_eq!(
+        client.get_admin(),
+        admin_a,
+        "after transfer_admin, admin_a must be the current admin"
+    );
+
+    // ── Path 2: two-step propose+accept → admin_b (from admin_a) ──────────────
+    // admin_a proposes admin_b; admin_a must remain in control until accept
+    client.propose_admin(&admin_b);
+    assert_eq!(
+        client.get_admin(),
+        admin_a,
+        "admin_a remains active while accept is pending"
+    );
+
+    // admin_b accepts — admin_b becomes the new admin
+    client.accept_admin();
+    assert_eq!(
+        client.get_admin(),
+        admin_b,
+        "after accept_admin, admin_b must be the current admin"
+    );
+
+    // ── Final state: admin_a (path-1 recipient) must be rejected ──────────────
+    // Provide explicit auth for admin_a; the contract checks admin_b, so it must fail.
+    env.mock_auths(&[MockAuth {
+        address: &admin_a,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = client.try_pause();
+    assert!(
+        result.is_err(),
+        "admin_a must be rejected from admin operations after ceding to admin_b"
+    );
+
+    // ── Final state: admin_b (path-2 recipient) must be accepted ──────────────
+    env.mock_auths(&[MockAuth {
+        address: &admin_b,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.pause();
+    assert!(
+        client.is_paused(),
+        "admin_b must be able to exercise admin rights after two-step transfer"
+    );
+}
+
 #[test]
 fn test_transfer_admin_pause_auth() {
     let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
@@ -2943,7 +3020,10 @@ fn test_cancel_and_expire_terminal_state_and_ledger_metadata() {
     env.ledger().set_sequence_number(500);
 
     let id_expire = client.create_match(
-
+        &player1,
+        &player2,
+        &100,
+        &token,
         &String::from_str(&env, "expire_event_game"),
         &Platform::Lichess,
     );
@@ -2962,7 +3042,7 @@ fn test_cancel_and_expire_terminal_state_and_ledger_metadata() {
     });
 
     // Advance past the default timeout
-    env.ledger().set_sequence_number(100 + DEFAULT_MATCH_TIMEOUT_LEDGERS);
+    env.ledger().set_sequence_number(500 + DEFAULT_MATCH_TIMEOUT_LEDGERS);
 
     for addr in [&contract_id, &token] {
         env.deployer()
@@ -2976,7 +3056,7 @@ fn test_cancel_and_expire_terminal_state_and_ledger_metadata() {
             .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     });
 
-    client.expire_match(&id);
+    client.expire_match(&id_expire);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -2991,10 +3071,14 @@ fn test_cancel_and_expire_terminal_state_and_ledger_metadata() {
 
     let (_, _, data) = matched.unwrap();
     let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
-    assert_eq!(ev_id, id);
+    assert_eq!(ev_id, id_expire);
 }
 
 // ── Task #2: lowering timeout after match creation affects expiry immediately ─
+//
+// set_match_timeout is applied dynamically: expire_match reads the current
+// timeout value at call time. Lowering the timeout after a match is created
+// must therefore immediately change when that match can be expired.
 #[test]
 fn test_lowering_timeout_after_match_creation_affects_expiry_immediately() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -3003,6 +3087,33 @@ fn test_lowering_timeout_after_match_creation_affects_expiry_immediately() {
     env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "timeout_lower_game"),
+        &Platform::Lichess,
+    );
+
+    // Advance by 50 ledgers — less than the default timeout
+    env.ledger().set_sequence_number(150);
+
+    // Expire must fail — only 50 ledgers elapsed, less than DEFAULT_MATCH_TIMEOUT_LEDGERS
+    let result = client.try_expire_match(&id);
+    assert!(result.is_err(), "expire must fail before timeout elapses");
+
+    // Lower the timeout to 50 ledgers — elapsed (50) now equals the new timeout
+    client.set_match_timeout(&50u32);
+
+    // Expire must succeed because the new timeout already covers elapsed ledgers
+    client.expire_match(&id);
+    assert_eq!(
+        client.get_match(&id).state,
+        MatchState::Cancelled,
+        "match must be Cancelled after expire with lowered timeout"
+    );
+}
+
 // #618 — instance TTL is refreshed after create_match
 #[test]
 fn test_instance_ttl_refreshed_after_create_match() {
@@ -3013,81 +3124,18 @@ fn test_instance_ttl_refreshed_after_create_match() {
     // giving us a meaningful "before" baseline that is strictly less than MATCH_TTL_LEDGERS.
     env.ledger().with_mut(|l| l.sequence_number += 1000);
 
-    let ttl_before = env.as_contract(&contract_id, || {
-        env.storage().instance().get_ttl()
-    });
+    let ttl_before = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
 
     client.create_match(
-
         &player1,
         &player2,
         &100,
         &token,
-
-        &String::from_str(&env, "terminal_expire"),
-        &Platform::Lichess,
-    );
-
-    client.deposit(&id_expire, &player1);
-
-    let p1_before = token_client.balance(&player1);
-
-    // Extend TTLs so storage survives the ledger jump
-    for addr in [&contract_id, &token] {
-        env.deployer().extend_ttl_for_contract_instance(
-            addr.clone(),
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
-        env.deployer()
-            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    }
-    env.as_contract(&contract_id, || {
-        env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
-    });
-
-    env.ledger().set_sequence_number(500 + DEFAULT_MATCH_TIMEOUT_LEDGERS);
-
-    for addr in [&contract_id, &token] {
-        env.deployer().extend_ttl_for_contract_instance(
-            addr.clone(),
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
-        env.deployer()
-            .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    }
-    env.as_contract(&contract_id, || {
-        env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
-    });
-
-    client.expire_match(&id_expire);
-
-    let m_expire = client.get_match(&id_expire);
-    assert_eq!(m_expire.state, MatchState::Cancelled, "expire → Cancelled");
-    assert!(
-        m_expire.completed_ledger.is_none(),
-        "expire must not set completed_ledger"
-    );
-    // Refund verified
-    assert_eq!(token_client.balance(&player1) - p1_before, 100);
-}
-
         &String::from_str(&env, "instance_ttl_game"),
         &Platform::Lichess,
     );
 
-    let ttl_after = env.as_contract(&contract_id, || {
-        env.storage().instance().get_ttl()
-    });
+    let ttl_after = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
 
     assert!(
         ttl_after > ttl_before,
@@ -3099,5 +3147,3 @@ fn test_instance_ttl_refreshed_after_create_match() {
         "instance TTL should be extended to MATCH_TTL_LEDGERS"
     );
 }
-
-

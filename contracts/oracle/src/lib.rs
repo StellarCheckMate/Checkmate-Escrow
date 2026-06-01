@@ -253,7 +253,7 @@ mod tests {
     use escrow::{EscrowContract, EscrowContractClient};
     use soroban_sdk::{
         testutils::storage::{Instance as _, Persistent as _},
-        testutils::{Address as _, Events as _},
+        testutils::{Address as _, Events as _, Ledger as _},
         token::StellarAssetClient,
         Address, Env, IntoVal, String, Symbol,
     };
@@ -877,6 +877,46 @@ mod tests {
 
         let ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
         assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+    }
+
+    // ── Issue: oracle delete_result extends instance TTL ─────────────────────
+    //
+    // Every oracle method calls extend_instance_ttl so Admin and Paused never
+    // expire. This test confirms delete_result follows the same pattern.
+    //
+    // extend_instance_ttl uses extend_ttl(threshold, MATCH_TTL_LEDGERS) where
+    // threshold = MATCH_TTL_LEDGERS / 2. The extension only fires when the
+    // current TTL is below the threshold, so the ledger must advance by at
+    // least MATCH_TTL_LEDGERS/2 + 1 to produce a meaningful before/after delta.
+    // The persistent Result entry has a full MATCH_TTL_LEDGERS TTL from
+    // submit_result, so it survives the jump without explicit re-extension.
+    #[test]
+    fn test_instance_ttl_extended_on_delete_result() {
+        let (env, contract_id, ..) = setup();
+        let client = OracleContractClient::new(&env, &contract_id);
+
+        // Submit a result so there is something to delete.
+        client.submit_result(&0u64, &String::from_str(&env, "ttl_delete_game"), &Winner::Player1);
+
+        // Advance past the halfway mark so the instance TTL drops below the
+        // extend_ttl threshold (MATCH_TTL_LEDGERS / 2).
+        env.ledger()
+            .with_mut(|l| l.sequence_number += crate::MATCH_TTL_LEDGERS / 2 + 1);
+
+        let ttl_before = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+
+        client.delete_result(&0u64);
+
+        let ttl_after = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+        assert_eq!(
+            ttl_after,
+            crate::MATCH_TTL_LEDGERS,
+            "delete_result must extend instance TTL to MATCH_TTL_LEDGERS"
+        );
+        assert!(
+            ttl_after > ttl_before,
+            "instance TTL must increase after delete_result (before: {ttl_before}, after: {ttl_after})"
+        );
     }
 
     // ── Issue: transfer_admin (update_admin) — old admin rejected, new admin accepted ──

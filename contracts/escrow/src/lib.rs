@@ -225,10 +225,15 @@ impl EscrowContract {
         env.storage()
             .instance()
             .extend_ttl(MATCH_TTL_LEDGERS / 2, MATCH_TTL_LEDGERS);
-        // Mark game_id as used
+        // Mark game_id as used; extend TTL so it survives as long as the match entry.
         env.storage()
             .persistent()
             .set(&DataKey::GameId(m.game_id.clone()), &true);
+        env.storage().persistent().extend_ttl(
+            &DataKey::GameId(m.game_id.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
