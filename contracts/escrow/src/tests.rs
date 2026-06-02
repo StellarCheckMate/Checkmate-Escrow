@@ -107,6 +107,29 @@ fn test_deposit_and_activate() {
 }
 
 #[test]
+fn test_get_depositor_count_tracks_player_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "depositor_count_test"),
+        &Platform::Lichess,
+    );
+
+    assert_eq!(client.get_depositor_count(&id), 0);
+
+    client.deposit(&id, &player1);
+    assert_eq!(client.get_depositor_count(&id), 1);
+
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_depositor_count(&id), 2);
+}
+
+#[test]
 fn test_deposit_emits_activated_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -785,6 +808,83 @@ fn test_non_admin_cannot_pause() {
     assert!(
         result.is_err(),
         "non-admin should not be able to call pause()"
+    );
+}
+
+// ── Issue: transfer_admin and two-step admin transfer remain mutually consistent ──
+//
+// Two admin-transfer paths exist:
+//   1. transfer_admin  — one-step, immediate.
+//   2. propose_admin + accept_admin — two-step, requires new admin to accept.
+//
+// After using one path followed by the other the final admin must be exactly the
+// address that completed the last transfer. Both paths must produce identical
+// observable state: get_admin() returns the new admin, and admin-only operations
+// accept the new admin and reject the previous one.
+#[test]
+fn test_transfer_admin_and_two_step_transfer_are_mutually_consistent() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, _original_admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let admin_a = Address::generate(&env);
+    let admin_b = Address::generate(&env);
+
+    // ── Path 1: one-step transfer_admin → admin_a ─────────────────────────────
+    client.transfer_admin(&admin_a);
+    assert_eq!(
+        client.get_admin(),
+        admin_a,
+        "after transfer_admin, admin_a must be the current admin"
+    );
+
+    // ── Path 2: two-step propose+accept → admin_b (from admin_a) ──────────────
+    // admin_a proposes admin_b; admin_a must remain in control until accept
+    client.propose_admin(&admin_b);
+    assert_eq!(
+        client.get_admin(),
+        admin_a,
+        "admin_a remains active while accept is pending"
+    );
+
+    // admin_b accepts — admin_b becomes the new admin
+    client.accept_admin();
+    assert_eq!(
+        client.get_admin(),
+        admin_b,
+        "after accept_admin, admin_b must be the current admin"
+    );
+
+    // ── Final state: admin_a (path-1 recipient) must be rejected ──────────────
+    // Provide explicit auth for admin_a; the contract checks admin_b, so it must fail.
+    env.mock_auths(&[MockAuth {
+        address: &admin_a,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let result = client.try_pause();
+    assert!(
+        result.is_err(),
+        "admin_a must be rejected from admin operations after ceding to admin_b"
+    );
+
+    // ── Final state: admin_b (path-2 recipient) must be accepted ──────────────
+    env.mock_auths(&[MockAuth {
+        address: &admin_b,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.pause();
+    assert!(
+        client.is_paused(),
+        "admin_b must be able to exercise admin rights after two-step transfer"
     );
 }
 
@@ -1655,6 +1755,53 @@ fn test_cancel_match_sets_completed_ledger() {
 }
 
 #[test]
+fn test_get_match_duration_after_cancelled_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "duration_cancel_test"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id, &player1);
+    let duration = client.get_match_duration(&id).unwrap();
+    let m = client.get_match(&id);
+
+    assert_eq!(duration, Some(m.completed_ledger.unwrap().saturating_sub(m.created_ledger)));
+    assert!(duration.is_some());
+}
+
+#[test]
+fn test_get_match_duration_after_completion() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "duration_complete_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1, &oracle);
+
+    let duration = client.get_match_duration(&id).unwrap();
+    let m = client.get_match(&id);
+
+    assert_eq!(duration, Some(m.completed_ledger.unwrap().saturating_sub(m.created_ledger)));
+    assert!(duration.is_some());
+}
+
+#[test]
 fn test_expire_match_sets_completed_ledger() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -1714,4 +1861,37 @@ fn test_get_live_matches_returns_only_fully_funded_matches() {
     let live_matches = client.get_live_matches();
     assert_eq!(live_matches.len(), 1);
     assert_eq!(live_matches.get(0).unwrap().id, active_id);
+    assert_ne!(live_matches.get(0).unwrap().id, pending_id);
+}
+
+#[test]
+fn test_get_active_matches_excludes_pending_matches() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create pending match and active match.
+    let pending_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pending_match_exclusion"),
+        &Platform::Lichess,
+    );
+
+    let active_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "active_match_exclusion"),
+        &Platform::Lichess,
+    );
+    client.deposit(&active_id, &player1);
+    client.deposit(&active_id, &player2);
+
+    let active_matches = client.get_active_matches();
+    assert_eq!(active_matches.len(), 1);
+    assert_eq!(active_matches.get(0).unwrap().id, active_id);
+    assert_ne!(active_matches.get(0).unwrap().id, pending_id);
 }

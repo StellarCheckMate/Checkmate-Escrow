@@ -973,7 +973,7 @@ fn test_expire_match_refunds_depositor_after_timeout() {
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     env.as_contract(&contract_id, || {
         env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
+            &DataKey::LiveMatches,
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
@@ -1304,7 +1304,7 @@ fn test_get_match_returns_cancelled_after_expire_match() {
     }
     env.as_contract(&contract_id, || {
         env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
+            &DataKey::LiveMatches,
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
@@ -1323,7 +1323,7 @@ fn test_get_match_returns_cancelled_after_expire_match() {
     }
     env.as_contract(&contract_id, || {
         env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
+            &DataKey::LiveMatches,
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
@@ -1535,7 +1535,7 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     env.as_contract(&contract_id, || {
         env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
+            &DataKey::LiveMatches,
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
