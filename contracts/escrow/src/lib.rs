@@ -85,13 +85,32 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
+        let already_allowed: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
+
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::AllowedToken(token.clone()), &true);
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::AllowedToken(token.clone()), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-        env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
+
+        if !already_allowed {
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowedTokenCount)
+                .unwrap_or(0);
+            let next_count = count.checked_add(1).ok_or(Error::Overflow)?;
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokenCount, &next_count);
+            if count == 0 {
+                env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
+            }
+        } else {
+            env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
+        }
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("token_add")),
@@ -109,12 +128,29 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        env.storage()
-            .persistent()
-            .remove(&DataKey::AllowedToken(token.clone()));
+        let was_allowed = env
+            .storage()
+            .instance()
+            .has(&DataKey::AllowedToken(token.clone()));
+        env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
+
+        if was_allowed {
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowedTokenCount)
+                .unwrap_or(0);
+            let next_count = count.saturating_sub(1);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokenCount, &next_count);
+            if next_count == 0 {
+                env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
+            }
+        }
 
         env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("token_remove")),
+            (Symbol::new(&env, "admin"), symbol_short!("token_removed")),
             token,
         );
         Ok(())
