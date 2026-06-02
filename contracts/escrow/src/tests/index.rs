@@ -186,3 +186,70 @@ fn test_active_pagination_handles_empty_and_partial_pages() {
         assert_eq!(all_active.get(i as u32).unwrap(), *match_id);
     }
 }
+
+#[test]
+fn test_get_pending_matches_returns_only_pending_matches() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let pending_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pending_match"),
+        &Platform::Lichess,
+    );
+
+    let active_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "active_match"),
+        &Platform::Lichess,
+    );
+    client.deposit(&active_id, &player1);
+    client.deposit(&active_id, &player2);
+
+    let pending_matches = client.get_pending_matches();
+    assert_eq!(pending_matches.len(), 1);
+    assert_eq!(pending_matches.get(0).unwrap().id, pending_id);
+
+    let active_matches = client.get_active_matches();
+    assert_eq!(active_matches.len(), 1);
+    assert_eq!(active_matches.get(0).unwrap().id, active_id);
+}
+
+#[test]
+fn test_match_transitions_from_pending_to_active_matches() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "transition_match"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+
+    let pending_matches = client.get_pending_matches();
+    assert_eq!(pending_matches.len(), 1);
+    assert_eq!(pending_matches.get(0).unwrap().id, match_id);
+
+    let active_matches = client.get_active_matches();
+    assert_eq!(active_matches.len(), 0);
+
+    client.deposit(&match_id, &player2);
+
+    let pending_matches = client.get_pending_matches();
+    assert_eq!(pending_matches.len(), 0);
+
+    let active_matches = client.get_active_matches();
+    assert_eq!(active_matches.len(), 1);
+    assert_eq!(active_matches.get(0).unwrap().id, match_id);
+}

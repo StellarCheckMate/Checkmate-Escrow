@@ -152,7 +152,8 @@ get_match(match_id) -> Match
 cancel_match(match_id, caller)
 expire_match(match_id)
 get_player_matches(player) -> Vec<u64>
-get_active_matches() -> Vec<u64>
+get_pending_matches() -> Vec<Match>
+get_active_matches() -> Vec<Match>
 ```
 
 ### Escrow

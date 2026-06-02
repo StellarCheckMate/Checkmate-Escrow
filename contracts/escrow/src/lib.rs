@@ -22,6 +22,14 @@ const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = MATCH_TTL_LEDGERS;
 /// Both formats fit well within this limit.
 const MAX_GAME_ID_LEN: u32 = 64;
 
+/// Extend instance storage TTL on every invocation so Admin, Oracle, Paused, and other
+/// instance keys never expire.
+fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(MATCH_TTL_LEDGERS / 2, MATCH_TTL_LEDGERS);
+}
+
 #[contract]
 pub struct EscrowContract;
 
@@ -40,6 +48,7 @@ impl EscrowContract {
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
     pub fn pause(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -54,6 +63,7 @@ impl EscrowContract {
 
     /// Unpause the contract — admin only.
     pub fn unpause(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
             .instance()
@@ -148,10 +158,18 @@ impl EscrowContract {
 
     /// Check if a token is allowed.
     pub fn is_token_allowed(env: Env, token: Address) -> bool {
-        env.storage()
-            .instance()
-            .get(&DataKey::AllowedToken(token))
-            .unwrap_or(false)
+        let key = DataKey::AllowedToken(token.clone());
+        let allowed: bool = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(false);
+        if allowed {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        }
+        allowed
     }
 
     /// Create a new match. Both players must call `deposit` before the game starts.
@@ -179,6 +197,7 @@ impl EscrowContract {
         game_id: String,
         platform: Platform,
     ) -> Result<u64, Error> {
+        extend_instance_ttl(&env);
         player1.require_auth();
 
         if env
@@ -251,6 +270,11 @@ impl EscrowContract {
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
         env.storage().persistent().set(&DataKey::GameId(m.game_id.clone()), &true);
+        env.storage().persistent().extend_ttl(
+            &DataKey::GameId(m.game_id.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
 
         // Add match ID to both players' match lists
         let mut player1_matches: soroban_sdk::Vec<u64> = env
@@ -293,6 +317,7 @@ impl EscrowContract {
 
     /// Player deposits their stake into escrow.
     pub fn deposit(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         player.require_auth();
 
         if env
@@ -348,6 +373,7 @@ impl EscrowContract {
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
             );
+            Self::append_active_match(&env, match_id);
         }
 
         env.storage()
@@ -414,8 +440,11 @@ impl EscrowContract {
             }
         }
 
+        Self::remove_live_match(env.clone(), match_id);
+
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
+        Self::remove_active_match(&env, match_id);
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -466,6 +495,7 @@ impl EscrowContract {
     /// Cancel a pending match and refund any deposits.
     /// Either player can cancel a pending match.
     pub fn cancel_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let mut m: Match = env
             .storage()
             .persistent()
@@ -517,6 +547,7 @@ impl EscrowContract {
     /// Expire a pending match that has not been fully funded within MATCH_TIMEOUT_LEDGERS.
     /// Anyone can call this; funds are returned to whoever deposited.
     pub fn expire_match(env: Env, match_id: u64) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         let mut m: Match = env
             .storage()
             .persistent()
@@ -583,6 +614,56 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::MatchTimeout)
             .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS)
+    }
+
+    fn get_active_match_ids(env: &Env) -> soroban_sdk::Vec<u64> {
+        if let Some(active_matches) = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ActiveMatches)
+        {
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+            active_matches
+        } else {
+            soroban_sdk::vec![env]
+        }
+    }
+
+    fn set_active_match_ids(env: &Env, active_matches: &soroban_sdk::Vec<u64>) {
+        if active_matches.is_empty() {
+            env.storage().persistent().remove(&DataKey::ActiveMatches);
+        } else {
+            env.storage()
+                .persistent()
+                .set(&DataKey::ActiveMatches, active_matches);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        }
+    }
+
+    fn append_active_match(env: &Env, match_id: u64) {
+        let mut active_matches = Self::get_active_match_ids(env);
+        active_matches.push_back(match_id);
+        Self::set_active_match_ids(env, &active_matches);
+    }
+
+    fn remove_active_match(env: &Env, match_id: u64) {
+        let active_matches = Self::get_active_match_ids(env);
+        if active_matches.is_empty() {
+            return;
+        }
+
+        let mut updated = soroban_sdk::vec![env];
+        for id in active_matches.iter() {
+            if *id != match_id {
+                updated.push_back(*id);
+            }
+        }
+
+        Self::set_active_match_ids(env, &updated);
     }
 
     pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
@@ -653,7 +734,14 @@ impl EscrowContract {
             .ok_or(Error::MatchNotFound)
     }
 
-    /// Check whether both players have deposited.
+    /// Check whether both players have deposited their stakes.
+    /// 
+    /// This returns `true` as long as both `player1_deposited` and `player2_deposited` flags
+    /// are set, regardless of match state. Specifically, it remains `true` after payout
+    /// (when state transitions to `Completed`) because the deposit flags are never cleared.
+    /// 
+    /// This indicates historical deposit status, not current escrowed funds.
+    /// To check if funds are currently held in escrow, use [`is_currently_escrowed`].
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
         let m: Match = env
             .storage()
@@ -661,6 +749,16 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
         Ok(m.player1_deposited && m.player2_deposited)
+    }
+
+    /// Return the number of players who have deposited for a match (0, 1, or 2).
+    pub fn get_depositor_count(env: Env, match_id: u64) -> Result<u32, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        Ok(Self::depositor_count(&m) as u32)
     }
 
     /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
@@ -674,38 +772,103 @@ impl EscrowContract {
             return Ok(0);
         }
         // Count depositors explicitly — avoids fragile bool-to-integer casting.
-        let depositors: i128 = if m.player1_deposited { 1 } else { 0 }
-            + if m.player2_deposited { 1 } else { 0 };
+        let depositors: i128 = Self::depositor_count(&m);
         Ok(depositors * m.stake_amount)
     }
 
-    /// Return all matches that are in Active state (fully funded).
-    pub fn get_live_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
-        let mut live_matches = soroban_sdk::vec![&env];
+    fn collect_matches_by_state(
+        env: &Env,
+        state: MatchState,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        let mut matches = soroban_sdk::vec![env];
         let count: u64 = env
             .storage()
             .instance()
             .get(&DataKey::MatchCount)
             .unwrap_or(0);
 
-        for i in 0..count {
+        for i in 0..ids.len() {
+            let match_id = *ids.get(i).unwrap();
             if let Ok(m) = env
                 .storage()
                 .persistent()
-                .get::<DataKey, Match>(&DataKey::Match(i))
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
             {
-                if m.state == MatchState::Active {
-                    live_matches.push_back(m);
+                if m.state == state {
+                    matches.push_back(m);
                 }
             }
         }
 
-        Ok(live_matches)
+        Ok(matches)
     }
 
-    /// Return the total number of active matches created, ordered by match ID ascending.
+    fn collect_matches_by_state_paginated(
+        env: &Env,
+        state: MatchState,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        let mut matches = soroban_sdk::vec![env];
+        if limit == 0 {
+            return Ok(matches);
+        }
+
+        let active_ids = Self::get_active_match_ids(&env);
+        let mut skipped = 0u32;
+        let mut added = 0u32;
+
+        for i in 0..ids.len() {
+            if skipped < offset {
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            let match_id = *ids.get(i).unwrap();
+            if let Ok(m) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
+            {
+                if m.state != state {
+                    continue;
+                }
+                if skipped < offset {
+                    skipped = skipped.saturating_add(1);
+                    continue;
+                }
+                matches.push_back(m);
+                added = added.saturating_add(1);
+                if added >= limit {
+                    break;
+                }
+            }
+        }
+
+        Ok(matches)
+    }
+
+    /// Return all matches currently in Pending state (created and awaiting deposits).
+    pub fn get_pending_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state(&env, MatchState::Pending)
+    }
+
+    /// Return a paginated page of pending matches ordered by match ID ascending.
+    pub fn get_pending_matches_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state_paginated(&env, MatchState::Pending, offset, limit)
+    }
+
+    /// Return all matches that are in Active state (fully funded).
     pub fn get_active_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
-        Self::get_live_matches(env)
+        Self::collect_matches_by_state(&env, MatchState::Active)
+    }
+
+    /// Return all matches that are in Active state (fully funded).
+    pub fn get_live_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::get_active_matches(env)
     }
 
     /// Return a paginated page of active matches ordered by match ID ascending.
@@ -714,41 +877,7 @@ impl EscrowContract {
         offset: u32,
         limit: u32,
     ) -> Result<soroban_sdk::Vec<Match>, Error> {
-        let mut active_matches = soroban_sdk::vec![&env];
-        if limit == 0 {
-            return Ok(active_matches);
-        }
-
-        let count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::MatchCount)
-            .unwrap_or(0);
-        let mut skipped = 0u32;
-        let mut added = 0u32;
-
-        for i in 0..count {
-            if let Ok(m) = env
-                .storage()
-                .persistent()
-                .get::<DataKey, Match>(&DataKey::Match(i))
-            {
-                if m.state != MatchState::Active {
-                    continue;
-                }
-                if skipped < offset {
-                    skipped = skipped.saturating_add(1);
-                    continue;
-                }
-                active_matches.push_back(m);
-                added = added.saturating_add(1);
-                if added >= limit {
-                    break;
-                }
-            }
-        }
-
-        Ok(active_matches)
+        Self::collect_matches_by_state_paginated(&env, MatchState::Active, offset, limit)
     }
 
     /// Alias for `get_active_matches_paginated` with a live-match naming convention.
@@ -770,12 +899,49 @@ impl EscrowContract {
     }
 
     /// Return all match IDs for a given player (past and present).
+    ///
+    /// Deprecated: use `get_player_matches_paginated` to avoid unbounded return sizes.
     pub fn get_player_matches(env: Env, player: Address) -> Result<soroban_sdk::Vec<u64>, Error> {
         Ok(env
             .storage()
             .persistent()
             .get(&DataKey::PlayerMatches(player))
             .unwrap_or_else(|| soroban_sdk::vec![&env]))
+    }
+
+    /// Return a page of match IDs for a given player.
+    pub fn get_player_matches_paginated(
+        env: Env,
+        player: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<u64>, Error> {
+        let player_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        if limit == 0 {
+            return Ok(soroban_sdk::vec![&env]);
+        }
+
+        let mut page = soroban_sdk::vec![&env];
+        let mut skipped = 0u32;
+        let total = player_matches.len();
+
+        for i in 0..total {
+            if skipped < offset {
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            page.push_back(player_matches.get(i).unwrap());
+            if page.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(page)
     }
 }
 
