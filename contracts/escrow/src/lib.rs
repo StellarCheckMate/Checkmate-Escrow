@@ -44,6 +44,8 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
+        env.storage().instance().set(&DataKey::AllowedTokenCount, &0u64);
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
@@ -85,14 +87,32 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
+        let already_allowed: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
+
         env.storage()
-            .persistent()
+            .instance()
             .set(&DataKey::AllowedToken(token.clone()), &true);
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::AllowedToken(token.clone()), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-        Self::append_allowed_token(&env, &token);
-        env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
+
+        if !already_allowed {
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowedTokenCount)
+                .unwrap_or(0);
+            let next_count = count.checked_add(1).ok_or(Error::Overflow)?;
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokenCount, &next_count);
+            if count == 0 {
+                env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
+            }
+        } else {
+            env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
+        }
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("token_add")),
@@ -110,13 +130,29 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        env.storage()
-            .persistent()
-            .remove(&DataKey::AllowedToken(token.clone()));
-        Self::remove_allowed_token_from_list(&env, &token);
+        let was_allowed = env
+            .storage()
+            .instance()
+            .has(&DataKey::AllowedToken(token.clone()));
+        env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
+
+        if was_allowed {
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::AllowedTokenCount)
+                .unwrap_or(0);
+            let next_count = count.saturating_sub(1);
+            env.storage()
+                .instance()
+                .set(&DataKey::AllowedTokenCount, &next_count);
+            if next_count == 0 {
+                env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
+            }
+        }
 
         env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("token_remove")),
+            (Symbol::new(&env, "admin"), symbol_short!("token_removed")),
             token,
         );
         Ok(())
@@ -934,12 +970,49 @@ impl EscrowContract {
     }
 
     /// Return all match IDs for a given player (past and present).
+    ///
+    /// Deprecated: use `get_player_matches_paginated` to avoid unbounded return sizes.
     pub fn get_player_matches(env: Env, player: Address) -> Result<soroban_sdk::Vec<u64>, Error> {
         Ok(env
             .storage()
             .persistent()
             .get(&DataKey::PlayerMatches(player))
             .unwrap_or_else(|| soroban_sdk::vec![&env]))
+    }
+
+    /// Return a page of match IDs for a given player.
+    pub fn get_player_matches_paginated(
+        env: Env,
+        player: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<u64>, Error> {
+        let player_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        if limit == 0 {
+            return Ok(soroban_sdk::vec![&env]);
+        }
+
+        let mut page = soroban_sdk::vec![&env];
+        let mut skipped = 0u32;
+        let total = player_matches.len();
+
+        for i in 0..total {
+            if skipped < offset {
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            page.push_back(player_matches.get(i).unwrap());
+            if page.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(page)
     }
 }
 

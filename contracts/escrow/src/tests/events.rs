@@ -362,12 +362,12 @@ fn test_remove_allowed_token_emits_event() {
     let expected_topics = vec![
         &env,
         Symbol::new(&env, "admin").into_val(&env),
-        symbol_short!("token_removed").into_val(&env),
+        symbol_short!("token_remove").into_val(&env),
     ];
     let matched = events
         .iter()
         .find(|(_, topics, _)| *topics == expected_topics);
-    assert!(matched.is_some(), "token_removed event not emitted");
+    assert!(matched.is_some(), "token_remove event not emitted");
 
     let (_, _, data) = matched.unwrap();
     let ev_token: Address = TryFromVal::try_from_val(&env, &data).unwrap();

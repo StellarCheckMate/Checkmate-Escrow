@@ -100,7 +100,7 @@ stellar contract invoke \
   --token <USDC_CONTRACT_ADDRESS>
 ```
 
-> **Note:** After the first `add_allowed_token` call, `AllowlistEnabled` is set to `true` on-chain and cannot be unset. Any token not explicitly added will be rejected by `create_match`.
+> **Note:** After the first `add_allowed_token` call, allowlist enforcement becomes active. If the last allowed token is removed, enforcement is disabled again and `create_match` accepts any token.
 
 ---
 
