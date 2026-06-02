@@ -44,6 +44,8 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
+        env.storage().instance().set(&DataKey::AllowedTokenCount, &0u64);
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
