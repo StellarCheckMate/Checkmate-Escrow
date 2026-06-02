@@ -11,6 +11,16 @@ fn test_is_token_allowed_returns_false_for_unknown_tokens() {
 }
 
 #[test]
+fn test_is_token_allowed_returns_true_for_allowed_tokens() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+    let result = client.is_token_allowed(&token);
+    assert!(result, "allowed token should be reported as allowed");
+}
+
+#[test]
 fn test_add_allowed_token_emits_event() {
     let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
