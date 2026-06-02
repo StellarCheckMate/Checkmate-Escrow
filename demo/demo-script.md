@@ -145,42 +145,62 @@ stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
 
 Match state is now `Active`.
 
+Quick state/event checks (optional but recommended):
+
+```bash
+# Depositor flags imply funding
+stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
+  -- is_funded --match_id $MATCH_ID
+# true
+
+# Check match state + timestamp/ledger fields
+stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
+  -- get_match --match_id $MATCH_ID
+# state: Active, player1_deposited: true, player2_deposited: true
+```
+
 ---
 
 ## 8. Submit the Result
 
 After the Lichess game completes, two calls are needed:
 
-**Step 8a — Oracle contract records the result** (admin signs as the oracle's trusted submitter):
+**Step 8a — Oracle contract records the result** (oracle contract admin submits):
 
 ```bash
+# Note: the escrow payout requires `caller` auth equal to the `oracle` address stored in Escrow.
+# In this demo, `oracle` is the oracle *contract id address* ($ORACLE_ID).
+
 stellar contract invoke --id $ORACLE_ID --source admin --network testnet \
   -- submit_result \
     --match_id $MATCH_ID \
     --game_id  "abc123xyz" \
+    --platform Lichess \
     --result   Player1Wins
 ```
 
 Valid `--result` values: `Player1Wins`, `Player2Wins`, `Draw`.
 
-**Step 8b — Escrow contract executes the payout** (admin signs as the address registered as oracle in the escrow):
+**Step 8b — Escrow contract executes the payout** (escrow is called by the configured oracle address):
 
 ```bash
-stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
+stellar contract invoke --id $ESCROW_ID --source $ORACLE_ID --network testnet \
   -- submit_result \
     --match_id $MATCH_ID \
-    --winner   Player1
+    --winner   Player1 \
+    --caller   $ORACLE_ID
 ```
 
 Valid `--winner` values: `Player1`, `Player2`, `Draw`.
 
 This atomically transfers the full pot (20 XLM) to Player1. For a draw, both players receive their 10 XLM back.
 
-> **Why two calls?** The oracle contract stores a verifiable on-chain record of the result. The escrow contract executes the payout. They are independent contracts — the escrow's `submit_result` requires auth from the address registered as oracle at initialization (the `admin` key in this demo).
+> **What changed vs older demos?** The current escrow contract does **not** allow the escrow admin (`admin`) to submit payouts. It requires `caller` auth to be the oracle address configured during `initialize` (the oracle contract id address in this demo).
+
 
 ---
 
-## 9. Verify the Payout
+## 9. Verify the Payout (state + expected events)
 
 ```bash
 stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
@@ -191,6 +211,57 @@ stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
   -- get_escrow_balance --match_id $MATCH_ID
 # 0  (funds have been paid out)
 ```
+
+Optional event spot-checks (topic names match contract code):
+
+```bash
+# Look for match/completed for this MATCH_ID
+# (The stellar CLI/events output format may vary; ensure the match_id and winner are present.)
+stellar contract events --id $ESCROW_ID --network testnet --ledger 0
+```
+
+---
+
+## 10. Governance + timeout behavior (keep this demo in sync with contract logic)
+
+### 10a. Read and update the match timeout
+
+`set_match_timeout` is admin-only.
+
+```bash
+stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
+  -- get_match_timeout
+# e.g. 518400
+
+# Example: double it
+stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
+  -- set_match_timeout --timeout 1036800
+```
+
+Verify:
+
+```bash
+stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
+  -- get_match_timeout
+# 1036800
+```
+
+### 10b. Pause blocks state-changing calls
+
+```bash
+# Pause (admin only)
+stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
+  -- pause
+
+# While paused, this should fail (ContractPaused)
+stellar contract invoke --id $ESCROW_ID --source player1 --network testnet \
+  -- deposit --match_id $MATCH_ID --player $P1_ADDR
+
+# Unpause
+stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
+  -- unpause
+```
+
 
 ---
 
