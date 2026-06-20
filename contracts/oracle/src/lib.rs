@@ -1,11 +1,15 @@
 #![no_std]
 
 mod errors;
-mod types;
+pub mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol};
-use types::{DataKey, ResultEntry, Winner};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol, Vec};
+use types::{BatchResultEntry, DataKey, Platform, ResultEntry, Winner};
+
+/// Maximum number of entries accepted in a single batch submission.
+/// Designed for v2.0 tournament use; future versions may raise this limit.
+const MAX_BATCH_SIZE: u32 = 100;
 
 /// ~30 days at 5s/ledger.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -49,7 +53,7 @@ impl OracleContract {
         env: Env,
         match_id: u64,
         game_id: String,
-        platform: escrow::types::Platform,
+        platform: Platform,
         result: Winner,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
@@ -102,8 +106,103 @@ impl OracleContract {
         Ok(())
     }
 
-    /// Retrieve the stored result for a match.
-    /// TTL is extended on every read to prevent active results from expiring.
+    /// Submit results for multiple matches atomically.
+    ///
+    /// All entries are validated before any storage writes occur (all-or-nothing).
+    /// Maximum batch size is 100 entries (see [`MAX_BATCH_SIZE`]).
+    ///
+    /// # Errors
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::Unauthorized`] — not initialized or caller is not the admin.
+    /// - [`Error::BatchTooLarge`] — `entries` exceeds 100 items.
+    /// - [`Error::InvalidGameId`] — any entry has an empty `game_id`.
+    /// - [`Error::BatchDuplicateEntry`] — two entries share the same `match_id`.
+    /// - [`Error::AlreadySubmitted`] — a result for any `match_id` already exists.
+    pub fn submit_batch_results(
+        env: Env,
+        entries: Vec<BatchResultEntry>,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let len = entries.len();
+        if len > MAX_BATCH_SIZE {
+            return Err(Error::BatchTooLarge);
+        }
+
+        // Validate all entries before writing anything (atomic guarantee).
+        for i in 0..len {
+            let entry = entries.get(i).unwrap();
+
+            if entry.game_id.is_empty() {
+                return Err(Error::InvalidGameId);
+            }
+
+            // Intra-batch duplicate detection (O(n²) acceptable for n ≤ 100).
+            for j in (i + 1)..len {
+                if entries.get(j).unwrap().match_id == entry.match_id {
+                    return Err(Error::BatchDuplicateEntry);
+                }
+            }
+
+            if env
+                .storage()
+                .persistent()
+                .has(&DataKey::Result(entry.match_id))
+            {
+                return Err(Error::AlreadySubmitted);
+            }
+        }
+
+        // All checks passed — commit atomically.
+        let current_ledger = env.ledger().sequence();
+        for i in 0..len {
+            let entry = entries.get(i).unwrap();
+            env.storage().persistent().set(
+                &DataKey::Result(entry.match_id),
+                &ResultEntry {
+                    game_id: entry.game_id,
+                    platform: entry.platform,
+                    result: entry.result.clone(),
+                    submitted_ledger: current_ledger,
+                    submitter: admin.clone(),
+                },
+            );
+            env.storage().persistent().extend_ttl(
+                &DataKey::Result(entry.match_id),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+            env.events().publish(
+                (Symbol::new(&env, "oracle"), symbol_short!("result")),
+                (entry.match_id, entry.result),
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("batch")),
+            len,
+        );
+
+        Ok(())
+    }
+
+    /// Retrieve the stored result for a match.    /// TTL is extended on every read to prevent active results from expiring.
     /// Without this, frequently-accessed results could expire and return ResultNotFound.
     ///
     /// # Errors

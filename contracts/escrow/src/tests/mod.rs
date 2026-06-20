@@ -2,10 +2,11 @@ extern crate std;
 
 pub use super::*;
 pub use soroban_sdk::{
-    testutils::{MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
     token::{Client as TokenClient, StellarAssetClient},
     vec, Address, Env, IntoVal, String, Symbol, TryFromVal,
 };
+pub use std::{format, vec::Vec};
 
 pub mod helpers;
 

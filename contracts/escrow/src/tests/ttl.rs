@@ -101,7 +101,7 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
     );
 
     let ttl_after_append = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::LiveMatches)
+        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
     });
     assert_eq!(ttl_after_append, crate::MATCH_TTL_LEDGERS);
 
@@ -122,7 +122,7 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
     client.submit_result(&match1, &Winner::Player1);
 
     let ttl_after_removal = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::LiveMatches)
+        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
     });
     assert_eq!(ttl_after_removal, crate::MATCH_TTL_LEDGERS);
 }
@@ -415,11 +415,17 @@ fn test_get_player_matches_ttl_returns_correct_value() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    // Before any matches, TTL should be 0
-    let ttl_before = client.get_player_matches_ttl(&player1);
+    // Before any matches, key doesn't exist
+    let ttl_before = env.as_contract(&contract_id, || {
+        let key = DataKey::PlayerMatches(player1.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().get_ttl(&key)
+        } else {
+            0u32
+        }
+    });
     assert_eq!(ttl_before, 0);
 
-    // Create a match
     client.create_match(
         &player1,
         &player2,
@@ -429,11 +435,11 @@ fn test_get_player_matches_ttl_returns_correct_value() {
         &Platform::Lichess,
     );
 
-    // After creating a match, TTL should be set to MATCH_TTL_LEDGERS
-    let ttl_after = client.get_player_matches_ttl(&player1);
+    let ttl_after = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::PlayerMatches(player1.clone()))
+    });
     assert_eq!(ttl_after, crate::MATCH_TTL_LEDGERS);
 
-    // Advance ledger by 1000
     env.ledger().set(soroban_sdk::testutils::LedgerInfo {
         sequence_number: env.ledger().sequence() + 1000,
         timestamp: env.ledger().timestamp() + 5000,
@@ -445,29 +451,30 @@ fn test_get_player_matches_ttl_returns_correct_value() {
         max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
     });
 
-    // TTL should have decreased by approximately 1000 ledgers
-    let ttl_decreased = client.get_player_matches_ttl(&player1);
-    assert!(
-        ttl_decreased < ttl_after,
-        "TTL should decrease after ledger advancement"
-    );
-    assert!(
-        ttl_decreased >= ttl_after - 1000,
-        "TTL should be approximately 1000 less"
-    );
+    let ttl_decreased = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::PlayerMatches(player1.clone()))
+    });
+    assert!(ttl_decreased < ttl_after, "TTL should decrease after ledger advancement");
+    assert!(ttl_decreased >= ttl_after - 1000, "TTL should be approximately 1000 less");
 
-    // Reading player matches should refresh TTL back to MATCH_TTL_LEDGERS
     client.get_player_matches(&player1);
-    let ttl_refreshed = client.get_player_matches_ttl(&player1);
+    let ttl_refreshed = env.as_contract(&contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::PlayerMatches(player1.clone()))
+    });
     assert_eq!(ttl_refreshed, crate::MATCH_TTL_LEDGERS);
 }
 
 #[test]
 fn test_get_player_matches_ttl_for_nonexistent_player() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
     let random_player = Address::generate(&env);
-    let ttl = client.get_player_matches_ttl(&random_player);
+    let ttl = env.as_contract(&contract_id, || {
+        let key = DataKey::PlayerMatches(random_player.clone());
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().get_ttl(&key)
+        } else {
+            0u32
+        }
+    });
     assert_eq!(ttl, 0, "TTL should be 0 for player with no match history");
 }

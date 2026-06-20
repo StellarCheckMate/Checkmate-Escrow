@@ -114,6 +114,47 @@ Separately, the oracle service records the same result in the on-chain
 oracle_client.submit_result(&match_id, &game_id, &MatchResult::Player1Wins);
 ```
 
+For tournament support, the oracle contract also exposes a batch API:
+`submit_batch_results`. This lets the oracle submit 10–100 verified match
+results in a single atomic transaction.
+
+```rust
+let entries = soroban_sdk::vec![
+    &env,
+    types::BatchResultEntry {
+        match_id: 0,
+        game_id: String::from_str(&env, "game_a"),
+        platform: Platform::Lichess,
+        result: Winner::Player1,
+    },
+    types::BatchResultEntry {
+        match_id: 1,
+        game_id: String::from_str(&env, "game_b"),
+        platform: Platform::Lichess,
+        result: Winner::Player2,
+    },
+];
+oracle_client.submit_batch_results(&entries);
+```
+
+Batch submission is atomic: all entries are validated before any storage writes
+occur. If any entry fails validation, the whole batch is rejected and nothing
+is persisted. The current on-chain limit is `100` entries per batch.
+
+Important batch validation rules:
+- `Error::BatchTooLarge` — more than 100 entries.
+- `Error::BatchDuplicateEntry` — duplicate `match_id` values inside the same batch.
+- `Error::AlreadySubmitted` — any `match_id` already has a stored result.
+- `Error::InvalidGameId` — any entry has an empty `game_id`.
+
+The oracle contract emits a batch summary event on success, which can be
+used by off-chain monitoring to measure batch success rates and detect
+failed submission attempts.
+
+Off-chain helpers should deduplicate and validate matches before calling
+`submit_batch_results`, so tournament uploads remain efficient while preserving
+all-or-nothing semantics.
+
 This means the current oracle contract is supplementary: it stores an
 independent result entry and exposes read APIs, but it is not the primary
 authority used by the escrow contract to execute payouts.

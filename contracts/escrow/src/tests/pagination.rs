@@ -24,19 +24,19 @@ fn test_player_match_pagination_handles_empty_and_partial_pages() {
     let player1_page_0 = client.get_player_matches_paginated(&player1, &0, &5);
     assert_eq!(player1_page_0.len(), 5);
     for (i, match_id) in player1_page_0.iter().enumerate() {
-        assert_eq!(*match_id, match_ids[i]);
+        assert_eq!(match_id, match_ids[i]);
     }
 
     let player1_page_1 = client.get_player_matches_paginated(&player1, &5, &10);
     assert_eq!(player1_page_1.len(), 10);
     for (i, match_id) in player1_page_1.iter().enumerate() {
-        assert_eq!(*match_id, match_ids[5 + i]);
+        assert_eq!(match_id, match_ids[5 + i]);
     }
 
     let player1_page_2 = client.get_player_matches_paginated(&player1, &20, &10);
     assert_eq!(player1_page_2.len(), 5);
     for (i, match_id) in player1_page_2.iter().enumerate() {
-        assert_eq!(*match_id, match_ids[20 + i]);
+        assert_eq!(match_id, match_ids[20 + i]);
     }
 
     let player1_page_3 = client.get_player_matches_paginated(&player1, &25, &10);
@@ -98,9 +98,9 @@ fn test_player_history_index_excludes_unrelated_matches() {
     let player4 = Address::generate(&env);
 
     // Mint tokens for player3 and player4
-    let token_client = TokenClient::new(&env, &token);
-    token_client.mint(&player3, &1000);
-    token_client.mint(&player4, &1000);
+    let asset_client = StellarAssetClient::new(&env, &token);
+    asset_client.mint(&player3, &1000);
+    asset_client.mint(&player4, &1000);
 
     // Create matches for player1 and player2
     let match_id_1 = client.create_match(

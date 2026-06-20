@@ -12,8 +12,11 @@ errors=0
 while IFS= read -r file; do
   # Extract local links: [text](path) where path does not start with http/https/#
   while IFS= read -r link; do
+    # Strip URL fragment — only the file path matters for existence checks
+    file_part="${link%%#*}"
+    [[ -z "$file_part" ]] && continue
     # Resolve relative to the file's directory
-    target="$(dirname "$file")/$link"
+    target="$(dirname "$file")/$file_part"
     # Normalize path (remove ../ etc.)
     target="$(realpath -m "$target")"
     if [[ ! -e "$target" ]]; then

@@ -20,4 +20,6 @@ pub enum Error {
     InvalidGameId = 15,
     InvalidPlayers = 16,
     TokenNotAllowed = 17,
+    InvalidAddress = 18,
+    MatchAlreadyActive = 19,
 }

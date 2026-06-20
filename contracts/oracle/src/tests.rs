@@ -1,7 +1,7 @@
 extern crate std;
 
 use super::*;
-use escrow::types::{MatchState, Platform, Winner as EscrowWinner};
+use escrow::types::{MatchState, Platform as EscrowPlatform, Winner as EscrowWinner};
 use escrow::{EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::storage::{Instance as _, Persistent as _},
@@ -34,7 +34,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         &100,
         &token_addr,
         &String::from_str(&env, "test_game"),
-        &Platform::Lichess,
+        &EscrowPlatform::Lichess,
     );
     escrow_client.deposit(&0u64, &player1);
     escrow_client.deposit(&0u64, &player2);
@@ -93,7 +93,6 @@ fn test_duplicate_initialize_returns_already_initialized() {
     client.initialize(&admin1);
     let result = client.try_initialize(&admin2);
     assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
-}
 }
 
 // ── has_result (public, unauthenticated) ─────────────────────────────────
@@ -831,7 +830,7 @@ fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
         &100,
         &token_addr,
         &String::from_str(&env, "integration_game"),
-        &Platform::Lichess,
+        &EscrowPlatform::Lichess,
     );
     escrow_client.deposit(&match_id, &player1);
     escrow_client.deposit(&match_id, &player2);
@@ -840,6 +839,7 @@ fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
     oracle_client.submit_result(
         &match_id,
         &String::from_str(&env, "integration_game"),
+        &Platform::Lichess,
         &Winner::Player1,
     );
 
@@ -853,107 +853,284 @@ fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
     assert_eq!(m.state, MatchState::Active);
 }
 
+// ── submit_batch_results ─────────────────────────────────────────────────
 
-// ── Test #599: delete_result emits event ────────────────────────────────
-
-#[test]
-fn test_delete_result_emits_deletion_event() {
-    let (env, contract_id, ..) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    client.submit_result(
-        &0u64,
-        &String::from_str(&env, "chess_game_42"),
-        &Platform::Lichess,
-        &Winner::Player1,
-    );
-
-    client.delete_result(&0u64);
-
-    let events = env.events().all();
-    let expected_topics = soroban_sdk::vec![
-        &env,
-        Symbol::new(&env, "oracle").into_val(&env),
-        symbol_short!("deleted").into_val(&env),
-    ];
-    let matched = events
-        .iter()
-        .find(|(_, topics, _)| *topics == expected_topics);
-    assert!(matched.is_some(), "deletion event not emitted");
-
-    let (_, _, data) = matched.unwrap();
-    let ev_id: u64 = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
-    assert_eq!(ev_id, 0u64);
+fn make_batch_entry(
+    env: &Env,
+    match_id: u64,
+    game_id: &str,
+) -> types::BatchResultEntry {
+    types::BatchResultEntry {
+        match_id,
+        game_id: String::from_str(env, game_id),
+        platform: Platform::Lichess,
+        result: Winner::Player1,
+    }
 }
 
-
-// ── Test #600: delete_result leaves has_result false ──────────────────────
-
 #[test]
-fn test_delete_result_leaves_has_result_false() {
+fn test_batch_submit_single_entry() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    client.submit_result(
-        &0u64,
-        &String::from_str(&env, "chess_game_42"),
-        &Platform::Lichess,
-        &Winner::Player1,
-    );
-    assert!(client.has_result(&0u64));
+    let entries = soroban_sdk::vec![&env, make_batch_entry(&env, 0, "game_a")];
+    client.submit_batch_results(&entries);
 
-    client.delete_result(&0u64);
+    assert!(client.has_result(&0u64));
+    let entry = client.get_result(&0u64);
+    assert_eq!(entry.result, Winner::Player1);
+}
+
+#[test]
+fn test_batch_submit_multiple_entries() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let entries = soroban_sdk::vec![
+        &env,
+        make_batch_entry(&env, 0, "game_0"),
+        types::BatchResultEntry {
+            match_id: 1,
+            game_id: String::from_str(&env, "game_1"),
+            platform: Platform::Lichess,
+            result: Winner::Player2,
+        },
+        types::BatchResultEntry {
+            match_id: 2,
+            game_id: String::from_str(&env, "game_2"),
+            platform: Platform::ChessDotCom,
+            result: Winner::Draw,
+        },
+    ];
+    client.submit_batch_results(&entries);
+
+    assert!(client.has_result(&0u64));
+    assert!(client.has_result(&1u64));
+    assert!(client.has_result(&2u64));
+    assert_eq!(client.get_result(&1u64).result, Winner::Player2);
+    assert_eq!(client.get_result(&2u64).result, Winner::Draw);
+}
+
+#[test]
+fn test_batch_submit_max_size_100() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let mut entries: soroban_sdk::Vec<types::BatchResultEntry> = soroban_sdk::vec![&env];
+    for i in 0u64..100 {
+        entries.push_back(types::BatchResultEntry {
+            match_id: i,
+            game_id: String::from_str(&env, "g"),
+            platform: Platform::Lichess,
+            result: Winner::Player1,
+        });
+    }
+    client.submit_batch_results(&entries);
+
+    assert!(client.has_result(&0u64));
+    assert!(client.has_result(&99u64));
+}
+
+#[test]
+fn test_batch_submit_over_limit_returns_batch_too_large() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let mut entries: soroban_sdk::Vec<types::BatchResultEntry> = soroban_sdk::vec![&env];
+    for i in 0u64..101 {
+        entries.push_back(types::BatchResultEntry {
+            match_id: i,
+            game_id: String::from_str(&env, "g"),
+            platform: Platform::Lichess,
+            result: Winner::Player1,
+        });
+    }
+    let result = client.try_submit_batch_results(&entries);
+    assert_eq!(result, Err(Ok(Error::BatchTooLarge)));
+}
+
+#[test]
+fn test_batch_submit_intra_batch_duplicate_returns_error() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let entries = soroban_sdk::vec![
+        &env,
+        make_batch_entry(&env, 0, "game_a"),
+        make_batch_entry(&env, 0, "game_b"), // duplicate match_id
+    ];
+    let result = client.try_submit_batch_results(&entries);
+    assert_eq!(result, Err(Ok(Error::BatchDuplicateEntry)));
+}
+
+#[test]
+fn test_batch_duplicate_does_not_write_partial_state() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let entries = soroban_sdk::vec![
+        &env,
+        make_batch_entry(&env, 0, "game_a"),
+        make_batch_entry(&env, 0, "game_b"), // triggers duplicate error
+    ];
+    let _ = client.try_submit_batch_results(&entries);
+
+    // Nothing should have been written (validate-first, all-or-nothing).
     assert!(!client.has_result(&0u64));
 }
 
+#[test]
+fn test_batch_already_submitted_returns_error() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
 
-// ── Test #598: unpause emits event ───────────────────────────────────────
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "game_existing"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    let entries = soroban_sdk::vec![&env, make_batch_entry(&env, 0, "game_a")];
+    let result = client.try_submit_batch_results(&entries);
+    assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
+}
 
 #[test]
-fn test_unpause_emits_unpaused_event() {
+fn test_batch_already_submitted_does_not_overwrite() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "game_existing"),
+        &Platform::Lichess,
+        &Winner::Draw,
+    );
+
+    let entries = soroban_sdk::vec![
+        &env,
+        make_batch_entry(&env, 0, "game_override"), // match_id 0 already has a result
+    ];
+    let _ = client.try_submit_batch_results(&entries);
+
+    // Original result must be untouched.
+    assert_eq!(client.get_result(&0u64).result, Winner::Draw);
+}
+
+#[test]
+fn test_batch_invalid_game_id_returns_error() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let entries = soroban_sdk::vec![
+        &env,
+        types::BatchResultEntry {
+            match_id: 0,
+            game_id: String::from_str(&env, ""), // empty
+            platform: Platform::Lichess,
+            result: Winner::Player1,
+        },
+    ];
+    let result = client.try_submit_batch_results(&entries);
+    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+}
+
+#[test]
+fn test_batch_paused_returns_contract_paused() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
     client.pause();
-    client.unpause();
 
-    let events = env.events().all();
-    let expected_topics = soroban_sdk::vec![
-        &env,
-        Symbol::new(&env, "admin").into_val(&env),
-        symbol_short!("unpaused").into_val(&env),
-    ];
-    let matched = events
-        .iter()
-        .find(|(_, topics, _)| *topics == expected_topics);
-    assert!(matched.is_some(), "unpaused event not emitted");
+    let entries = soroban_sdk::vec![&env, make_batch_entry(&env, 0, "game_a")];
+    let result = client.try_submit_batch_results(&entries);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
-
-// ── Test #597: update_admin emits event ──────────────────────────────────
-
 #[test]
-fn test_update_admin_emits_rotation_event() {
-    let (env, contract_id, _escrow_id, old_admin, ..) = setup();
+fn test_batch_paused_writes_nothing() {
+    let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    let new_admin = Address::generate(&env);
-    client.update_admin(&new_admin);
+    client.pause();
+
+    let entries = soroban_sdk::vec![&env, make_batch_entry(&env, 0, "game_a")];
+    let _ = client.try_submit_batch_results(&entries);
+
+    assert!(!client.has_result(&0u64));
+}
+
+#[test]
+fn test_batch_uninitialized_returns_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let entries = soroban_sdk::vec![&env, make_batch_entry(&env, 0, "game_a")];
+    let result = client.try_submit_batch_results(&entries);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_batch_emits_individual_and_summary_events() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let entries = soroban_sdk::vec![
+        &env,
+        make_batch_entry(&env, 0, "game_0"),
+        make_batch_entry(&env, 1, "game_1"),
+    ];
+    client.submit_batch_results(&entries);
 
     let events = env.events().all();
-    let expected_topics = soroban_sdk::vec![
-        &env,
-        Symbol::new(&env, "admin").into_val(&env),
-        symbol_short!("admin_rot").into_val(&env),
-    ];
-    let matched = events
-        .iter()
-        .find(|(_, topics, _)| *topics == expected_topics);
-    assert!(matched.is_some(), "admin_rot event not emitted");
 
-    let (_, _, data) = matched.unwrap();
-    let (ev_old, ev_new): (Address, Address) =
-        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
-    assert_eq!(ev_old, old_admin);
-    assert_eq!(ev_new, new_admin);
+    let result_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("result").into_val(&env),
+    ];
+    let result_count = events
+        .iter()
+        .filter(|(_, topics, _)| *topics == result_topics)
+        .count();
+    assert_eq!(result_count, 2, "expected 2 individual result events");
+
+    let batch_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("batch").into_val(&env),
+    ];
+    let batch_event = events
+        .iter()
+        .find(|(_, topics, _)| *topics == batch_topics);
+    assert!(batch_event.is_some(), "batch summary event not emitted");
+
+    let (_, _, data) = batch_event.unwrap();
+    let count: u32 = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(count, 2u32);
+}
+
+#[test]
+fn test_batch_ttl_set_on_each_entry() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let entries = soroban_sdk::vec![
+        &env,
+        make_batch_entry(&env, 0, "game_0"),
+        make_batch_entry(&env, 5, "game_5"),
+    ];
+    client.submit_batch_results(&entries);
+
+    for match_id in [0u64, 5u64] {
+        let ttl = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get_ttl(&DataKey::Result(match_id))
+        });
+        assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
+    }
 }

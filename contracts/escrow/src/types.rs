@@ -25,7 +25,7 @@ pub enum Winner {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Match {
     pub id: u64,
     pub player1: Address,
@@ -58,6 +58,6 @@ pub enum DataKey {
     AllowedToken(Address),
     AllowedTokenCount,
     AllowlistEnforced,
-    AllowedTokenCount,
+    AllowedTokens,
     OracleRecord(u64),
 }
