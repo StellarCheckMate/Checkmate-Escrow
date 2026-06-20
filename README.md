@@ -134,8 +134,26 @@ stellar keys generate deployer --network testnet
 
 Follow the step-by-step guide in `demo/demo-script.md`
 
+## 🎓 New here? Start with the Interactive Tutorial
+
+Brand new to Checkmate-Escrow? The **[Interactive Tutorial](docs/tutorial-step-by-step.md)**
+takes you from zero to a completed, paid-out match on **testnet** in under 15
+minutes — no real funds at risk:
+
+1. **Create a match** — register a wager on-chain
+2. **Deposit funds** — fund the escrow
+3. **Check the result** — verify the outcome and watch the payout
+
+Prefer to learn by watching or testing yourself?
+
+- 🎬 **Video walkthroughs:** the [tutorial](docs/tutorial-step-by-step.md) includes a Video walkthroughs section (links added as recordings are published)
+- 🧩 **Interactive quiz & checklist:** [tutorial-quiz.md](docs/tutorial-quiz.md)
+- 🧪 **Testnet practice mode:** the whole tutorial runs on free testnet funds — no real money at risk
+
 ## 📖 Documentation
 
+- [Interactive Tutorial](docs/tutorial-step-by-step.md) — guided, hands-on intro for new users
+- [Tutorial Quiz & Checklist](docs/tutorial-quiz.md) — verify your understanding
 - [Architecture Overview](docs/architecture.md)
 - [Oracle Design](docs/oracle.md)
 - [Threat Model & Security](docs/security.md)
