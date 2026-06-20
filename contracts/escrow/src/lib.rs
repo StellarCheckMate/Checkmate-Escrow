@@ -36,7 +36,7 @@ pub struct EscrowContract;
 #[contractimpl]
 impl EscrowContract {
     /// Initialize the contract with a trusted oracle address and an admin.
-    pub fn initialize(env: Env, oracle: Address, admin: Address) {
+    pub fn initialize(env: Env, oracle: Address, admin: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Oracle) {
             return Err(Error::AlreadyInitialized);
         }
@@ -46,6 +46,7 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
         env.storage().instance().set(&DataKey::AllowedTokenCount, &0u64);
+        Ok(())
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
@@ -152,7 +153,7 @@ impl EscrowContract {
         }
 
         env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("token_removed")),
+            (Symbol::new(&env, "admin"), symbol_short!("tok_rm")),
             token,
         );
         Ok(())
@@ -218,7 +219,7 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::AllowedTokens)
             .unwrap_or_else(|| soroban_sdk::vec![env]);
-        if !allowed_tokens.iter().any(|existing| existing == token) {
+        if !allowed_tokens.iter().any(|existing| existing == *token) {
             allowed_tokens.push_back(token.clone());
             Self::set_allowed_token_list(env, &allowed_tokens);
         } else if env.storage().persistent().has(&DataKey::AllowedTokens) {
@@ -236,7 +237,7 @@ impl EscrowContract {
 
         let mut updated = soroban_sdk::vec![env];
         for existing in allowed_tokens.iter() {
-            if existing != token {
+            if existing != *token {
                 updated.push_back(existing.clone());
             }
         }
@@ -318,8 +319,8 @@ impl EscrowContract {
 
         let m = Match {
             id,
-            player1,
-            player2,
+            player1: player1.clone(),
+            player2: player2.clone(),
             stake_amount,
             token,
             game_id,
@@ -472,7 +473,6 @@ impl EscrowContract {
         env: Env,
         match_id: u64,
         winner: Winner,
-        caller: Address,
     ) -> Result<(), Error> {
         if env
             .storage()
@@ -488,11 +488,7 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::Oracle)
             .ok_or(Error::Unauthorized)?;
-
-        if caller != oracle {
-            return Err(Error::Unauthorized);
-        }
-        caller.require_auth();
+        oracle.require_auth();
 
         let mut m: Match = env
             .storage()
@@ -520,7 +516,7 @@ impl EscrowContract {
             }
         }
 
-        Self::remove_live_match(env.clone(), match_id);
+        Self::remove_active_match(&env, match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
@@ -556,10 +552,10 @@ impl EscrowContract {
         winner: Winner,
         game_id: String,
     ) -> Result<(), Error> {
-        // Validate and execute payout via standard submit_result
+        // Validate and execute payout via standard submit_result (handles oracle auth).
         Self::submit_result(env.clone(), match_id, winner)?;
 
-        // Store oracle record in a canonical location for audit trail
+        // Store oracle record in a canonical location for audit trail.
         env.storage()
             .persistent()
             .set(&DataKey::OracleRecord(match_id), &game_id);
@@ -738,8 +734,8 @@ impl EscrowContract {
 
         let mut updated = soroban_sdk::vec![env];
         for id in active_matches.iter() {
-            if *id != match_id {
-                updated.push_back(*id);
+            if id != match_id {
+                updated.push_back(id);
             }
         }
 
@@ -856,6 +852,13 @@ impl EscrowContract {
         Ok(depositors * m.stake_amount)
     }
 
+    fn depositor_count(m: &Match) -> i128 {
+        let mut count: i128 = 0;
+        if m.player1_deposited { count += 1; }
+        if m.player2_deposited { count += 1; }
+        count
+    }
+
     fn collect_matches_by_state(
         env: &Env,
         state: MatchState,
@@ -867,9 +870,8 @@ impl EscrowContract {
             .get(&DataKey::MatchCount)
             .unwrap_or(0);
 
-        for i in 0..ids.len() {
-            let match_id = *ids.get(i).unwrap();
-            if let Ok(m) = env
+        for match_id in 0..count {
+            if let Some(m) = env
                 .storage()
                 .persistent()
                 .get::<DataKey, Match>(&DataKey::Match(match_id))
@@ -894,17 +896,16 @@ impl EscrowContract {
             return Ok(matches);
         }
 
-        let active_ids = Self::get_active_match_ids(&env);
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
         let mut skipped = 0u32;
         let mut added = 0u32;
 
-        for i in 0..ids.len() {
-            if skipped < offset {
-                skipped = skipped.saturating_add(1);
-                continue;
-            }
-            let match_id = *ids.get(i).unwrap();
-            if let Ok(m) = env
+        for match_id in 0..count {
+            if let Some(m) = env
                 .storage()
                 .persistent()
                 .get::<DataKey, Match>(&DataKey::Match(match_id))
@@ -1023,6 +1024,59 @@ impl EscrowContract {
 
         Ok(page)
     }
+
+    /// Update the oracle address — admin only.
+    pub fn update_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        if new_oracle == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
+        env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
+            new_oracle,
+        );
+        Ok(())
+    }
+
+    /// Direct admin transfer (single-step). Current admin only.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("xfer")),
+            (admin, new_admin),
+        );
+        Ok(())
+    }
+
+    /// Returns true if the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Returns true if the contract has been initialized.
+    pub fn is_initialized(env: Env) -> bool {
+        extend_instance_ttl(&env);
+        env.storage().instance().has(&DataKey::Oracle)
+    }
+
 }
 
 #[cfg(test)]

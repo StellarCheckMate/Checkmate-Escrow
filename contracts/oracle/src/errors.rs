@@ -14,4 +14,8 @@ pub enum Error {
     /// The contract is paused and not accepting submissions.
     ContractPaused = 5,
     InvalidGameId = 6,
+    /// Batch exceeds the maximum allowed size (100 entries).
+    BatchTooLarge = 7,
+    /// Batch contains duplicate match_ids.
+    BatchDuplicateEntry = 8,
 }

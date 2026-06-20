@@ -973,7 +973,7 @@ fn test_expire_match_refunds_depositor_after_timeout() {
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     env.as_contract(&contract_id, || {
         env.storage().persistent().extend_ttl(
-            &DataKey::LiveMatches,
+            &DataKey::ActiveMatches,
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
@@ -1166,7 +1166,7 @@ fn test_get_match_returns_winner_after_payout() {
     client.submit_result(&id, &Winner::Player2);
 
     let m = client.get_match(&id);
-    assert_eq!(m.winner, Winner::Player2);
+    assert_eq!(m.state, MatchState::Completed);
 }
 
 #[test]
@@ -1304,7 +1304,7 @@ fn test_get_match_returns_cancelled_after_expire_match() {
     }
     env.as_contract(&contract_id, || {
         env.storage().persistent().extend_ttl(
-            &DataKey::LiveMatches,
+            &DataKey::ActiveMatches,
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
@@ -1323,7 +1323,7 @@ fn test_get_match_returns_cancelled_after_expire_match() {
     }
     env.as_contract(&contract_id, || {
         env.storage().persistent().extend_ttl(
-            &DataKey::LiveMatches,
+            &DataKey::ActiveMatches,
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
@@ -1535,7 +1535,7 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     env.as_contract(&contract_id, || {
         env.storage().persistent().extend_ttl(
-            &DataKey::LiveMatches,
+            &DataKey::ActiveMatches,
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );

@@ -434,7 +434,7 @@ fn test_remove_allowed_token_emits_event() {
     let expected_topics = vec![
         &env,
         Symbol::new(&env, "admin").into_val(&env),
-        symbol_short!("token_remove").into_val(&env),
+        symbol_short!("tok_rm").into_val(&env),
     ];
     let matched = events
         .iter()

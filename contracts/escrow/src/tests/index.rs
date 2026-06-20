@@ -88,7 +88,7 @@ fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
     // Assert only the still-live match IDs remain
     let active_matches = client.get_active_matches();
     assert_eq!(active_matches.len(), 1);
-    assert_eq!(active_matches.get(0).unwrap(), match_id_3);
+    assert_eq!(active_matches.get(0).unwrap().id, match_id_3);
 }
 
 /// Test #582: active/live index ordering stays stable after cancellation gaps
@@ -146,9 +146,9 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
     // Assert remaining IDs preserve documented ordering
     let active_matches = client.get_active_matches();
     assert_eq!(active_matches.len(), 3);
-    assert_eq!(active_matches.get(0).unwrap(), match_id_1);
-    assert_eq!(active_matches.get(1).unwrap(), match_id_3);
-    assert_eq!(active_matches.get(2).unwrap(), match_id_4);
+    assert_eq!(active_matches.get(0).unwrap().id, match_id_1);
+    assert_eq!(active_matches.get(1).unwrap().id, match_id_3);
+    assert_eq!(active_matches.get(2).unwrap().id, match_id_4);
 }
 
 /// Test #581: active/live pagination handles empty and partial pages
