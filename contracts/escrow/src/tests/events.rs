@@ -342,9 +342,11 @@ fn test_deposit_emits_event_for_player1() {
     assert!(matched.is_some(), "deposit event not emitted for player1");
 
     let (_, _, data) = matched.unwrap();
-    let (ev_match_id, ev_player): (u64, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    let (ev_match_id, ev_player, ev_state): (u64, Address, Option<MatchState>) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_match_id, match_id);
     assert_eq!(ev_player, player1);
+    assert_eq!(ev_state, None);
 }
 
 #[test]
@@ -377,7 +379,8 @@ fn test_deposit_emits_event_for_player2_and_includes_final_state() {
     assert_eq!(deposit_events.len(), 2, "two deposit events should be emitted");
 
     let (_, _, data) = deposit_events[1];
-    let (ev_match_id, ev_player): (u64, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    let (ev_match_id, ev_player, _ev_state): (u64, Address, Option<MatchState>) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_match_id, match_id);
     assert_eq!(ev_player, player2);
 

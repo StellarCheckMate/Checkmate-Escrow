@@ -34,7 +34,7 @@ fn test_game_id_reservation_survives_ledger_advancement() {
         &game_id,
         &Platform::Lichess,
     );
-    assert_eq!(result, Err(Ok(Error::AlreadyExists)));
+    assert_eq!(result, Err(Ok(Error::DuplicateGameId)));
 }
 
 /// Test #583: active/live index stays correct across concurrent cancellations and completions
@@ -71,17 +71,14 @@ fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
         &Platform::Lichess,
     );
 
-    // Deposit for all matches to make them active
-    client.deposit(&match_id_1, &player1);
-    client.deposit(&match_id_1, &player2);
-
+    // Activate matches 2 and 3; leave match 1 as Pending so it can be cancelled
     client.deposit(&match_id_2, &player1);
     client.deposit(&match_id_2, &player2);
 
     client.deposit(&match_id_3, &player1);
     client.deposit(&match_id_3, &player2);
 
-    // Cancel one and complete another
+    // Cancel the pending match and complete an active one
     client.cancel_match(&match_id_1, &player1);
     client.submit_result(&match_id_2, &Winner::Player1);
 
@@ -134,13 +131,13 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
         &Platform::Lichess,
     );
 
-    // Deposit for all to make them active
-    for match_id in [match_id_1, match_id_2, match_id_3, match_id_4].iter() {
+    // Activate matches 1, 3, 4; leave match 2 as Pending so it can be cancelled
+    for match_id in [match_id_1, match_id_3, match_id_4].iter() {
         client.deposit(match_id, &player1);
         client.deposit(match_id, &player2);
     }
 
-    // Cancel one in the middle
+    // Cancel the pending match in the middle
     client.cancel_match(&match_id_2, &player1);
 
     // Assert remaining IDs preserve documented ordering
@@ -156,6 +153,11 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
 fn test_active_pagination_handles_empty_and_partial_pages() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Mint extra tokens so players can fund all 25 matches (25 × 100 = 2500 each)
+    let asset_client = StellarAssetClient::new(&env, &token);
+    asset_client.mint(&player1, &1500);
+    asset_client.mint(&player2, &1500);
 
     // Create enough matches for multiple pages (assuming page size of 10)
     let mut match_ids = Vec::new();
@@ -183,7 +185,7 @@ fn test_active_pagination_handles_empty_and_partial_pages() {
 
     // Verify all match IDs are present
     for (i, match_id) in match_ids.iter().enumerate() {
-        assert_eq!(all_active.get(i as u32).unwrap(), *match_id);
+        assert_eq!(all_active.get(i as u32).unwrap().id, *match_id);
     }
 }
 

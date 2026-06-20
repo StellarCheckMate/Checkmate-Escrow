@@ -40,12 +40,19 @@ impl EscrowContract {
         if env.storage().instance().has(&DataKey::Oracle) {
             return Err(Error::AlreadyInitialized);
         }
+        if oracle == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
         env.storage().instance().set(&DataKey::Oracle, &oracle);
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
-        env.storage().instance().set(&DataKey::AllowedTokenCount, &0u64);
+        env.storage().instance().set(&DataKey::AllowedTokenCount, &0u32);
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), symbol_short!("init")),
+            (oracle, admin),
+        );
         Ok(())
     }
 
@@ -162,22 +169,10 @@ impl EscrowContract {
     /// Check if a token is allowed.
     pub fn is_token_allowed(env: Env, token: Address) -> bool {
         let key = DataKey::AllowedToken(token.clone());
-        let allowed: bool = env
-            .storage()
-            .persistent()
+        env.storage()
+            .instance()
             .get(&key)
-            .unwrap_or(false);
-        if allowed {
-            env.storage()
-                .persistent()
-                .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-            if env.storage().persistent().has(&DataKey::AllowedTokens) {
-                env.storage()
-                    .persistent()
-                    .extend_ttl(&DataKey::AllowedTokens, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-            }
-        }
-        allowed
+            .unwrap_or(false)
     }
 
     /// Return the current allowlist as an ordered list.
@@ -298,7 +293,10 @@ impl EscrowContract {
             return Err(Error::InvalidGameId);
         }
 
-        // Reject if player2 is the contract address
+        // Reject if either player is invalid
+        if player1 == player2 {
+            return Err(Error::InvalidPlayers);
+        }
         if player2 == env.current_contract_address() {
             return Err(Error::InvalidPlayers);
         }
@@ -407,12 +405,6 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state == MatchState::Cancelled {
-            return Err(Error::MatchCancelled);
-        }
-        if m.state == MatchState::Completed {
-            return Err(Error::MatchCompleted);
-        }
         if m.state != MatchState::Pending {
             return Err(Error::InvalidState);
         }
@@ -505,7 +497,7 @@ impl EscrowContract {
         }
 
         let client = token::Client::new(&env, &m.token);
-        let pot = m.stake_amount * 2;
+        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
 
         match winner {
             Winner::Player1 => client.transfer(&env.current_contract_address(), &m.player1, &pot),
@@ -520,7 +512,6 @@ impl EscrowContract {
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
-        Self::remove_active_match(&env, match_id);
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -578,6 +569,9 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
+        if m.state == MatchState::Active {
+            return Err(Error::MatchAlreadyActive);
+        }
         if m.state != MatchState::Pending {
             return Err(Error::InvalidState);
         }
@@ -708,16 +702,12 @@ impl EscrowContract {
     }
 
     fn set_active_match_ids(env: &Env, active_matches: &soroban_sdk::Vec<u64>) {
-        if active_matches.is_empty() {
-            env.storage().persistent().remove(&DataKey::ActiveMatches);
-        } else {
-            env.storage()
-                .persistent()
-                .set(&DataKey::ActiveMatches, active_matches);
-            env.storage()
-                .persistent()
-                .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::ActiveMatches, active_matches);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
 
     fn append_active_match(env: &Env, match_id: u64) {
@@ -804,10 +794,17 @@ impl EscrowContract {
 
     /// Read a match by ID.
     pub fn get_match(env: Env, match_id: u64) -> Result<Match, Error> {
-        env.storage()
+        let m: Match = env
+            .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)
+            .ok_or(Error::MatchNotFound)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        Ok(m)
     }
 
     /// Check whether both players have deposited their stakes.
@@ -824,6 +821,11 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
         Ok(m.player1_deposited && m.player2_deposited)
     }
 
@@ -944,6 +946,14 @@ impl EscrowContract {
 
     /// Return all matches that are in Active state (fully funded).
     pub fn get_active_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        // Extend ActiveMatches TTL if the key exists (keeps the index alive on reads)
+        if env.storage().persistent().has(&DataKey::ActiveMatches) {
+            env.storage().persistent().extend_ttl(
+                &DataKey::ActiveMatches,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
         Self::collect_matches_by_state(&env, MatchState::Active)
     }
 
@@ -983,11 +993,18 @@ impl EscrowContract {
     ///
     /// Deprecated: use `get_player_matches_paginated` to avoid unbounded return sizes.
     pub fn get_player_matches(env: Env, player: Address) -> Result<soroban_sdk::Vec<u64>, Error> {
-        Ok(env
+        let key = DataKey::PlayerMatches(player.clone());
+        let matches: soroban_sdk::Vec<u64> = env
             .storage()
             .persistent()
-            .get(&DataKey::PlayerMatches(player))
-            .unwrap_or_else(|| soroban_sdk::vec![&env]))
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        }
+        Ok(matches)
     }
 
     /// Return a page of match IDs for a given player.
@@ -1037,10 +1054,15 @@ impl EscrowContract {
         if new_oracle == env.current_contract_address() {
             return Err(Error::InvalidAddress);
         }
+        let old_oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
         env.storage().instance().set(&DataKey::Oracle, &new_oracle);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
-            new_oracle,
+            (old_oracle, new_oracle),
         );
         Ok(())
     }

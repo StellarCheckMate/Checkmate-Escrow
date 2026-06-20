@@ -61,8 +61,8 @@ fn test_balance_conservation_after_draw() {
         "token supply must be conserved after a draw"
     );
     // Both players get their stake back exactly.
-    assert_eq!(tc.balance(&player1), 900, "player1 balance must be 900 after draw");
-    assert_eq!(tc.balance(&player2), 900, "player2 balance must be 900 after draw");
+    assert_eq!(tc.balance(&player1), 1000, "player1 balance must be 1000 after draw");
+    assert_eq!(tc.balance(&player2), 1000, "player2 balance must be 1000 after draw");
 }
 
 /// Cancelling after only player1 deposited returns the full stake to player1
