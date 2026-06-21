@@ -102,6 +102,29 @@ stellar contract invoke \
 
 > **Note:** After the first `add_allowed_token` call, allowlist enforcement becomes active. If the last allowed token is removed, enforcement is disabled again and `create_match` accepts any token.
 
+### 6. Configure Match Timeout (Optional)
+
+By default, matches expire after ~30 days (518,400 ledgers at 5s/ledger). You can configure a different timeout per environment using `set_match_timeout`. The timeout must be between 1 and 90 days (17,280 to 1,555,200 ledgers).
+
+**Recommended values:**
+- Testnet: 1 day (17,280 ledgers) for faster testing
+- Mainnet: 30 days (518,400 ledgers) for production stability
+
+```bash
+# Set timeout to 14 days (244,800 ledgers)
+stellar contract invoke \
+  --id $ESCROW_CONTRACT_ID \
+  --source <ESCROW_ADMIN_KEYPAIR> \
+  -- set_match_timeout \
+  --timeout 244_800
+```
+
+To verify the current timeout:
+
+```bash
+stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match_timeout
+```
+
 ---
 
 ## Security Notes
