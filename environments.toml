@@ -9,6 +9,12 @@
 #   [my_network]
 #   rpc_url = "https://my-rpc-endpoint"
 #   network_passphrase = "My Custom Network ; YYYY"
+#
+# Match Timeout Configuration (set via set_match_timeout admin function):
+#   Testnet:   1-7 days (17,280 - 120,960 ledgers) for faster testing
+#   Mainnet:   14-30 days (241,920 - 518,400 ledgers) for production stability
+#   Standalone: 1 day (17,280 ledgers) for development
+#   Min/Max:   1-90 days (17,280 - 1,555,200 ledgers)
 
 [testnet]
 rpc_url = "https://soroban-testnet.stellar.org"

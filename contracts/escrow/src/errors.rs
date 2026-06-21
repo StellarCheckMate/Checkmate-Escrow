@@ -22,4 +22,5 @@ pub enum Error {
     TokenNotAllowed = 17,
     InvalidAddress = 18,
     MatchAlreadyActive = 19,
+    InvalidTimeout = 20,
 }
