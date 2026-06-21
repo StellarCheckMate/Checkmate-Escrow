@@ -11,7 +11,13 @@ use types::{DataKey, Match, MatchState, Platform, Winner};
 const MATCH_TTL_LEDGERS: u32 = 518_400;
 
 /// Default match expiration timeout used when no explicit timeout is configured.
-const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = MATCH_TTL_LEDGERS;
+pub const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = MATCH_TTL_LEDGERS;
+
+/// Minimum match timeout: 1 day (17,280 ledgers at 5s/ledger).
+pub const MIN_MATCH_TIMEOUT_LEDGERS: u32 = 17_280;
+
+/// Maximum match timeout: 90 days (1,555,200 ledgers at 5s/ledger).
+pub const MAX_MATCH_TIMEOUT_LEDGERS: u32 = 1_555_200;
 
 /// Maximum allowed byte length for a game_id string.
 ///
@@ -743,6 +749,10 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+
+        if timeout < MIN_MATCH_TIMEOUT_LEDGERS || timeout > MAX_MATCH_TIMEOUT_LEDGERS {
+            return Err(Error::InvalidTimeout);
+        }
 
         let old_timeout = Self::current_match_timeout(&env);
         env.storage().instance().set(&DataKey::MatchTimeout, &timeout);
