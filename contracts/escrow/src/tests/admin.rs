@@ -574,3 +574,79 @@ fn test_second_pending_admin_replaces_first_proposal() {
     client.accept_admin();
     assert_eq!(client.get_admin(), pending_admin_b);
 }
+
+
+// #737 - set_match_timeout validates minimum bound
+#[test]
+fn test_set_match_timeout_rejects_below_minimum() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let min_timeout = 17_280u32;
+    let below_min = min_timeout - 1;
+
+    let result = client.try_set_match_timeout(&below_min);
+    assert_eq!(result, Err(Ok(Error::InvalidTimeout)));
+}
+
+// #737 - set_match_timeout validates maximum bound
+#[test]
+fn test_set_match_timeout_rejects_above_maximum() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let max_timeout = 1_555_200u32;
+    let above_max = max_timeout + 1;
+
+    let result = client.try_set_match_timeout(&above_max);
+    assert_eq!(result, Err(Ok(Error::InvalidTimeout)));
+}
+
+// #737 - set_match_timeout accepts valid minimum value
+#[test]
+fn test_set_match_timeout_accepts_minimum_valid_value() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let min_timeout = 17_280u32;
+    client.set_match_timeout(&min_timeout);
+
+    let result = client.get_match_timeout();
+    assert_eq!(result, min_timeout);
+}
+
+// #737 - set_match_timeout accepts valid maximum value
+#[test]
+fn test_set_match_timeout_accepts_maximum_valid_value() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let max_timeout = 1_555_200u32;
+    client.set_match_timeout(&max_timeout);
+
+    let result = client.get_match_timeout();
+    assert_eq!(result, max_timeout);
+}
+
+// #737 - set_match_timeout requires admin authorization
+#[test]
+fn test_set_match_timeout_requires_admin_authorization() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let attacker = Address::generate(&env);
+    let new_timeout = 34_560u32;
+
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_match_timeout",
+            args: (new_timeout,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_set_match_timeout(&new_timeout);
+    assert!(result.is_err(), "non-admin should not be able to set timeout");
+}
