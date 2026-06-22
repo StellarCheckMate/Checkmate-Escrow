@@ -1,5 +1,5 @@
 [workspace]
-members = ["contracts/escrow", "contracts/oracle", "oracle-service"]
+members = ["contracts/escrow", "contracts/oracle", "oracle-service", "services/event-indexer"]
 resolver = "2"
 license = "MIT"
 
