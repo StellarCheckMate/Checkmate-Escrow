@@ -178,3 +178,37 @@ To re-run the benchmarks locally:
 ```bash
 cargo test bench -- --nocapture
 ```
+
+---
+
+## Balance Snapshot Storage Overhead
+
+`EscrowContract` records a `BalanceSnapshot` (match id, lifecycle reason,
+ledger sequence, token address + symbol, stake amount, escrow balance, and
+both players' deposit flags) at four lifecycle points: match creation, each
+deposit, completion, and cancellation (including timeout-driven expiry).
+
+Snapshots are stored per-match in a fixed-size ring buffer
+(`MAX_SNAPSHOTS_PER_MATCH = 8` in `contracts/escrow/src/lib.rs`) under
+`DataKey::Snapshot(match_id, slot)`, with `DataKey::SnapshotCount(match_id)`
+tracking the total ever recorded. Once a match's snapshot count exceeds the
+buffer capacity, the oldest entry is overwritten — this caps growth so a
+single match can never accumulate unbounded snapshot history regardless of
+how many lifecycle transitions it goes through.
+
+**Estimated overhead per match**, based on the `BalanceSnapshot` field
+layout (two `Address`/`String` fields plus four numeric/bool fields, each XDR
+ledger-entry holding one snapshot):
+
+| Quantity                                   | Approx. size      |
+|---------------------------------------------|-------------------|
+| One `BalanceSnapshot` entry                  | ~200–250 bytes    |
+| `SnapshotCount` entry (once per match)       | ~40 bytes         |
+| Typical lifecycle (created + 2 deposits + completed/cancelled = 4 entries) | ~1.0 KB |
+| Worst case at ring-buffer cap (8 entries)    | ~2.0 KB           |
+
+These are conservative engineering estimates, not measured fee figures —
+confirm exact ledger-entry sizes with `stellar contract invoke --fee` on
+testnet before relying on them for capacity planning. All snapshot entries
+share the same TTL behavior as their parent match (`MATCH_TTL_LEDGERS`,
+refreshed on every write), so they expire alongside it.

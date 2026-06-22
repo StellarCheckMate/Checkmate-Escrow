@@ -60,4 +60,44 @@ pub enum DataKey {
     AllowlistEnforced,
     AllowedTokens,
     OracleRecord(u64),
+    /// Balance snapshot for a match at a given ring-buffer slot.
+    /// Slot = (snapshot index) % MAX_SNAPSHOTS_PER_MATCH — see lib.rs.
+    Snapshot(u64, u32),
+    /// Total number of snapshots ever recorded for a match (monotonic, never reset).
+    SnapshotCount(u64),
+}
+
+/// The lifecycle event that triggered a balance snapshot.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SnapshotReason {
+    Created,
+    Deposit,
+    Completed,
+    Cancelled,
+}
+
+/// A point-in-time record of a match's escrowed balance, taken at key
+/// lifecycle transitions for audit purposes.
+///
+/// Snapshots are stored in a fixed-size ring buffer per match (see
+/// `MAX_SNAPSHOTS_PER_MATCH`); `index` identifies the snapshot's position in
+/// the full chronological sequence so callers can detect gaps caused by
+/// pruning of older entries.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct BalanceSnapshot {
+    pub match_id: u64,
+    /// Monotonically increasing position in the match's snapshot history.
+    pub index: u32,
+    pub reason: SnapshotReason,
+    /// Ledger sequence number at the time of the snapshot.
+    pub ledger: u32,
+    pub token: Address,
+    pub token_symbol: String,
+    pub stake_amount: i128,
+    /// Total tokens held in escrow for this match at snapshot time.
+    pub escrow_balance: i128,
+    pub player1_deposited: bool,
+    pub player2_deposited: bool,
 }

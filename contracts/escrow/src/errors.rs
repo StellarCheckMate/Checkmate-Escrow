@@ -23,4 +23,5 @@ pub enum Error {
     InvalidAddress = 18,
     MatchAlreadyActive = 19,
     InvalidTimeout = 20,
+    SnapshotNotFound = 21,
 }
