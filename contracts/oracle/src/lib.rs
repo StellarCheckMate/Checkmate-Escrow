@@ -5,7 +5,10 @@ pub mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol, Vec};
-use types::{BatchResultEntry, DataKey, Platform, ResultEntry, Winner};
+use types::{
+    BatchResultEntry, DataKey, Platform, RateLimitConfig, RateLimitStatus, RateWindow, ResultEntry,
+    Winner,
+};
 
 /// Maximum number of entries accepted in a single batch submission.
 /// Designed for v2.0 tournament use; future versions may raise this limit.
@@ -13,6 +16,23 @@ const MAX_BATCH_SIZE: u32 = 100;
 
 /// ~30 days at 5s/ledger.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
+
+/// Default maximum submissions accepted from a single oracle per rolling hour.
+const DEFAULT_HOURLY_LIMIT: u32 = 100;
+/// Default maximum submissions accepted from a single oracle per rolling day.
+const DEFAULT_DAILY_LIMIT: u32 = 1_000;
+
+/// Length of the hourly rate-limit window, in seconds.
+const HOURLY_WINDOW_SECS: u64 = 3_600;
+/// Length of the daily rate-limit window, in seconds.
+const DAILY_WINDOW_SECS: u64 = 86_400;
+
+/// Emit a suspicious-pattern alert once usage reaches this percentage of a limit.
+const RATE_LIMIT_ALERT_THRESHOLD_PCT: u64 = 80;
+
+/// TTL for rate-limit window storage: ~2 days at 5s/ledger, comfortably longer
+/// than the daily window so counters never expire mid-window.
+const RATE_LIMIT_TTL_LEDGERS: u32 = 34_560;
 
 /// Extend instance storage TTL on every invocation so Admin and Paused never expire.
 fn extend_instance_ttl(env: &Env) {
@@ -47,6 +67,7 @@ impl OracleContract {
     /// # Errors
     /// - [`Error::ContractPaused`] — contract is paused.
     /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
+    /// - [`Error::RateLimitExceeded`] — the oracle has exceeded its hourly or daily submission limit.
     /// - [`Error::AlreadySubmitted`] — a result for `match_id` has already been recorded.
     /// - [`Error::InvalidGameId`] — `game_id` is empty.
     pub fn submit_result(
@@ -73,6 +94,7 @@ impl OracleContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+        Self::check_oracle_rate_limit(&env, &admin, 1)?;
 
         if env.storage().persistent().has(&DataKey::Result(match_id)) {
             return Err(Error::AlreadySubmitted);
@@ -114,6 +136,7 @@ impl OracleContract {
     /// # Errors
     /// - [`Error::ContractPaused`] — contract is paused.
     /// - [`Error::Unauthorized`] — not initialized or caller is not the admin.
+    /// - [`Error::RateLimitExceeded`] — the oracle has exceeded its hourly or daily submission limit.
     /// - [`Error::BatchTooLarge`] — `entries` exceeds 100 items.
     /// - [`Error::InvalidGameId`] — any entry has an empty `game_id`.
     /// - [`Error::BatchDuplicateEntry`] — two entries share the same `match_id`.
@@ -144,6 +167,10 @@ impl OracleContract {
         if len > MAX_BATCH_SIZE {
             return Err(Error::BatchTooLarge);
         }
+
+        // Each entry in the batch counts as one submission toward the oracle's
+        // rate limit, checked atomically against the whole batch size.
+        Self::check_oracle_rate_limit(&env, &admin, len)?;
 
         // Validate all entries before writing anything (atomic guarantee).
         for i in 0..len {
@@ -353,6 +380,225 @@ impl OracleContract {
         env.events()
             .publish((Symbol::new(&env, "admin"), symbol_short!("unpaused")), ());
         Ok(())
+    }
+
+    /// Configure the hourly and daily submission limits for a specific oracle
+    /// address — admin only. Pass `0` for either field to fall back to the
+    /// contract defaults ([`DEFAULT_HOURLY_LIMIT`] / [`DEFAULT_DAILY_LIMIT`]).
+    ///
+    /// Emits an `oracle / ratelim` event with `(oracle, hourly_limit, daily_limit)`.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
+    /// - [`Error::InvalidRateLimit`] — `hourly_limit` exceeds `daily_limit` when both are non-zero.
+    pub fn set_oracle_rate_limits(
+        env: Env,
+        oracle: Address,
+        hourly_limit: u32,
+        daily_limit: u32,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if hourly_limit != 0 && daily_limit != 0 && hourly_limit > daily_limit {
+            return Err(Error::InvalidRateLimit);
+        }
+
+        let config = RateLimitConfig {
+            hourly_limit: if hourly_limit == 0 {
+                DEFAULT_HOURLY_LIMIT
+            } else {
+                hourly_limit
+            },
+            daily_limit: if daily_limit == 0 {
+                DEFAULT_DAILY_LIMIT
+            } else {
+                daily_limit
+            },
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleRateLimit(oracle.clone()), &config);
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("ratelim")),
+            (oracle, config.hourly_limit, config.daily_limit),
+        );
+
+        Ok(())
+    }
+
+    /// Return the hourly/daily submission limits currently configured for `oracle`.
+    /// Falls back to the contract defaults if the admin has not set an override.
+    pub fn get_oracle_rate_limits(env: Env, oracle: Address) -> RateLimitConfig {
+        extend_instance_ttl(&env);
+        Self::rate_limit_config(&env, &oracle)
+    }
+
+    /// Return `oracle`'s current rate-limit usage and remaining quota.
+    ///
+    /// This is the on-chain analogue of HTTP rate-limit headers: since the
+    /// contract has no HTTP surface, callers query this view instead of
+    /// reading response headers.
+    pub fn get_oracle_rate_limit_status(env: Env, oracle: Address) -> RateLimitStatus {
+        let config = Self::rate_limit_config(&env, &oracle);
+        let now = env.ledger().timestamp();
+
+        let hourly_window = Self::load_rate_window(
+            &env,
+            &DataKey::OracleHourlyWindow(oracle.clone()),
+            now,
+            HOURLY_WINDOW_SECS,
+        );
+        let hourly_used = Self::estimated_window_count(now, &hourly_window, HOURLY_WINDOW_SECS);
+
+        let daily_window = Self::load_rate_window(
+            &env,
+            &DataKey::OracleDailyWindow(oracle),
+            now,
+            DAILY_WINDOW_SECS,
+        );
+        let daily_used = Self::estimated_window_count(now, &daily_window, DAILY_WINDOW_SECS);
+
+        RateLimitStatus {
+            hourly_used,
+            hourly_limit: config.hourly_limit,
+            hourly_remaining: config.hourly_limit.saturating_sub(hourly_used),
+            daily_used,
+            daily_limit: config.daily_limit,
+            daily_remaining: config.daily_limit.saturating_sub(daily_used),
+        }
+    }
+
+    /// Read the rate-limit configuration for `oracle`, falling back to the
+    /// contract-wide defaults when no override has been set.
+    fn rate_limit_config(env: &Env, oracle: &Address) -> RateLimitConfig {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRateLimit(oracle.clone()))
+            .unwrap_or(RateLimitConfig {
+                hourly_limit: DEFAULT_HOURLY_LIMIT,
+                daily_limit: DEFAULT_DAILY_LIMIT,
+            })
+    }
+
+    /// Load a sliding-window counter, rolling it forward if the window (or
+    /// both windows) have fully elapsed since it was last written.
+    fn load_rate_window(env: &Env, key: &DataKey, now: u64, window_secs: u64) -> RateWindow {
+        let window: RateWindow = env.storage().persistent().get(key).unwrap_or(RateWindow {
+            window_start: now,
+            current_count: 0,
+            previous_count: 0,
+        });
+
+        let elapsed = now.saturating_sub(window.window_start);
+        if elapsed >= window_secs * 2 {
+            RateWindow {
+                window_start: now,
+                current_count: 0,
+                previous_count: 0,
+            }
+        } else if elapsed >= window_secs {
+            RateWindow {
+                window_start: window.window_start + window_secs,
+                current_count: 0,
+                previous_count: window.current_count,
+            }
+        } else {
+            window
+        }
+    }
+
+    /// Estimate the submission count within the sliding lookback window using
+    /// the "sliding window counter" approximation: the current window's count
+    /// plus the previous window's count weighted by the fraction of the
+    /// previous window that still falls inside the lookback period.
+    fn estimated_window_count(now: u64, window: &RateWindow, window_secs: u64) -> u32 {
+        let elapsed_in_current = now.saturating_sub(window.window_start).min(window_secs);
+        let remaining = window_secs - elapsed_in_current;
+        let weighted_previous = (window.previous_count as u64 * remaining) / window_secs;
+        window.current_count + weighted_previous as u32
+    }
+
+    /// Check `oracle`'s hourly and daily sliding-window limits can absorb
+    /// `count` more submissions, and if so, record them. Emits a suspicious-
+    /// pattern alert once usage crosses [`RATE_LIMIT_ALERT_THRESHOLD_PCT`] of
+    /// either limit.
+    ///
+    /// # Errors
+    /// - [`Error::RateLimitExceeded`] — `count` more submissions would exceed
+    ///   the hourly or daily limit configured for `oracle`.
+    fn check_oracle_rate_limit(env: &Env, oracle: &Address, count: u32) -> Result<(), Error> {
+        let config = Self::rate_limit_config(env, oracle);
+        let now = env.ledger().timestamp();
+
+        let hourly_key = DataKey::OracleHourlyWindow(oracle.clone());
+        let mut hourly_window = Self::load_rate_window(env, &hourly_key, now, HOURLY_WINDOW_SECS);
+        let hourly_used = Self::estimated_window_count(now, &hourly_window, HOURLY_WINDOW_SECS);
+        if hourly_used.saturating_add(count) > config.hourly_limit {
+            return Err(Error::RateLimitExceeded);
+        }
+
+        let daily_key = DataKey::OracleDailyWindow(oracle.clone());
+        let mut daily_window = Self::load_rate_window(env, &daily_key, now, DAILY_WINDOW_SECS);
+        let daily_used = Self::estimated_window_count(now, &daily_window, DAILY_WINDOW_SECS);
+        if daily_used.saturating_add(count) > config.daily_limit {
+            return Err(Error::RateLimitExceeded);
+        }
+
+        hourly_window.current_count += count;
+        daily_window.current_count += count;
+
+        env.storage().persistent().set(&hourly_key, &hourly_window);
+        env.storage().persistent().extend_ttl(
+            &hourly_key,
+            RATE_LIMIT_TTL_LEDGERS,
+            RATE_LIMIT_TTL_LEDGERS,
+        );
+        env.storage().persistent().set(&daily_key, &daily_window);
+        env.storage().persistent().extend_ttl(
+            &daily_key,
+            RATE_LIMIT_TTL_LEDGERS,
+            RATE_LIMIT_TTL_LEDGERS,
+        );
+
+        Self::maybe_alert(
+            env,
+            oracle,
+            symbol_short!("hourly"),
+            hourly_used + count,
+            config.hourly_limit,
+        );
+        Self::maybe_alert(
+            env,
+            oracle,
+            symbol_short!("daily"),
+            daily_used + count,
+            config.daily_limit,
+        );
+
+        Ok(())
+    }
+
+    /// Emit an `oracle / alert` event when `used` reaches
+    /// [`RATE_LIMIT_ALERT_THRESHOLD_PCT`] of `limit`, flagging the submission
+    /// pattern for admin review.
+    fn maybe_alert(env: &Env, oracle: &Address, window_label: Symbol, used: u32, limit: u32) {
+        if limit == 0 {
+            return;
+        }
+        if (used as u64) * 100 >= (limit as u64) * RATE_LIMIT_ALERT_THRESHOLD_PCT {
+            env.events().publish(
+                (Symbol::new(env, "oracle"), symbol_short!("alert")),
+                (oracle.clone(), window_label, used, limit),
+            );
+        }
     }
 }
 

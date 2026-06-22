@@ -149,6 +149,88 @@ When Chess.com is unreachable or rate-limited:
 
 ---
 
+## Oracle Submission Rate Limiting
+
+To prevent spam or denial-of-service against the on-chain oracle log, the
+`OracleContract` enforces per-oracle submission limits on `submit_result` and
+`submit_batch_results`:
+
+| Limit | Default | Notes |
+|-------|---------|-------|
+| Hourly | 100 submissions | Rolling 1-hour window |
+| Daily | 1,000 submissions | Rolling 24-hour window |
+
+A `submit_batch_results` call counts its full entry count against both limits
+in a single check — e.g. a 40-entry batch consumes 40 units of quota. The
+check runs before any storage writes, so a rejected call (whole batch or
+single result) never partially succeeds and never consumes quota.
+
+### Sliding window algorithm
+
+Limits are tracked with a sliding-window counter rather than a naive fixed
+window, so a burst spanning a window boundary can't double the effective
+limit. Each window (hourly, daily) stores:
+
+- `window_start` — the timestamp (`env.ledger().timestamp()`) the current
+  window began,
+- `current_count` — submissions recorded since `window_start`,
+- `previous_count` — submissions recorded in the window immediately before.
+
+The estimated count for rate-limit purposes is:
+
+```
+estimate = current_count + previous_count * (window_size - elapsed_in_current) / window_size
+```
+
+This weights the previous window's count by how much of it still falls inside
+the trailing lookback period, giving an accurate approximation of a true
+sliding window without storing a timestamp per submission.
+
+### Admin configuration
+
+The admin can override the default limits per oracle address:
+
+```rust
+oracle_client.set_oracle_rate_limits(&oracle_address, &hourly_limit, &daily_limit);
+```
+
+- Passing `0` for either field resets that field to the contract default
+  (100/1000).
+- `hourly_limit` must not exceed `daily_limit` (when both are non-zero), or
+  the call returns `Error::InvalidRateLimit`.
+- Emits an `oracle / ratelim` event with `(oracle, hourly_limit, daily_limit)`.
+
+### Querying rate limit status
+
+There is no HTTP layer on-chain, so instead of rate-limit response headers,
+callers query current usage directly:
+
+```rust
+let status = oracle_client.get_oracle_rate_limit_status(&oracle_address);
+// status.hourly_used / .hourly_limit / .hourly_remaining
+// status.daily_used  / .daily_limit  / .daily_remaining
+
+let limits = oracle_client.get_oracle_rate_limits(&oracle_address);
+// limits.hourly_limit / .daily_limit
+```
+
+### Suspicious pattern alerts
+
+Once an oracle's usage reaches **80%** of either its hourly or daily limit,
+the contract emits an `oracle / alert` event with
+`(oracle, window_label, used, limit)`, where `window_label` is `"hourly"` or
+`"daily"`. Off-chain monitoring can subscribe to this event to page an admin
+before the oracle is actually throttled.
+
+### Errors
+
+- `Error::RateLimitExceeded` (9) — the submission(s) would exceed the
+  oracle's hourly or daily limit.
+- `Error::InvalidRateLimit` (10) — `set_oracle_rate_limits` was called with
+  `hourly_limit > daily_limit`.
+
+---
+
 ## Result Deletion Policy (`delete_result`)
 
 The oracle contract exposes a `delete_result` function that allows the admin to remove a previously submitted result from persistent storage:
