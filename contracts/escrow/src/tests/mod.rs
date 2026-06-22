@@ -17,6 +17,7 @@ mod invariants;
 mod lifecycle;
 mod pagination;
 mod security;
+mod snapshots;
 mod ttl;
 mod token_allowlist;
 

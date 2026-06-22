@@ -4,11 +4,17 @@ pub mod errors;
 pub mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol};
-use types::{DataKey, Match, MatchState, Platform, Winner};
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
+use types::{BalanceSnapshot, DataKey, Match, MatchState, Platform, SnapshotReason, Winner};
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
+
+/// Fixed-size ring buffer capacity for balance snapshots per match. A normal
+/// match lifecycle (created + 2 deposits + completed/cancelled) produces at
+/// most 4 snapshots, so this leaves headroom while bounding storage growth
+/// for matches that somehow generate more transitions.
+const MAX_SNAPSHOTS_PER_MATCH: u32 = 8;
 
 /// Default match expiration timeout used when no explicit timeout is configured.
 pub const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = MATCH_TTL_LEDGERS;
@@ -383,6 +389,8 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        Self::record_snapshot(&env, &m, SnapshotReason::Created);
+
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
             (id, m.player1, m.player2, stake_amount),
@@ -463,6 +471,9 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Deposit);
+
         Ok(())
     }
 
@@ -526,6 +537,8 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Completed);
 
         let topics = (Symbol::new(&env, "match"), symbol_short!("completed"));
         env.events().publish(topics, (match_id, winner));
@@ -612,6 +625,8 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        Self::record_snapshot(&env, &m, SnapshotReason::Cancelled);
+
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("cancelled")),
             match_id,
@@ -660,6 +675,8 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Cancelled);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("expired")),
@@ -856,12 +873,7 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
-        if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
-            return Ok(0);
-        }
-        // Count depositors explicitly — avoids fragile bool-to-integer casting.
-        let depositors: i128 = Self::depositor_count(&m);
-        Ok(depositors * m.stake_amount)
+        Ok(Self::escrow_balance_of(&m))
     }
 
     fn depositor_count(m: &Match) -> i128 {
@@ -869,6 +881,200 @@ impl EscrowContract {
         if m.player1_deposited { count += 1; }
         if m.player2_deposited { count += 1; }
         count
+    }
+
+    /// Tokens currently held in escrow for a match. Zero once the match has
+    /// reached a terminal state, since funds have been disbursed by then.
+    fn escrow_balance_of(m: &Match) -> i128 {
+        if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
+            0
+        } else {
+            Self::depositor_count(m) * m.stake_amount
+        }
+    }
+
+    // ── Balance snapshots ───────────────────────────────────────────────────
+
+    /// Best-effort token symbol lookup for snapshots.
+    ///
+    /// `create_match` deliberately accepts any address as `token` without
+    /// verifying it's a deployed token contract — validity is only enforced
+    /// later, when `deposit` actually transfers funds. Snapshots must not
+    /// break that contract, so this uses `try_invoke_contract` and falls
+    /// back to an empty string if the address isn't a callable token (or
+    /// isn't a contract at all) rather than panicking.
+    fn fetch_token_symbol(env: &Env, token: &Address) -> String {
+        match env.try_invoke_contract::<String, Error>(
+            token,
+            &Symbol::new(env, "symbol"),
+            soroban_sdk::vec![env],
+        ) {
+            Ok(Ok(symbol)) => symbol,
+            _ => String::from_str(env, ""),
+        }
+    }
+
+    /// Record a balance snapshot for `m` at a lifecycle transition.
+    ///
+    /// Snapshots are stored in a fixed-size ring buffer keyed by
+    /// `DataKey::Snapshot(match_id, slot)` where `slot = index %
+    /// MAX_SNAPSHOTS_PER_MATCH`. Once a match's snapshot count exceeds the
+    /// buffer capacity, the oldest entry is silently overwritten — this is
+    /// the storage-pruning mechanism. `DataKey::SnapshotCount` tracks the
+    /// total ever recorded so callers can detect that pruning occurred.
+    fn record_snapshot(env: &Env, m: &Match, reason: SnapshotReason) {
+        let token_symbol = Self::fetch_token_symbol(env, &m.token);
+        let escrow_balance = Self::escrow_balance_of(m);
+
+        let index: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SnapshotCount(m.id))
+            .unwrap_or(0);
+        let slot = index % MAX_SNAPSHOTS_PER_MATCH;
+
+        let snapshot = BalanceSnapshot {
+            match_id: m.id,
+            index,
+            reason,
+            ledger: env.ledger().sequence(),
+            token: m.token.clone(),
+            token_symbol,
+            stake_amount: m.stake_amount,
+            escrow_balance,
+            player1_deposited: m.player1_deposited,
+            player2_deposited: m.player2_deposited,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Snapshot(m.id, slot), &snapshot);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Snapshot(m.id, slot),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let next_index = index.saturating_add(1);
+        env.storage()
+            .persistent()
+            .set(&DataKey::SnapshotCount(m.id), &next_index);
+        env.storage().persistent().extend_ttl(
+            &DataKey::SnapshotCount(m.id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(env, "match"), symbol_short!("snapshot")),
+            (m.id, index, escrow_balance),
+        );
+    }
+
+    /// Authorize a snapshot query. Returns `Ok(true)` for the admin (full
+    /// access to exact amounts), `Ok(false)` for either player in the match
+    /// (partial access — amounts redacted), or `Err(Unauthorized)` otherwise.
+    fn authorize_snapshot_query(env: &Env, caller: &Address, m: &Match) -> Result<bool, Error> {
+        caller.require_auth();
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        if *caller == admin {
+            Ok(true)
+        } else if *caller == m.player1 || *caller == m.player2 {
+            Ok(false)
+        } else {
+            Err(Error::Unauthorized)
+        }
+    }
+
+    /// Zero out sensitive amount fields for non-admin callers.
+    fn redact_snapshot(mut snapshot: BalanceSnapshot) -> BalanceSnapshot {
+        snapshot.stake_amount = 0;
+        snapshot.escrow_balance = 0;
+        snapshot
+    }
+
+    /// Return the full snapshot history for a match, oldest first.
+    ///
+    /// Only the admin sees exact `stake_amount`/`escrow_balance` values; the
+    /// match's players may also call this but receive amounts redacted to 0.
+    /// Any other caller is rejected with `Error::Unauthorized`.
+    pub fn get_balance_snapshots(
+        env: Env,
+        caller: Address,
+        match_id: u64,
+    ) -> Result<Vec<BalanceSnapshot>, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        let full_access = Self::authorize_snapshot_query(&env, &caller, &m)?;
+
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SnapshotCount(match_id))
+            .unwrap_or(0);
+        let available = count.min(MAX_SNAPSHOTS_PER_MATCH);
+        let start = count.saturating_sub(available);
+
+        let mut result = soroban_sdk::vec![&env];
+        for i in start..count {
+            let slot = i % MAX_SNAPSHOTS_PER_MATCH;
+            if let Some(snapshot) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, BalanceSnapshot>(&DataKey::Snapshot(match_id, slot))
+            {
+                result.push_back(if full_access {
+                    snapshot
+                } else {
+                    Self::redact_snapshot(snapshot)
+                });
+            }
+        }
+        Ok(result)
+    }
+
+    /// Return the most recently recorded snapshot for a match.
+    ///
+    /// Same access rules as [`Self::get_balance_snapshots`]: admin sees exact
+    /// amounts, players see redacted amounts, anyone else is unauthorized.
+    pub fn get_latest_snapshot(
+        env: Env,
+        caller: Address,
+        match_id: u64,
+    ) -> Result<BalanceSnapshot, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        let full_access = Self::authorize_snapshot_query(&env, &caller, &m)?;
+
+        let count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SnapshotCount(match_id))
+            .unwrap_or(0);
+        if count == 0 {
+            return Err(Error::SnapshotNotFound);
+        }
+        let slot = (count - 1) % MAX_SNAPSHOTS_PER_MATCH;
+        let snapshot: BalanceSnapshot = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Snapshot(match_id, slot))
+            .ok_or(Error::SnapshotNotFound)?;
+        Ok(if full_access {
+            snapshot
+        } else {
+            Self::redact_snapshot(snapshot)
+        })
     }
 
     fn collect_matches_by_state(

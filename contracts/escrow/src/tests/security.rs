@@ -11,24 +11,24 @@ fn test_fuzz_stake_amounts() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let test_amounts = vec![
+    let test_amounts = std::vec![
         1i128,                 // Minimum valid amount
         100i128,               // Normal amount
         1000i128,              // Large amount
         i128::MAX / 2,         // Very large but safe
     ];
 
-    for amount in test_amounts {
+    for (i, amount) in test_amounts.into_iter().enumerate() {
         env.mock_all_auths();
-        let match_id = client.create_match(
+        let result = client.try_create_match(
             &player1,
             &player2,
             &amount,
             &token,
-            &String::from_slice(&env, "game123"),
+            &String::from_str(&env, &format!("game123_{}", i)),
             &Platform::ChessDotCom,
         );
-        assert!(match_id.is_ok(), "Failed for amount: {}", amount);
+        assert!(result.is_ok(), "Failed for amount: {}", amount);
     }
 }
 
@@ -38,7 +38,7 @@ fn test_fuzz_invalid_stake_amounts() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let invalid_amounts = vec![
+    let invalid_amounts = std::vec![
         0i128,                 // Zero amount
         -1i128,                // Negative amount
         -100i128,              // Large negative
