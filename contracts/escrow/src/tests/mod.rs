@@ -16,6 +16,7 @@ mod index;
 mod invariants;
 mod lifecycle;
 mod pagination;
+mod security;
 mod ttl;
 mod token_allowlist;
 
