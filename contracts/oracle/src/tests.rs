@@ -5,7 +5,7 @@ use escrow::types::{MatchState, Platform as EscrowPlatform, Winner as EscrowWinn
 use escrow::{EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::storage::{Instance as _, Persistent as _},
-    testutils::{Address as _, Events as _},
+    testutils::{Address as _, Events as _, Ledger as _},
     token::StellarAssetClient,
     Address, Env, IntoVal, String, Symbol,
 };
@@ -1133,4 +1133,384 @@ fn test_batch_ttl_set_on_each_entry() {
         });
         assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
     }
+}
+
+// ── Rate limiting ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_default_rate_limits_are_100_hourly_1000_daily() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let limits = client.get_oracle_rate_limits(&oracle_admin);
+    assert_eq!(limits.hourly_limit, 100);
+    assert_eq!(limits.daily_limit, 1000);
+
+    let status = client.get_oracle_rate_limit_status(&oracle_admin);
+    assert_eq!(status.hourly_used, 0);
+    assert_eq!(status.hourly_remaining, 100);
+    assert_eq!(status.daily_used, 0);
+    assert_eq!(status.daily_remaining, 1000);
+}
+
+#[test]
+fn test_hourly_rate_limit_blocks_101st_submission_in_same_hour() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    for match_id in 0u64..100 {
+        client.submit_result(
+            &match_id,
+            &String::from_str(&env, "g"),
+            &Platform::Lichess,
+            &Winner::Player1,
+        );
+    }
+
+    let result = client.try_submit_result(
+        &100u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
+    assert!(!client.has_result(&100u64));
+
+    let status = client.get_oracle_rate_limit_status(&oracle_admin);
+    assert_eq!(status.hourly_used, 100);
+    assert_eq!(status.hourly_remaining, 0);
+}
+
+#[test]
+fn test_batch_submission_counts_full_batch_against_rate_limit() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let mut entries: soroban_sdk::Vec<types::BatchResultEntry> = soroban_sdk::vec![&env];
+    for i in 0u64..100 {
+        entries.push_back(make_batch_entry(&env, i, "g"));
+    }
+    client.submit_batch_results(&entries); // exactly exhausts the hourly limit
+
+    let result = client.try_submit_result(
+        &200u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
+}
+
+#[test]
+fn test_batch_rejected_when_it_would_exceed_hourly_limit_writes_nothing() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    let mut entries: soroban_sdk::Vec<types::BatchResultEntry> = soroban_sdk::vec![&env];
+    for i in 1u64..101 {
+        // Combined with the single submission above, this batch would push
+        // the oracle to 101 submissions this hour — one over the default limit.
+        entries.push_back(make_batch_entry(&env, i, "g"));
+    }
+
+    let result = client.try_submit_batch_results(&entries);
+    assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
+
+    // The rate-limit check runs before any batch entries are written.
+    assert!(!client.has_result(&1u64));
+    assert!(!client.has_result(&100u64));
+}
+
+#[test]
+fn test_rejected_submission_does_not_consume_quota() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.set_oracle_rate_limits(&oracle_admin, &1, &10);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    let blocked = client.try_submit_result(
+        &1u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(blocked, Err(Ok(Error::RateLimitExceeded)));
+
+    // The rejected attempt above must not have consumed any quota.
+    let status = client.get_oracle_rate_limit_status(&oracle_admin);
+    assert_eq!(status.hourly_used, 1);
+    assert_eq!(status.daily_used, 1);
+}
+
+#[test]
+fn test_hourly_window_resets_after_window_elapses() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.set_oracle_rate_limits(&oracle_admin, &1, &1000);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    let blocked = client.try_submit_result(
+        &1u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(blocked, Err(Ok(Error::RateLimitExceeded)));
+
+    // Advance two full hourly windows so the sliding window fully clears.
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 2 * crate::HOURLY_WINDOW_SECS + 1);
+
+    client.submit_result(
+        &1u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert!(client.has_result(&1u64));
+
+    let status = client.get_oracle_rate_limit_status(&oracle_admin);
+    assert_eq!(status.hourly_used, 1);
+}
+
+#[test]
+fn test_daily_limit_persists_across_hourly_window_reset() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.set_oracle_rate_limits(&oracle_admin, &5, &8);
+
+    let mut match_id = 0u64;
+    for _ in 0..5 {
+        client.submit_result(
+            &match_id,
+            &String::from_str(&env, "g"),
+            &Platform::Lichess,
+            &Winner::Player1,
+        );
+        match_id += 1;
+    }
+    let blocked_hourly = client.try_submit_result(
+        &match_id,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(blocked_hourly, Err(Ok(Error::RateLimitExceeded)));
+
+    // Roll into the next hourly window — hourly quota recovers, daily does not.
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 2 * crate::HOURLY_WINDOW_SECS + 1);
+
+    for _ in 0..3 {
+        client.submit_result(
+            &match_id,
+            &String::from_str(&env, "g"),
+            &Platform::Lichess,
+            &Winner::Player1,
+        );
+        match_id += 1;
+    }
+
+    let blocked_daily = client.try_submit_result(
+        &match_id,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(blocked_daily, Err(Ok(Error::RateLimitExceeded)));
+
+    let status = client.get_oracle_rate_limit_status(&oracle_admin);
+    assert_eq!(status.hourly_used, 3);
+    assert_eq!(status.daily_used, 8);
+    assert_eq!(status.daily_remaining, 0);
+}
+
+#[test]
+fn test_set_oracle_rate_limits_rejects_hourly_greater_than_daily() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let result = client.try_set_oracle_rate_limits(&oracle_admin, &200, &100);
+    assert_eq!(result, Err(Ok(Error::InvalidRateLimit)));
+}
+
+#[test]
+fn test_set_oracle_rate_limits_zero_falls_back_to_defaults() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.set_oracle_rate_limits(&oracle_admin, &0, &0);
+
+    let limits = client.get_oracle_rate_limits(&oracle_admin);
+    assert_eq!(limits.hourly_limit, 100);
+    assert_eq!(limits.daily_limit, 1000);
+}
+
+#[test]
+fn test_set_oracle_rate_limits_emits_event() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.set_oracle_rate_limits(&oracle_admin, &50, &500);
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("ratelim").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "ratelim event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (oracle, hourly, daily): (Address, u32, u32) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(oracle, oracle_admin);
+    assert_eq!(hourly, 50);
+    assert_eq!(daily, 500);
+}
+
+#[test]
+#[should_panic]
+fn test_set_oracle_rate_limits_requires_admin_auth() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin);
+    client.set_oracle_rate_limits(&admin, &50, &500);
+}
+
+#[test]
+fn test_set_oracle_rate_limits_on_uninitialized_contract_returns_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    let oracle = Address::generate(&env);
+
+    let result = client.try_set_oracle_rate_limits(&oracle, &50, &500);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_alert_emitted_at_80_percent_hourly_usage() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.set_oracle_rate_limits(&oracle_admin, &10, &1000);
+
+    for match_id in 0u64..8 {
+        // 8 / 10 == 80% of the hourly limit.
+        client.submit_result(
+            &match_id,
+            &String::from_str(&env, "g"),
+            &Platform::Lichess,
+            &Winner::Player1,
+        );
+    }
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("alert").into_val(&env),
+    ];
+    let alert_count = events
+        .iter()
+        .filter(|(_, topics, _)| *topics == expected_topics)
+        .count();
+    assert!(
+        alert_count >= 1,
+        "expected a suspicious-pattern alert once usage reached 80% of the hourly limit"
+    );
+}
+
+#[test]
+fn test_no_alert_below_80_percent_usage() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.set_oracle_rate_limits(&oracle_admin, &10, &1000);
+
+    for match_id in 0u64..5 {
+        // 5 / 10 == 50% of the hourly limit — below the alert threshold.
+        client.submit_result(
+            &match_id,
+            &String::from_str(&env, "g"),
+            &Platform::Lichess,
+            &Winner::Player1,
+        );
+    }
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("alert").into_val(&env),
+    ];
+    let alert_count = events
+        .iter()
+        .filter(|(_, topics, _)| *topics == expected_topics)
+        .count();
+    assert_eq!(alert_count, 0);
+}
+
+#[test]
+fn test_high_volume_burst_is_throttled_then_recovers_next_hour() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    env.budget().reset_unlimited();
+
+    // Simulate a burst of 150 submissions within a single hour — only the
+    // first 100 (the default hourly limit) should be accepted.
+    let mut accepted = 0u32;
+    let mut rejected = 0u32;
+    for match_id in 0u64..150 {
+        let result = client.try_submit_result(
+            &match_id,
+            &String::from_str(&env, "g"),
+            &Platform::Lichess,
+            &Winner::Player1,
+        );
+        match result {
+            Ok(_) => accepted += 1,
+            Err(e) => {
+                assert_eq!(e, Ok(Error::RateLimitExceeded));
+                rejected += 1;
+            }
+        }
+    }
+    assert_eq!(accepted, 100);
+    assert_eq!(rejected, 50);
+
+    // Once the next hourly window begins, the oracle can resume submitting.
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 2 * crate::HOURLY_WINDOW_SECS + 1);
+
+    client.submit_result(
+        &999u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert!(client.has_result(&999u64));
 }

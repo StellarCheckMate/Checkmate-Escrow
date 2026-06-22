@@ -18,4 +18,8 @@ pub enum Error {
     BatchTooLarge = 7,
     /// Batch contains duplicate match_ids.
     BatchDuplicateEntry = 8,
+    /// Oracle has exceeded its hourly or daily submission rate limit.
+    RateLimitExceeded = 9,
+    /// Rate limit values supplied to `set_oracle_rate_limits` are invalid.
+    InvalidRateLimit = 10,
 }
