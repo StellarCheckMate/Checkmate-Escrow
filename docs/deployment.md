@@ -178,3 +178,14 @@ To re-run the benchmarks locally:
 ```bash
 cargo test bench -- --nocapture
 ```
+
+---
+
+## Troubleshooting
+
+If a deployment or initialization call fails, decode the numeric error code
+from the transaction result (`Error(Contract, #N)`) using the
+**[Error Codes Reference](error-codes.md)** — it documents every error
+variant for both contracts, including the symptom-based quick-lookup table
+for issues like "can't initialize," "deposit rejected," or "oracle can't
+submit a result."
