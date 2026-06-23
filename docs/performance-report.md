@@ -65,7 +65,7 @@ CPU cost for all three roughly scales linearly with `n`, growing
 For contrast, `cancel_match` (which never touches the active-match index)
 stayed an order of magnitude cheaper than `deposit`/`submit_result` at every
 `n` in the same test run, despite being measured against an equally-sized
-match history — see [`benchmark-results.json`](../performance/benchmark-results.json)
+match history — see [`benchmark-results.json`](../reports/performance/benchmark-results.json)
 in `reports/performance/` for the raw `cancel_match` series.
 
 ## Identified performance / DoS vectors

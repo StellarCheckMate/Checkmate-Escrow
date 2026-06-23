@@ -196,8 +196,9 @@ fn parse_event(event_value: &Value) -> Result<IndexedEvent> {
 
     let data = event_data
         .get("data")
-        .and_then(|d| d.as_array())
-        .unwrap_or(&vec![]);
+        .and_then(|d| d.as_array());
+    let empty = vec![];
+    let data = data.unwrap_or(&empty);
 
     let (match_id, player1, player2, status, winner, stake_amount, token, game_id, platform) =
         parse_event_data(&event_type, data);

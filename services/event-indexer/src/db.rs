@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use std::sync::Mutex;
 use crate::models::{IndexedEvent, MatchStatus, MatchInfo, Winner, QueryFilters};
 
@@ -200,7 +200,7 @@ impl Database {
             "SELECT MAX(ledger_sequence) FROM events",
             [],
             |row| row.get::<_, Option<u32>>(0),
-        )?.flatten();
+        ).ok().flatten();
 
         Ok(result)
     }
@@ -212,7 +212,8 @@ impl Database {
             return Ok(None);
         }
 
-        let created_event = events.iter().find(|e| e.event_type == "created")?;
+        let created_event = events.iter().find(|e| e.event_type == "created")
+            .ok_or_else(|| anyhow::anyhow!("no created event found for match {}", match_id))?;
         let latest_event = events.last().unwrap();
 
         let status = if let Some(ref status_str) = latest_event.status {

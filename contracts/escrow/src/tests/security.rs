@@ -498,6 +498,11 @@ fn test_security_payout_overflow_prevention() {
     // Use a very large but valid stake that won't overflow when multiplied by 2
     let large_stake = i128::MAX / 3;
 
+    // Mint enough tokens for both players to cover the large stake
+    let asset_client = StellarAssetClient::new(&env, &token);
+    asset_client.mint(&player1, &large_stake);
+    asset_client.mint(&player2, &large_stake);
+
     env.mock_all_auths();
     let match_id = client.create_match(
         &player1,

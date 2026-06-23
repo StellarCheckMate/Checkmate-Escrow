@@ -14,7 +14,7 @@ ALLOWLIST=$(grep -rh "pub fn " \
   | grep -oP 'pub fn \K[a-z_]+' | sort -u)
 
 # SDK / CLI / Rust stdlib calls that are not contract functions — skip these
-EXCLUDE="require_auth|from_str|to_string|cost_estimate|invoke_contract|call_contract|contract_initialized|current_caller|require_player"
+EXCLUDE="require_auth|from_str|to_string|cost_estimate|invoke_contract|call_contract|contract_initialized|current_caller|require_player|mock_all_auths|register_contract|setup_with_funded_match"
 
 # Docs to scan
 DOCS=$(find "$REPO_ROOT/docs" "$REPO_ROOT/demo" -name "*.md"; echo "$REPO_ROOT/README.md")
@@ -30,6 +30,7 @@ while IFS= read -r file; do
   done < <(grep -oP '`?\K[a-z][a-z_]+(?=\()' "$file" \
            | grep '_' \
            | grep -vE "^($EXCLUDE)$" \
+           | grep -v '^test_' \
            | sort -u)
 done <<< "$DOCS"
 

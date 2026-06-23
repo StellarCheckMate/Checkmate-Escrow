@@ -35,9 +35,10 @@ async fn main() -> Result<()> {
         let db = db.clone();
         let cache = cache.clone();
         let rpc = rpc_client.clone();
+        let bind_addr = config.bind_addr.clone();
         tokio::spawn(async move {
             if let Err(e) = api::start_server(
-                &config.bind_addr,
+                &bind_addr,
                 config.bind_port,
                 db,
                 cache,
