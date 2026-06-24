@@ -218,11 +218,23 @@ pub struct Stats {
 async fn get_stats(State(state): State<AppState>) -> Json<ApiResponse<Stats>> {
     let cache_lock = state.cache.read().await;
     let cache_size = cache_lock.size();
+    drop(cache_lock);
+
+    let total_events = match state.db.total_event_count() {
+        Ok(count) => count,
+        Err(e) => {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            })
+        }
+    };
 
     Json(ApiResponse {
         success: true,
         data: Some(Stats {
-            total_events: 0,
+            total_events,
             cache_size,
         }),
         error: None,
