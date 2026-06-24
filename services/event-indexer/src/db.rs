@@ -78,6 +78,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn total_event_count(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+
+        let count = conn.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
+
+        Ok(count)
+    }
+
     pub fn get_events_by_match(&self, match_id: u64) -> Result<Vec<IndexedEvent>> {
         let conn = self.conn.lock().unwrap();
 
