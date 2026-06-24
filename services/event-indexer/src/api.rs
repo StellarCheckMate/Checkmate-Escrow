@@ -30,6 +30,13 @@ pub struct ApiResponse<T> {
     pub error: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct HealthStatus {
+    pub db: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct EventQuery {
     pub player_address: Option<String>,
@@ -64,12 +71,34 @@ pub async fn start_server(
     Ok(())
 }
 
-async fn health_check() -> Json<ApiResponse<String>> {
-    Json(ApiResponse {
-        success: true,
-        data: Some("Event Indexer is healthy".to_string()),
-        error: None,
-    })
+async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<ApiResponse<HealthStatus>>) {
+    match state.db.health_check() {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(HealthStatus {
+                    db: "ok".to_string(),
+                    detail: None,
+                }),
+                error: None,
+            }),
+        ),
+        Err(e) => {
+            let detail = e.to_string();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    success: false,
+                    data: Some(HealthStatus {
+                        db: "error".to_string(),
+                        detail: Some(detail.clone()),
+                    }),
+                    error: Some(format!("Database health check failed: {}", detail)),
+                }),
+            )
+        }
+    }
 }
 
 async fn get_events(
