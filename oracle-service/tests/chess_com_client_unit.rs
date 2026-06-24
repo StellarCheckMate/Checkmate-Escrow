@@ -20,7 +20,7 @@ async fn validate_game_id_accepts_numeric() {
 }
 
 #[tokio::test]
-async fn fetch_result_maps_draw() {
+async fn test_chess_com_draw_result() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))

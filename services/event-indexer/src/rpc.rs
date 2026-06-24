@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
-use tracing::{info, error, debug};
+use tracing::{info, error, debug, warn};
 use uuid::Uuid;
 
 use crate::db::Database;
@@ -104,6 +104,7 @@ pub async fn event_poller(
     let mut last_ledger = db.get_latest_ledger()?;
 
     loop {
+        let _span = tracing::info_span!("rpc_poll_iteration").entered();
         match poll_events(
             &rpc,
             &db,
@@ -115,6 +116,8 @@ pub async fn event_poller(
                 if let Some(ledger) = new_ledger {
                     last_ledger = Some(ledger);
                     info!("Events polled up to ledger: {}", ledger);
+                } else {
+                    warn!("RPC returned no new events");
                 }
             }
             Err(e) => {
@@ -122,6 +125,7 @@ pub async fn event_poller(
             }
         }
 
+        drop(_span);
         sleep(Duration::from_secs(poll_interval_secs)).await;
     }
 }

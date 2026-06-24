@@ -38,6 +38,10 @@ impl Config {
             .unwrap_or_else(|_| "5".to_string())
             .parse::<u64>()?;
 
+        if poll_interval_secs < 1 || poll_interval_secs > 60 {
+            return Err(anyhow!("poll_interval_secs must be between 1 and 60"));
+        }
+
         Ok(Config {
             rpc_url,
             contract_escrow,
