@@ -155,6 +155,7 @@ Prefer to learn by watching or testing yourself?
 - [Interactive Tutorial](docs/tutorial-step-by-step.md) — guided, hands-on intro for new users
 - [Tutorial Quiz & Checklist](docs/tutorial-quiz.md) — verify your understanding
 - [Architecture Overview](docs/architecture.md)
+- [Match Lifecycle State Machine](docs/match-lifecycle.md) — detailed state transitions, guards, and error paths
 - [Oracle Design](docs/oracle.md)
 - [Threat Model & Security](docs/security.md)
 - [Roadmap](docs/roadmap.md)

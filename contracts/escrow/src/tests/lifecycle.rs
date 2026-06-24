@@ -917,6 +917,45 @@ fn test_escrow_balance_zero_after_draw() {
     assert_eq!(client.get_escrow_balance(&id), 0);
 }
 
+// #762 — get_escrow_balance returns 0 after payout for winner and draw
+#[test]
+fn test_escrow_balance_zero_after_payout() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let winner_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "winner_payout_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&winner_id, &player1);
+    client.deposit(&winner_id, &player2);
+    assert_eq!(client.get_escrow_balance(&winner_id), 200);
+
+    client.submit_result(&winner_id, &Winner::Player1);
+    assert_eq!(client.get_escrow_balance(&winner_id), 0);
+
+    let draw_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "draw_payout_game"),
+        &Platform::ChessDotCom,
+    );
+
+    client.deposit(&draw_id, &player1);
+    client.deposit(&draw_id, &player2);
+    assert_eq!(client.get_escrow_balance(&draw_id), 200);
+
+    client.submit_result(&draw_id, &Winner::Draw);
+    assert_eq!(client.get_escrow_balance(&draw_id), 0);
+}
+
 #[test]
 fn test_get_escrow_balance_returns_stake_amount_after_player1_deposits() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();

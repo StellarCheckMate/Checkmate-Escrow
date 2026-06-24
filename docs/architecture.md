@@ -25,6 +25,8 @@ Checkmate-Escrow is a trustless chess wagering platform built on Stellar Soroban
 
 ## Match Lifecycle
 
+For a detailed state machine visualization with guards, error paths, and timing information, see [Match Lifecycle State Machine](match-lifecycle.md).
+
 ```mermaid
 stateDiagram-v2
     [*] --> Pending : create_match
