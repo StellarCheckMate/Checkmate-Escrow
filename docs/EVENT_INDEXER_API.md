@@ -47,14 +47,28 @@ REST API (Axum)
 
 **Endpoint:** `GET /health`
 
-**Description:** Check if the service is running and healthy.
+**Description:** Check if the service is running and can reach the SQLite event database.
 
-**Response:**
+**Healthy Response:**
 ```json
 {
   "success": true,
-  "data": "Event Indexer is healthy",
+  "data": {
+    "db": "ok"
+  },
   "error": null
+}
+```
+
+**Database Error Response:**
+```json
+{
+  "success": false,
+  "data": {
+    "db": "error",
+    "detail": "..."
+  },
+  "error": "Database health check failed: ..."
 }
 ```
 
