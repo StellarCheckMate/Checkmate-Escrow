@@ -448,3 +448,41 @@ fn test_remove_allowed_token_emits_event() {
     let ev_token: Address = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_token, token);
 }
+
+#[test]
+fn test_expire_match_emits_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+
+    client.set_match_timeout(&1);
+
+    env.ledger().set(2);
+
+    client.expire_match(&match_id);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("expired").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match expired event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_match_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_match_id, match_id);
+}

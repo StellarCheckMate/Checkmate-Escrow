@@ -216,3 +216,15 @@ fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enab
         "create_match should reject unknown token when allowlist is enforced"
     );
 }
+
+#[test]
+fn test_allowlist_enforcement_clears_when_empty() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+    assert!(client.is_allowlist_enforced(), "allowlist should be enforced after adding token");
+
+    client.remove_allowed_token(&token);
+    assert!(!client.is_allowlist_enforced(), "allowlist enforcement should be false after last token is removed");
+}
