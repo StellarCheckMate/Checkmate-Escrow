@@ -50,6 +50,12 @@ impl Database {
         Ok(())
     }
 
+    pub fn health_check(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT 1", [], |_| Ok(()))?;
+        Ok(())
+    }
+
     pub fn insert_event(&self, event: &IndexedEvent) -> Result<()> {
         let conn = self.conn.lock().unwrap();
 
