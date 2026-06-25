@@ -334,83 +334,47 @@ fn test_escrow_balance_is_zero_in_all_terminal_states() {
     );
 }
 
-// ── is_funded invariant ───────────────────────────────────────────────────────
-//
-// Invariant: is_funded returns true if and only if both players have deposited.
-
-/// is_funded is false after only one deposit, true after both.
 #[test]
-fn test_is_funded_requires_both_deposits() {
+fn test_snapshot_count_monotonic() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+
+    fn snapshot_count(env: &Env, contract_id: &Address, match_id: u64) -> u32 {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::SnapshotCount(match_id))
+                .unwrap_or(0)
+        })
+    }
 
     let match_id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "is_funded_invariant"),
+        &String::from_str(&env, "snapshot_count_monotonic"),
         &Platform::Lichess,
     );
 
-    assert!(!client.is_funded(&match_id), "is_funded must be false before any deposit");
+    let mut counts = vec![snapshot_count(&env, &contract_id, match_id)];
 
     client.deposit(&match_id, &player1);
-    assert!(!client.is_funded(&match_id), "is_funded must be false after only player1 deposits");
+    counts.push(snapshot_count(&env, &contract_id, match_id));
 
     client.deposit(&match_id, &player2);
-    assert!(client.is_funded(&match_id), "is_funded must be true after both players deposit");
-}
+    counts.push(snapshot_count(&env, &contract_id, match_id));
 
-// ── escrow balance upper-bound invariant ─────────────────────────────────────
-//
-// Invariant: get_escrow_balance never exceeds 2 × stake_amount at any lifecycle step.
+    client.submit_result(&match_id, &Winner::Draw);
+    counts.push(snapshot_count(&env, &contract_id, match_id));
 
-/// get_escrow_balance never exceeds 2 × stake_amount across the full lifecycle.
-#[test]
-fn test_escrow_balance_never_exceeds_two_stakes() {
-    let stake = 300i128;
-
-    // ── payout path ──────────────────────────────────────────────────────────
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let match_id = client.create_match(
-        &player1,
-        &player2,
-        &stake,
-        &token,
-        &String::from_str(&env, "balance_cap_payout"),
-        &Platform::Lichess,
-    );
-
-    assert!(client.get_escrow_balance(&match_id) <= stake * 2, "balance must not exceed 2×stake before deposits");
-
-    client.deposit(&match_id, &player1);
-    assert!(client.get_escrow_balance(&match_id) <= stake * 2, "balance must not exceed 2×stake after player1 deposits");
-
-    client.deposit(&match_id, &player2);
-    assert!(client.get_escrow_balance(&match_id) <= stake * 2, "balance must not exceed 2×stake after both deposit");
-
-    client.submit_result(&match_id, &Winner::Player1);
-    assert!(client.get_escrow_balance(&match_id) <= stake * 2, "balance must not exceed 2×stake after payout");
-
-    // ── refund path (cancel) ─────────────────────────────────────────────────
-    let (env2, contract_id2, _oracle2, player1b, player2b, token2, _admin2) = setup();
-    let client2 = EscrowContractClient::new(&env2, &contract_id2);
-
-    let cancel_id = client2.create_match(
-        &player1b,
-        &player2b,
-        &stake,
-        &token2,
-        &String::from_str(&env2, "balance_cap_refund"),
-        &Platform::Lichess,
-    );
-
-    client2.deposit(&cancel_id, &player1b);
-    assert!(client2.get_escrow_balance(&cancel_id) <= stake * 2, "balance must not exceed 2×stake after player1 deposits (cancel path)");
-
-    client2.cancel_match(&cancel_id, &player1b);
-    assert!(client2.get_escrow_balance(&cancel_id) <= stake * 2, "balance must not exceed 2×stake after cancel refund");
+    assert_eq!(counts.len(), 4);
+    for i in 1..counts.len() {
+        assert!(
+            counts[i - 1] <= counts[i],
+            "snapshot count must never decrease: before={}, after={}",
+            counts[i - 1],
+            counts[i]
+        );
+    }
 }

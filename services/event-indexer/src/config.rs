@@ -10,6 +10,7 @@ pub struct Config {
     pub bind_port: u16,
     pub cache_size: usize,
     pub poll_interval_secs: u64,
+    pub log_level: String,
 }
 
 impl Config {
@@ -38,6 +39,9 @@ impl Config {
             .unwrap_or_else(|_| "5".to_string())
             .parse::<u64>()?;
 
+        let log_level = env::var("EVENT_INDEXER_LOG_LEVEL")
+            .unwrap_or_else(|_| "info".to_string());
+
         Ok(Config {
             rpc_url,
             contract_escrow,
@@ -46,6 +50,7 @@ impl Config {
             bind_port,
             cache_size,
             poll_interval_secs,
+            log_level,
         })
     }
 }

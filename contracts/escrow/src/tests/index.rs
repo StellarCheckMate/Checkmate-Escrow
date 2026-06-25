@@ -255,3 +255,12 @@ fn test_match_transitions_from_pending_to_active_matches() {
     assert_eq!(active_matches.len(), 1);
     assert_eq!(active_matches.get(0).unwrap().id, match_id);
 }
+
+#[test]
+fn test_get_pending_matches_empty() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let pending = client.get_pending_matches();
+    assert_eq!(pending.len(), 0);
+}

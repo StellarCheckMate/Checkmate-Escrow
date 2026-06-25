@@ -436,6 +436,32 @@ fn test_draw_refund() {
 }
 
 #[test]
+fn test_draw_refund_balances() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let player1_balance_before = token_client.balance(&player1);
+    let player2_balance_before = token_client.balance(&player2);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "draw_refund_balances"),
+        &Platform::ChessDotCom,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Draw);
+
+    assert_eq!(token_client.balance(&player1), player1_balance_before);
+    assert_eq!(token_client.balance(&player2), player2_balance_before);
+}
+
+#[test]
 fn test_player2_balance_decreases_after_deposit() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -1676,4 +1702,20 @@ fn test_get_pending_matches_returns_newly_created_matches() {
     assert_eq!(pending.len(), 2);
     assert!(pending.iter().any(|m| m.id == id1));
     assert!(pending.iter().any(|m| m.id == id2));
+}
+
+#[test]
+fn test_create_match_empty_game_id_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, ""),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
 }
