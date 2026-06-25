@@ -278,6 +278,18 @@ impl OracleContract {
         Ok(env.storage().persistent().has(&DataKey::Result(match_id)))
     }
 
+    /// Return the admin address stored in the contract.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)
+    }
+
     /// Admin removes a previously submitted result from persistent storage.
     /// Emits a `oracle / deleted` event with the `match_id`.
     ///
