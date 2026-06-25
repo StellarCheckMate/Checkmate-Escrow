@@ -818,6 +818,47 @@ fn test_update_admin_emits_rotation_event() {
 }
 
 #[test]
+fn test_oracle_admin_rotation() {
+    let (env, contract_id, _escrow_id, old_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+
+    // Rotate admin
+    client.update_admin(&new_admin);
+
+    // get_admin reflects the new admin
+    assert_eq!(client.get_admin(), new_admin);
+
+    // Old admin can no longer call an admin-gated function (pause)
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &old_admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert!(
+        client.try_pause().is_err(),
+        "old admin must be rejected after rotation"
+    );
+
+    // New admin can still call admin-gated functions
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &new_admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.pause();
+}
+
+#[test]
 fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
     let (env, oracle_id, escrow_id, oracle_admin, player1, player2, token_addr) = setup();
     let escrow_client = EscrowContractClient::new(&env, &escrow_id);
