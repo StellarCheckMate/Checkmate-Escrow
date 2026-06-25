@@ -38,6 +38,21 @@ pub struct EventQuery {
     pub offset: Option<i64>,
 }
 
+pub fn build_router(
+    db: Arc<Database>,
+    cache: Arc<RwLock<EventCache>>,
+    rpc: Arc<SorobanRpcClient>,
+) -> Router {
+    let state = AppState { db, cache, rpc };
+    Router::new()
+        .route("/health", get(health_check))
+        .route("/events", get(get_events))
+        .route("/events/:match_id", get(get_match_events))
+        .route("/match/:match_id", get(get_match_info))
+        .route("/stats", get(get_stats))
+        .with_state(state)
+}
+
 pub async fn start_server(
     bind_addr: &str,
     bind_port: u16,
@@ -45,15 +60,7 @@ pub async fn start_server(
     cache: Arc<RwLock<EventCache>>,
     rpc: Arc<SorobanRpcClient>,
 ) -> anyhow::Result<()> {
-    let state = AppState { db, cache, rpc };
-
-    let app = Router::new()
-        .route("/health", get(health_check))
-        .route("/events", get(get_events))
-        .route("/events/:match_id", get(get_match_events))
-        .route("/match/:match_id", get(get_match_info))
-        .route("/stats", get(get_stats))
-        .with_state(state);
+    let app = build_router(db, cache, rpc);
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind_addr, bind_port)).await?;
 
