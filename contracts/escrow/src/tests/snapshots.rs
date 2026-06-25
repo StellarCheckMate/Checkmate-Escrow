@@ -110,6 +110,27 @@ fn test_cancel_match_records_cancelled_snapshot_with_zero_balance() {
 }
 
 #[test]
+fn test_snapshot_cancelled_reason() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "snap_cancelled_reason"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.cancel_match(&id, &player1);
+
+    let latest = client.get_latest_snapshot(&admin, &id);
+    assert_eq!(latest.reason, SnapshotReason::Cancelled);
+    assert_eq!(latest.escrow_balance, 0);
+}
+
+#[test]
 fn test_expire_match_records_cancelled_snapshot() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
