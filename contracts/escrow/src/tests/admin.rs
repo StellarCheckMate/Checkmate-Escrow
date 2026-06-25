@@ -650,3 +650,35 @@ fn test_set_match_timeout_requires_admin_authorization() {
     let result = client.try_set_match_timeout(&new_timeout);
     assert!(result.is_err(), "non-admin should not be able to set timeout");
 }
+
+// #766 — two-step admin transfer: propose_admin + accept_admin happy-path
+#[test]
+fn test_two_step_admin_transfer() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+
+    // Propose: current admin should not change yet
+    client.propose_admin(&new_admin);
+    assert_eq!(client.get_admin(), admin, "admin must not change before accept");
+
+    // Accept: new_admin calls accept_admin
+    env.mock_auths(&[MockAuth {
+        address: &new_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.accept_admin();
+
+    // Admin is now new_admin and PendingAdmin key is cleared
+    assert_eq!(client.get_admin(), new_admin, "admin must be new_admin after accept");
+    let pending: Option<Address> = env.as_contract(&contract_id, || {
+        env.storage().instance().get(&DataKey::PendingAdmin)
+    });
+    assert!(pending.is_none(), "PendingAdmin key must be cleared after acceptance");
+}
