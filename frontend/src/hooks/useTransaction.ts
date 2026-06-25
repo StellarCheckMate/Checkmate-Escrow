@@ -9,7 +9,7 @@ const NETWORK = import.meta.env.VITE_STELLAR_NETWORK === 'mainnet'
   : Networks.TESTNET;
 
 export function useTransaction(walletType: WalletType | null) {
-  const [signing, setSigning] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const sign = useCallback(async (xdr: string): Promise<string | null> => {
@@ -17,7 +17,7 @@ export function useTransaction(walletType: WalletType | null) {
       setError('No wallet connected.');
       return null;
     }
-    setSigning(true);
+    setLoading(true);
     setError(null);
     try {
       const { signedXdr } = walletType === 'freighter'
@@ -28,9 +28,9 @@ export function useTransaction(walletType: WalletType | null) {
       setError((err as Error).message);
       return null;
     } finally {
-      setSigning(false);
+      setLoading(false);
     }
   }, [walletType]);
 
-  return { sign, signing, error };
+  return { sign, signing: loading, loading, error };
 }

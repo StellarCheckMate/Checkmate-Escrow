@@ -1,7 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { WalletConnector } from '../components/wallet/WalletConnector';
+import { useWallet } from '../hooks/useWallet';
 import type { WalletState, WalletType } from '../wallets/types';
+
+vi.mock('../wallets/freighter', () => ({
+  freighterIsAvailable: vi.fn(),
+  freighterGetPublicKey: vi.fn(),
+}));
+
+import * as freighter from '../wallets/freighter';
 
 const makeWallet = (overrides: Partial<WalletState> = {}) => ({
   type: null as WalletType | null,
@@ -12,6 +20,11 @@ const makeWallet = (overrides: Partial<WalletState> = {}) => ({
   disconnect: vi.fn(),
   ...overrides,
 });
+
+function WalletConnectorWithHook() {
+  const wallet = useWallet();
+  return <WalletConnector wallet={wallet} />;
+}
 
 describe('WalletConnector', () => {
   it('renders connect buttons when disconnected', () => {
@@ -49,5 +62,16 @@ describe('WalletConnector', () => {
     const wallet = makeWallet({ error: 'Freighter extension not detected.' });
     render(<WalletConnector wallet={wallet} />);
     expect(screen.getByRole('alert')).toHaveTextContent('Freighter extension not detected.');
+  });
+
+  it('test_wallet_connector_freighter_not_available', async () => {
+    vi.mocked(freighter.freighterIsAvailable).mockResolvedValue(false);
+    render(<WalletConnectorWithHook />);
+
+    fireEvent.click(screen.getByText('Connect Freighter'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('Freighter extension not detected');
+    });
   });
 });
