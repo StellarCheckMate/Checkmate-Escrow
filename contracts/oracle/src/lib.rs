@@ -331,6 +331,18 @@ impl OracleContract {
         Ok(())
     }
 
+    /// Return the current admin address.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized.
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)
+    }
+
     /// Rotate the admin to a new address. Requires current admin auth.
     /// Emits an `admin / admin_rot` event with `(old_admin, new_admin)`.
     ///
