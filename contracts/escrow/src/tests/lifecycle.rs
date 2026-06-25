@@ -1677,3 +1677,19 @@ fn test_get_pending_matches_returns_newly_created_matches() {
     assert!(pending.iter().any(|m| m.id == id1));
     assert!(pending.iter().any(|m| m.id == id2));
 }
+
+#[test]
+fn test_create_match_empty_game_id_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, ""),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+}
