@@ -333,3 +333,48 @@ fn test_escrow_balance_is_zero_in_all_terminal_states() {
         "escrow balance must be 0 after Cancelled"
     );
 }
+
+#[test]
+fn test_snapshot_count_monotonic() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    fn snapshot_count(env: &Env, contract_id: &Address, match_id: u64) -> u32 {
+        env.as_contract(contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::SnapshotCount(match_id))
+                .unwrap_or(0)
+        })
+    }
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "snapshot_count_monotonic"),
+        &Platform::Lichess,
+    );
+
+    let mut counts = vec![snapshot_count(&env, &contract_id, match_id)];
+
+    client.deposit(&match_id, &player1);
+    counts.push(snapshot_count(&env, &contract_id, match_id));
+
+    client.deposit(&match_id, &player2);
+    counts.push(snapshot_count(&env, &contract_id, match_id));
+
+    client.submit_result(&match_id, &Winner::Draw);
+    counts.push(snapshot_count(&env, &contract_id, match_id));
+
+    assert_eq!(counts.len(), 4);
+    for i in 1..counts.len() {
+        assert!(
+            counts[i - 1] <= counts[i],
+            "snapshot count must never decrease: before={}, after={}",
+            counts[i - 1],
+            counts[i]
+        );
+    }
+}
