@@ -276,11 +276,25 @@ All endpoints return standardized error responses:
 - **Cache Efficiency**: LRU cache for frequently accessed match events
 - **Throughput**: Handles 1000+ queries/second at 50th percentile latency
 
-## Rate Limiting
+## Rate Limits
 
-By default, no rate limiting is applied. Implement rate limiting by:
-1. Adding a reverse proxy (nginx) with rate limiting
-2. Using a library like `tower-governor` in the API layer
+No rate limiting is enforced by the service itself in the current version. This is intentional for the initial release — the service is designed to run behind a reverse proxy or API gateway that handles rate limiting at the infrastructure level.
+
+**Current behavior:** All endpoints are unbounded. Clients may send any number of requests per second.
+
+**Planned for a future release:**
+
+| Tier | Limit | Scope |
+|------|-------|-------|
+| Default (unauthenticated) | 60 req/min | Per IP |
+| Authenticated (API key) | 600 req/min | Per key |
+| Bulk query (`/events` with large `limit`) | 10 req/min | Per IP |
+
+Implementation options under consideration:
+- **Reverse proxy**: nginx `limit_req_zone` or Caddy rate-limit middleware (no code changes required)
+- **In-process**: [`tower-governor`](https://crates.io/crates/tower-governor) as an Axum layer (planned for v1.1)
+
+Until rate limiting is enabled, operators deploying this service publicly should add a reverse proxy with appropriate limits.
 
 ## Security Considerations
 
