@@ -50,5 +50,18 @@ describe('useTransaction', () => {
     await act(async () => { signed = await result.current.sign(FAKE_XDR); });
     expect(signed).toBeNull();
     expect(result.current.error).toBe('Rejected');
+    expect(result.current.loading).toBe(false);
+  });
+
+  it('test_use_transaction_error_state', async () => {
+    vi.mocked(freighter.freighterSign).mockRejectedValue(new Error('Transaction rejected'));
+    const { result } = renderHook(() => useTransaction('freighter'));
+    let signed: string | null = 'x';
+
+    await act(async () => { signed = await result.current.sign(FAKE_XDR); });
+
+    expect(signed).toBeNull();
+    expect(result.current.error).toBe('Transaction rejected');
+    expect(result.current.loading).toBe(false);
   });
 });
