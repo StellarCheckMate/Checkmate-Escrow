@@ -1514,3 +1514,28 @@ fn test_high_volume_burst_is_throttled_then_recovers_next_hour() {
     );
     assert!(client.has_result(&999u64));
 }
+
+#[test]
+fn test_get_admin_returns_admin_after_initialize() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin);
+
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_get_admin_returns_unauthorized_when_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let result = client.try_get_admin();
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}

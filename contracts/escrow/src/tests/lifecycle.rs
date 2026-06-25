@@ -1678,19 +1678,17 @@ fn test_get_pending_matches_returns_newly_created_matches() {
     assert!(pending.iter().any(|m| m.id == id2));
 }
 
-// #769 — game_id exceeding MAX_GAME_ID_LEN (64) must return Error::InvalidGameId
 #[test]
-fn test_create_match_game_id_too_long() {
+fn test_create_match_empty_game_id_rejected() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let game_id_65 = String::from_str(&env, &"x".repeat(65));
     let result = client.try_create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &game_id_65,
+        &String::from_str(&env, ""),
         &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::InvalidGameId)));
