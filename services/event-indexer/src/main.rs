@@ -1,9 +1,4 @@
-mod models;
-mod db;
-mod rpc;
-mod api;
-mod cache;
-mod config;
+use event_indexer::{api, cache, config, db, rpc};
 
 use anyhow::Result;
 use config::Config;
