@@ -1,8 +1,23 @@
-use chrono::Utc;
-use event_indexer::cache::EventCache;
-use event_indexer::models::IndexedEvent;
+use axum::body::to_bytes;
+use axum::http::{Request, StatusCode};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tower::ServiceExt;
+
+use event_indexer::{
+    api::{build_router, ApiResponse},
+    cache::EventCache,
+    db::Database,
+    rpc::SorobanRpcClient,
+};
+
+fn test_app() -> axum::Router {
+    let db = Arc::new(Database::new(":memory:").unwrap());
+    db.init_schema().unwrap();
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let rpc = Arc::new(SorobanRpcClient::new("http://localhost:8000").unwrap());
+    build_router(db, cache, rpc)
+}
 
 #[test]
 fn test_event_indexing() {
@@ -27,36 +42,25 @@ fn test_cache_operations() {
     });
 }
 
-#[test]
-fn test_get_match_events_served_from_cache() {
-    let rt = tokio::runtime::Runtime::new().unwrap();
+#[tokio::test]
+async fn test_get_match_info_404_returns_error_body() {
+    let app = test_app();
 
-    rt.block_on(async {
-        let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/match/9999")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
 
-        let event = IndexedEvent {
-            id: "evt-1".to_string(),
-            ledger_sequence: 42,
-            match_id: 99,
-            event_type: "match_created".to_string(),
-            player1: None,
-            player2: None,
-            status: None,
-            winner: None,
-            stake_amount: None,
-            token: None,
-            game_id: None,
-            platform: None,
-            timestamp: Utc::now(),
-            txn_hash: None,
-        };
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-        cache.write().await.insert(event.clone());
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let parsed: ApiResponse<serde_json::Value> = serde_json::from_slice(&body).unwrap();
 
-        // Replicate the handler's cache-check logic: if non-empty, DB is never reached
-        let cached = cache.read().await.get_by_match(99);
-        assert!(!cached.is_empty(), "cache should contain events for match 99");
-        assert_eq!(cached[0].id, event.id);
-        assert_eq!(cached[0].match_id, 99);
-    });
+    assert!(!parsed.success);
+    assert_eq!(parsed.error.as_deref(), Some("Match 9999 not found"));
 }
