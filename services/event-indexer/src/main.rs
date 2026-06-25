@@ -13,14 +13,14 @@ use tracing::{info, error};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let config = Config::from_env()?;
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("event_indexer=info".parse()?),
+                .add_directive(format!("event_indexer={}", config.log_level).parse()?),
         )
         .init();
-
-    let config = Config::from_env()?;
     info!("Event Indexer starting with config: {:?}", config);
 
     let db = Arc::new(db::Database::new(&config.db_path)?);

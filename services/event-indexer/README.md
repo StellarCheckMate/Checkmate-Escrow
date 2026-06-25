@@ -80,6 +80,7 @@ Environment variables:
 | `EVENT_INDEXER_PORT` | `8080` | API port |
 | `EVENT_INDEXER_CACHE_SIZE` | `10000` | Maximum cache entries |
 | `EVENT_INDEXER_POLL_INTERVAL` | `5` | Polling interval in seconds |
+| `EVENT_INDEXER_LOG_LEVEL` | `info` | Log verbosity (`error`, `warn`, `info`, `debug`, `trace`) |
 
 ## Testing
 
