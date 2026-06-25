@@ -607,6 +607,24 @@ fn test_security_double_initialize_prevention() {
     assert!(result2.is_err(), "Second initialize should fail (AlreadyInitialized)");
 }
 
+/// Test that oracle address cannot be the contract itself (required acceptance criteria name)
+#[test]
+fn test_initialize_oracle_is_self_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    let result = client.try_initialize(&contract_id, &admin);
+    assert!(
+        matches!(result, Err(Ok(Error::InvalidAddress))),
+        "initialize must return Err(InvalidAddress) when oracle == contract"
+    );
+}
+
 /// Test that oracle address cannot be the contract itself
 #[test]
 fn test_security_oracle_cannot_be_contract() {

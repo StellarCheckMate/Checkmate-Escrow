@@ -193,6 +193,12 @@ impl Database {
         Ok(result)
     }
 
+    pub fn total_event_count(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
+        Ok(count)
+    }
+
     pub fn get_latest_ledger(&self) -> Result<Option<u32>> {
         let conn = self.conn.lock().unwrap();
 
