@@ -32,6 +32,18 @@ pub struct ChessComClient {
     last_request: Arc<Mutex<Instant>>,
 }
 
+/// Implements [`Default`] by delegating to [`ChessComClient::new`].
+///
+/// # Panics
+/// Panics if the underlying HTTP client cannot be constructed (e.g. TLS
+/// initialisation failure). Use [`ChessComClient::new`] directly when you
+/// need to handle that error explicitly.
+impl Default for ChessComClient {
+    fn default() -> Self {
+        Self::new().expect("failed to construct ChessComClient")
+    }
+}
+
 impl ChessComClient {
     pub fn new() -> Result<Self, ChessComError> {
         Self::new_with_base_and_timeout(
