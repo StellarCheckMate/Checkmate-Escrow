@@ -622,3 +622,28 @@ fn test_security_oracle_cannot_be_contract() {
     let result = client.try_initialize(&contract_id, &admin);
     assert!(result.is_err(), "Should reject contract as oracle (InvalidAddress)");
 }
+
+// #767 — accept_admin called by a non-pending-admin address must be rejected
+#[test]
+fn test_accept_admin_wrong_caller_rejected() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let pending_admin = Address::generate(&env);
+    let wrong_caller = Address::generate(&env);
+
+    client.propose_admin(&pending_admin);
+
+    env.mock_auths(&[MockAuth {
+        address: &wrong_caller,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_accept_admin();
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
