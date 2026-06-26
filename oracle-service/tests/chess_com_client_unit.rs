@@ -84,6 +84,29 @@ async fn fetch_result_404_maps_to_game_not_found() {
 }
 
 #[tokio::test]
+async fn test_chess_com_request_timeout() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/pub/game/999"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_millis(500)),
+        )
+        .mount(&server)
+        .await;
+
+    let client = ChessComClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_millis(1),
+    )
+    .unwrap();
+
+    let err = client.fetch_result("999").await.unwrap_err();
+    assert!(matches!(err, ChessComError::Timeout));
+}
+
+#[tokio::test]
 async fn fetch_result_invalid_response_errors() {
     let server = MockServer::start().await;
 
