@@ -463,6 +463,22 @@ fn test_unpause_admin_only() {
 }
 
 #[test]
+fn test_oracle_submit_result_while_paused() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
+
+#[test]
 fn test_submit_result_blocked_when_paused() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
