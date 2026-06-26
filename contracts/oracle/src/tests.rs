@@ -246,6 +246,37 @@ fn test_submit_result_emits_event() {
 }
 
 #[test]
+fn test_oracle_submit_result_emits_event() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    let events = env.events().all();
+    // Documented schema: topic = ["oracle", "result"], payload = (match_id: u64, result: Winner)
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("result").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "oracle result event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_id, ev_result): (u64, Winner) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, 0u64);
+    assert_eq!(ev_result, Winner::Player1);
+}
+
+#[test]
 fn test_submit_draw_result_emits_event() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
