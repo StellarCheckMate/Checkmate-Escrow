@@ -130,8 +130,10 @@ impl EscrowContract {
             if count == 0 {
                 env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
             }
+            Self::append_allowed_token(&env, &token);
         } else {
             env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
+            Self::append_allowed_token(&env, &token);
         }
 
         env.events().publish(
@@ -170,6 +172,8 @@ impl EscrowContract {
                 env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
             }
         }
+
+        Self::remove_allowed_token_from_list(&env, &token);
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("tok_rm")),
