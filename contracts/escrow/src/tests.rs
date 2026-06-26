@@ -1807,3 +1807,41 @@ fn test_duplicate_game_id_cross_platform_rejected() {
     assert_eq!(result, Err(Ok(Error::DuplicateGameId)));
 }
 
+#[test]
+fn test_escrow_balance_zero_after_payout() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token);
+
+    // Winner case
+    let id_win = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "payout_win"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id_win, &player1);
+    client.deposit(&id_win, &player2);
+    client.submit_result(&id_win, &Winner::Player1);
+    assert_eq!(client.get_escrow_balance(&id_win), 0);
+
+    // Replenish balances for draw test
+    asset_client.mint(&player1, &100);
+    asset_client.mint(&player2, &100);
+
+    // Draw case
+    let id_draw = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "payout_draw"),
+        &Platform::ChessDotCom,
+    );
+    client.deposit(&id_draw, &player1);
+    client.deposit(&id_draw, &player2);
+    client.submit_result(&id_draw, &Winner::Draw);
+    assert_eq!(client.get_escrow_balance(&id_draw), 0);
+}
