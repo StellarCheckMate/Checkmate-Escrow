@@ -310,6 +310,27 @@ fn test_submit_draw_result_emits_event() {
 }
 
 #[test]
+fn test_submit_result_duplicate_game_id_rejected() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player2,
+    );
+    assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
+}
+
+#[test]
 #[should_panic]
 fn test_duplicate_submit_fails() {
     let (env, contract_id, ..) = setup();
