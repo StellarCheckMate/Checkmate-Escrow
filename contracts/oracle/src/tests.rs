@@ -729,6 +729,18 @@ fn test_delete_result_emits_deletion_event() {
 }
 
 #[test]
+fn test_oracle_delete_result_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    // No admin set — delete_result must return Unauthorized.
+    let result = client.try_delete_result(&0u64);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
 #[should_panic]
 fn test_delete_result_requires_admin_auth() {
     let env = Env::default();
