@@ -193,6 +193,84 @@ impl Database {
         Ok(result)
     }
 
+    pub fn get_events_by_match_paginated(&self, match_id: u64, limit: i64, offset: i64) -> Result<Vec<IndexedEvent>> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT id, ledger_sequence, match_id, event_type, player1, player2, status,
+                    winner, stake_amount, token, game_id, platform, timestamp, txn_hash
+             FROM events WHERE match_id = ? ORDER BY ledger_sequence ASC LIMIT ? OFFSET ?"
+        )?;
+
+        let events = stmt.query_map(params![match_id, limit, offset], |row| {
+            Ok(IndexedEvent {
+                id: row.get(0)?,
+                ledger_sequence: row.get(1)?,
+                match_id: row.get(2)?,
+                event_type: row.get(3)?,
+                player1: row.get(4)?,
+                player2: row.get(5)?,
+                status: row.get(6)?,
+                winner: row.get(7)?,
+                stake_amount: row.get(8)?,
+                token: row.get(9)?,
+                game_id: row.get(10)?,
+                platform: row.get(11)?,
+                timestamp: DateTime::parse_from_rfc3339(&row.get::<_, String>(12)?)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
+                txn_hash: row.get(13)?,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for event in events {
+            result.push(event?);
+        }
+        Ok(result)
+    }
+
+    pub fn get_matches_by_status(&self, status: Option<&MatchStatus>) -> Result<Vec<MatchInfo>> {
+        let match_ids: Vec<u64> = {
+            let conn = self.conn.lock().unwrap();
+            let (query, param): (&str, Option<&str>) = match status {
+                Some(s) => (
+                    "SELECT DISTINCT match_id FROM events WHERE status = ?",
+                    Some(match s {
+                        MatchStatus::Pending => "pending",
+                        MatchStatus::Active => "active",
+                        MatchStatus::Completed => "completed",
+                        MatchStatus::Cancelled => "cancelled",
+                        MatchStatus::Expired => "expired",
+                    }),
+                ),
+                None => ("SELECT DISTINCT match_id FROM events", None),
+            };
+
+            let mut stmt = conn.prepare(query)?;
+            let ids: Vec<u64> = if let Some(p) = param {
+                stmt.query_map(params![p], |row| row.get(0))?.filter_map(|r| r.ok()).collect()
+            } else {
+                stmt.query_map([], |row| row.get(0))?.filter_map(|r| r.ok()).collect()
+            };
+            ids
+        };
+
+        let mut matches = Vec::new();
+        for id in match_ids {
+            if let Some(info) = self.build_match_info(id)? {
+                matches.push(info);
+            }
+        }
+        Ok(matches)
+    }
+
+    pub fn ping(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT 1", [], |_| Ok(()))?;
+        Ok(())
+    }
+
     pub fn total_event_count(&self) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         let count = conn.query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))?;
