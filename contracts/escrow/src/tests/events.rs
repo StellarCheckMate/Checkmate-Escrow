@@ -448,3 +448,29 @@ fn test_remove_allowed_token_emits_event() {
     let ev_token: Address = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_token, token);
 }
+
+#[test]
+fn test_transfer_admin_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+    client.transfer_admin(&new_admin);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("xfer").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "admin/xfer event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_old_admin, ev_new_admin): (Address, Address) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_old_admin, admin);
+    assert_eq!(ev_new_admin, new_admin);
+}
