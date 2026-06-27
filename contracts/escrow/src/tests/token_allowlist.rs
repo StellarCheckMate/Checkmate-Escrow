@@ -80,6 +80,49 @@ fn test_removed_tokens_are_rejected_when_other_allowed_tokens_remain() {
 }
 
 #[test]
+fn test_get_allowed_tokens_returns_empty_before_any_tokens_added() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let allowed_tokens = client.get_allowed_tokens();
+    assert_eq!(allowed_tokens.len(), 0, "allowed tokens should be empty before any are added");
+}
+
+#[test]
+fn test_get_allowed_tokens_returns_tokens_in_order() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+
+    client.add_allowed_token(&token);
+    client.add_allowed_token(&token2_addr);
+
+    let allowed_tokens = client.get_allowed_tokens();
+    assert_eq!(allowed_tokens.len(), 2, "allowed tokens should contain both tokens");
+    assert_eq!(allowed_tokens.get(0).unwrap(), &token);
+    assert_eq!(allowed_tokens.get(1).unwrap(), &token2_addr);
+}
+
+#[test]
+fn test_get_allowed_tokens_updates_after_remove_allowed_token() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+
+    client.add_allowed_token(&token);
+    client.add_allowed_token(&token2_addr);
+    client.remove_allowed_token(&token);
+
+    let allowed_tokens = client.get_allowed_tokens();
+    assert_eq!(allowed_tokens.len(), 1, "allowed tokens should reflect removed token");
+    assert_eq!(allowed_tokens.get(0).unwrap(), &token2_addr);
+}
+
+#[test]
 fn test_removing_last_allowed_token_disables_allowlist_enforcement() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -214,5 +257,31 @@ fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enab
     assert!(
         result.is_err(),
         "create_match should reject unknown token when allowlist is enforced"
+    );
+}
+
+#[test]
+fn test_allowlist_enforcement_clears_when_empty() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Initially, allowlist should not be enforced
+    assert!(
+        !client.is_allowlist_enforced(),
+        "allowlist should not be enforced initially"
+    );
+
+    // Add a token - enforcement should be enabled
+    client.add_allowed_token(&token);
+    assert!(
+        client.is_allowlist_enforced(),
+        "allowlist should be enforced after adding a token"
+    );
+
+    // Remove the last token - enforcement should be disabled
+    client.remove_allowed_token(&token);
+    assert!(
+        !client.is_allowlist_enforced(),
+        "allowlist should not be enforced after removing the last token"
     );
 }

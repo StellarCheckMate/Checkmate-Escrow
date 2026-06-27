@@ -275,3 +275,37 @@ fn test_get_match_count_increments_correctly() {
     let count = client.get_match_count();
     assert_eq!(count, 4);
 }
+
+/// Test get_pending_matches pagination with more than 20 matches
+#[test]
+fn test_get_pending_matches_pagination() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let mut pending_match_ids = Vec::new();
+    for i in 0..25 {
+        let match_id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, &format!("pending_game_{}", i)),
+            &Platform::Lichess,
+        );
+        pending_match_ids.push(match_id);
+    }
+
+    // Get page 1 (first 20 matches)
+    let page1 = client.get_pending_matches_paginated(&0, &20);
+    assert_eq!(page1.len(), 20);
+    for (i, match_obj) in page1.iter().enumerate() {
+        assert_eq!(match_obj.id, pending_match_ids[i]);
+    }
+
+    // Get page 2 (remaining 5 matches)
+    let page2 = client.get_pending_matches_paginated(&20, &20);
+    assert_eq!(page2.len(), 5);
+    for (i, match_obj) in page2.iter().enumerate() {
+        assert_eq!(match_obj.id, pending_match_ids[20 + i]);
+    }
+}
