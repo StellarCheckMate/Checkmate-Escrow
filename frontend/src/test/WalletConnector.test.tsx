@@ -11,6 +11,13 @@ vi.mock('../wallets/freighter', () => ({
 
 import * as freighter from '../wallets/freighter';
 
+vi.mock('../wallets/albedo', () => ({
+  albedoIsAvailable: vi.fn(),
+  albedoGetPublicKey: vi.fn(),
+}));
+
+import * as albedo from '../wallets/albedo';
+
 const makeWallet = (overrides: Partial<WalletState> = {}) => ({
   type: null as WalletType | null,
   publicKey: null as string | null,
@@ -72,6 +79,19 @@ describe('WalletConnector', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('Freighter extension not detected');
+    });
+  });
+
+  it('test_wallet_connector_albedo_connect', async () => {
+    vi.mocked(albedo.albedoIsAvailable).mockReturnValue(true);
+    vi.mocked(albedo.albedoGetPublicKey).mockResolvedValue('GALBEDO1234567890ABCDE1234567890ABCDE1234567890ABCDE1234567890');
+
+    render(<WalletConnectorWithHook />);
+
+    fireEvent.click(screen.getByText('Connect Albedo'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/GALBED/)).toBeInTheDocument();
     });
   });
 });
