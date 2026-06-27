@@ -83,6 +83,17 @@ Invalid examples: `"abc"` (non-numeric), `""` (empty)
 
 ---
 
+## Game ID Formats
+
+| Platform   | Format                        | Example         | Validation Rule                                      |
+|------------|-------------------------------|-----------------|------------------------------------------------------|
+| Lichess    | 8-character alphanumeric      | `abcd1234`      | Exactly 8 chars; lowercase letters and digits only   |
+| Chess.com  | Numeric string (7–12 digits)  | `123456789`     | Digits only; no letters or special characters        |
+
+All game IDs are subject to a maximum length of **64 bytes** (`MAX_GAME_ID_LEN`). Submissions exceeding this limit are rejected on-chain with `Error::InvalidGameId` before any off-chain lookup is attempted.
+
+---
+
 ## Validation Rules
 
 | Rule | Details |
