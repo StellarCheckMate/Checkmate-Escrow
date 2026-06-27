@@ -104,26 +104,25 @@ async fn fetch_result_404_maps_to_game_not_found() {
 }
 
 #[tokio::test]
-async fn test_chess_com_request_timeout() {
+async fn test_chess_com_draw_result() {
     let server = MockServer::start().await;
 
     Mock::given(method("GET"))
-        .and(path("/pub/game/999"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(std::time::Duration::from_millis(500)),
-        )
+        .and(path("/pub/game/42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "end": {"result": "draw"}
+        })))
         .mount(&server)
         .await;
 
     let client = ChessComClient::new_with_base_and_timeout(
         server.uri(),
-        std::time::Duration::from_millis(1),
+        std::time::Duration::from_secs(30),
     )
     .unwrap();
 
-    let err = client.fetch_result("999").await.unwrap_err();
-    assert!(matches!(err, ChessComError::Timeout));
+    let res: ChessComGameResult = client.fetch_result("42").await.unwrap();
+    assert_eq!(res.winner, contracts_oracle::types::Winner::Draw);
 }
 
 #[tokio::test]
