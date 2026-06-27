@@ -84,6 +84,7 @@ cargo test -p oracle
 - Update relevant documentation in `docs/` for architectural changes
 - Add inline comments for non-obvious code
 - Add or update Soroban contract guidance in `docs/contributing-contracts.md` when changing contract storage, TTL, or auth behavior
+- Add or update oracle guidance in `docs/CONTRIBUTING_ORACLE.md` when changing the oracle service, adding platform clients, or modifying result verification
 - Update README.md if adding new features or changing setup steps
 - Check repository health and link validity with `./scripts/repository_health_check.sh`
 
@@ -113,7 +114,7 @@ See [docs/repository-health-checklist.md](docs/repository-health-checklist.md) f
 
 ## Issue Labels
 
-We use a shared label taxonomy to keep issue and PR triage consistent. See [docs/label-taxonomy.md](docs/label-taxonomy.md) for definitions of labels like `good first issue`, `wave-ready`, and `high priority`.
+We use a shared label taxonomy to keep issue and PR triage consistent. See [docs/label-taxonomy.md](docs/label-taxonomy.md) for definitions of labels like `good first issue`, `wave-ready`, and `help-wanted`.
 
 ## Coding Standards
 
@@ -188,6 +189,26 @@ fn test_double_initialize_fails() {
     client.initialize(&oracle, &admin); // panics with a string, not a typed Error
 }
 ```
+
+## Contributing by Component
+
+### Smart Contract Changes
+
+For changes to `contracts/escrow` or `contracts/oracle`, see [docs/contributing-contracts.md](docs/contributing-contracts.md) for detailed guidance on:
+- Authorization patterns and `require_auth`
+- Storage tiers and state layout
+- TTL management
+- Contract initialization and upgrade safety
+- Events and observability
+
+### Oracle Service Changes
+
+For changes to the off-chain oracle service, see [docs/CONTRIBUTING_ORACLE.md](docs/CONTRIBUTING_ORACLE.md) for detailed guidance on:
+- Local oracle setup and environment configuration
+- Running and writing oracle integration tests
+- Adding support for new chess platform clients
+- Result verification and security patterns
+- API rate limiting and error handling
 
 ## Drips Wave Contributions
 
