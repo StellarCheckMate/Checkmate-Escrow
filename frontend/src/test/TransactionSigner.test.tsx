@@ -24,6 +24,14 @@ describe('TransactionSigner', () => {
     expect(screen.getByText('Signed ✓')).toBeInTheDocument();
   });
 
+  it('test_transaction_signer_success_callback', async () => {
+    vi.mocked(freighter.freighterSign).mockResolvedValue({ signedXdr: 'SIGNED_XDR==' });
+    const onSigned = vi.fn();
+    render(<TransactionSigner walletType="freighter" xdr="AAAA==" onSigned={onSigned} />);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(onSigned).toHaveBeenCalledWith('SIGNED_XDR=='));
+  });
+
   it('shows error on failure', async () => {
     vi.mocked(freighter.freighterSign).mockRejectedValue(new Error('User rejected'));
     render(<TransactionSigner walletType="freighter" xdr="AAAA==" onSigned={vi.fn()} />);
