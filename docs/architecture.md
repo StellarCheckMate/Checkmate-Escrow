@@ -93,6 +93,44 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 | `Player2` | Player 2 won. |
 | `Draw`    | Game ended in a draw; stakes returned to both players. |
 
+### `SnapshotReason` Enum
+
+| Variant     | Meaning |
+|-------------|---------|
+| `Created`   | Snapshot taken when match was created. |
+| `Deposit`   | Snapshot taken after a player deposited. |
+| `Completed` | Snapshot taken when match completed with payout. |
+| `Cancelled` | Snapshot taken when match was cancelled. |
+
+### `BalanceSnapshot` Struct
+
+Balance snapshots provide an audit trail of a match's escrow balance at key lifecycle transitions. The contract uses a fixed-size ring buffer to store these records efficiently.
+
+| Field              | Type            | Description |
+|--------------------|-----------------|-------------|
+| `match_id`         | `u64`           | The match this snapshot belongs to. |
+| `index`            | `u32`           | Monotonically increasing position in the full chronological sequence. Storage keys are computed as `slot = index % MAX_SNAPSHOTS_PER_MATCH` (8). May have gaps if older snapshots were pruned. |
+| `reason`           | `SnapshotReason`  | Lifecycle event that triggered the snapshot: `Created`, `Deposit`, `Completed`, or `Cancelled`. |
+| `ledger`           | `u32`           | Ledger sequence at snapshot time. |
+| `token`            | `Address`       | Token contract address used for staking. |
+| `token_symbol`     | `String`        | Human-readable token symbol (e.g., "XLM", "USDC"). |
+| `stake_amount`     | `i128`          | Per-player stake amount at snapshot time. |
+| `escrow_balance`   | `i128`          | Total tokens held in escrow at snapshot time. |
+| `player1_deposited`| `bool`          | Whether player1 had deposited. |
+| `player2_deposited`| `bool`          | Whether player2 had deposited. |
+
+### Balance Snapshots
+
+Snapshots are recorded automatically at key lifecycle transitions:
+- **`Created`** — when `create_match` is called (initial state: zero deposits)
+- **`Deposit`** — each time a player deposits their stake
+- **`Completed`** — when `submit_result` executes the payout
+- **`Cancelled`** — when cancellation occurs (before or after activation)
+
+The ring buffer has a fixed capacity of `MAX_SNAPSHOTS_PER_MATCH = 8` slots per match. Snapshots are stored at keys `DataKey::Snapshot(match_id, slot)` where `slot = index % MAX_SNAPSHOTS_PER_MATCH`. When the buffer fills, the oldest entry is silently overwritten — this is the storage-pruning mechanism.
+
+**Interpreting the `index` field:** The `index` is monotonically increasing and never resets, enabling callers to detect when pruning has occurred. If `get_balance_snapshots` returns snapshots with indices like `[5, 6, 7, 8]`, you know snapshots `0` through `4` were pruned because only 8 slots are retained. The `SnapshotCount(match_id)` tracks the total ever recorded, allowing calculation of the actual sequence range.
+
 ### Contract Functions
 
 #### Match Management
@@ -125,6 +163,15 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 | `get_player_matches` | `(player: Address) -> Vec<u64>` | Returns all match IDs (past and present) for a player. |
 | `get_pending_matches` | `() -> Vec<Match>` | Returns pending matches currently in `Pending` state, awaiting deposit completion. |
 | `get_active_matches` | `() -> Vec<Match>` | Returns active matches currently in `Active` state, fully funded and ready for result submission. |
+| `get_pending_matches_paginated` | `(player: Address, offset: u32, limit: u32) -> Vec<Match>` | Paginated version of `get_pending_matches`. |
+| `get_active_matches_paginated` | `(offset: u32, limit: u32) -> Vec<Match>` | Paginated version of `get_active_matches`. |
+
+#### Balance Snapshot Queries
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `get_balance_snapshots` | `(caller: Address, match_id: u64) -> Vec<BalanceSnapshot>` | Returns all retained snapshots for a match. Admin sees exact amounts; players see redacted amounts. |
+| `get_latest_snapshot` | `(caller: Address, match_id: u64) -> BalanceSnapshot` | Returns the most recent snapshot for a match. Same access rules as `get_balance_snapshots`. |
 
 ## Index Behavior, TTL Caveats, and Pagination
 
