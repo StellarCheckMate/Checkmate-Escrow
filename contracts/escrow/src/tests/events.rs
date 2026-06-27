@@ -448,3 +448,37 @@ fn test_remove_allowed_token_emits_event() {
     let ev_token: Address = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_token, token);
 }
+
+#[test]
+fn test_expire_match_emits_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_expire_evt"),
+        &Platform::Lichess,
+    );
+
+    // Advance ledger past the timeout so expire_match succeeds.
+    env.ledger().set_sequence_number(100 + 17_280);
+    client.expire_match(&id);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("expired").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match/expired event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, id);
+}
