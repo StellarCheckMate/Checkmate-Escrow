@@ -264,3 +264,120 @@ On-chain persistent storage has a finite TTL (~30 days). In normal operation res
 
 (Existing contract documentation continues unchanged.)
 
+
+---
+
+## Troubleshooting
+
+### Rate limit exceeded (`RateLimitExceeded`)
+
+**Symptom:** `submit_result` or `submit_batch_results` returns
+`Error(Contract, #9)`.
+
+**Cause:** The oracle has exhausted its hourly (100) or daily (1,000)
+submission quota on the `OracleContract`.
+
+**Fix:**
+- Wait until the rolling window resets (up to 1 hour for hourly, 24 hours for
+  daily).
+- Query current usage before retrying:
+  ```bash
+  stellar contract invoke --id $CONTRACT_ORACLE \
+    -- get_oracle_rate_limit_status --oracle <ORACLE_ADDRESS>
+  ```
+- If the default limits are too low for your workload, the admin can raise
+  them:
+  ```bash
+  stellar contract invoke --id $CONTRACT_ORACLE \
+    --source <ORACLE_ADMIN_KEYPAIR> \
+    -- set_oracle_rate_limits \
+    --oracle <ORACLE_ADDRESS> \
+    --hourly_limit 500 \
+    --daily_limit 5000
+  ```
+
+---
+
+### API key invalid / authentication failure
+
+**Symptom:** The off-chain oracle service logs `401 Unauthorized` or
+`403 Forbidden` when calling the chess platform API.
+
+**Cause:** `LICHESS_API_TOKEN` or `CHESSDOTCOM_API_KEY` in `.env` is missing,
+expired, or incorrect.
+
+**Fix:**
+1. Re-generate or copy the correct key from your Lichess/Chess.com developer
+   account.
+2. Update `.env`:
+   ```env
+   LICHESS_API_TOKEN=lip_xxxxxxxxxxxx
+   CHESSDOTCOM_API_KEY=your-key-here
+   ```
+3. Restart the oracle service. No on-chain changes are required.
+
+---
+
+### Game not finished yet (`GameNotFinished`)
+
+**Symptom:** The oracle service logs `GameNotFinished` and does not submit a
+result; the match stays `Active` on-chain.
+
+**Cause:** The chess platform API returned a game payload without a terminal
+`end.result` field — the game is still in progress.
+
+**Fix:** This is expected behaviour. The oracle will retry automatically. No
+manual intervention is needed unless the game has genuinely ended but the
+platform API is lagging. In that case:
+- Wait a few minutes and allow the retry backoff to resolve it.
+- If the platform API continues to show the game as in progress after it has
+  clearly ended, contact the platform's support or wait for the result to
+  propagate (usually < 5 minutes).
+
+---
+
+### Network timeout / chess platform unreachable
+
+**Symptom:** Oracle service logs `timeout`, `connection refused`, or
+`HttpStatus` errors; no result is submitted on-chain.
+
+**Cause:** The chess platform API is temporarily unreachable, or the 30-second
+HTTP timeout was exceeded.
+
+**Fix:**
+- The oracle will not submit a result until a verified end-state is confirmed.
+  Retry is automatic with exponential backoff.
+- Check the platform's status page ([lichess.org/status](https://lichess.org/status)
+  or [chess.com](https://www.chess.com)) for ongoing incidents.
+- Verify outbound connectivity from the oracle host:
+  ```bash
+  curl -I https://lichess.org/game/export/abcd1234
+  curl -I https://api.chess.com/pub/game/123456789
+  ```
+- If the oracle host is behind a firewall, ensure outbound HTTPS (port 443) is
+  open to the chess platform domains.
+
+---
+
+### Oracle not submitting results (wrong oracle address configured)
+
+**Symptom:** `submit_result` returns `UnauthorizedOracle`; the transaction is
+signed by the oracle keypair but still rejected.
+
+**Cause:** The escrow contract's stored oracle address does not match the
+keypair the oracle service is using.
+
+**Fix:** Check which address the escrow contract has on record:
+```bash
+stellar contract invoke --id $CONTRACT_ESCROW -- get_oracle
+```
+Compare this to the oracle service's configured keypair address. If they
+differ, either:
+- Update the oracle service's keypair to match the on-chain address, or
+- Rotate the on-chain oracle address (requires escrow admin):
+  ```bash
+  stellar contract invoke --id $CONTRACT_ESCROW \
+    --source <ESCROW_ADMIN_KEYPAIR> \
+    -- update_oracle \
+    --new_oracle <CORRECT_ORACLE_ADDRESS>
+  ```
