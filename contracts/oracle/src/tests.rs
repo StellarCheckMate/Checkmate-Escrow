@@ -246,6 +246,37 @@ fn test_submit_result_emits_event() {
 }
 
 #[test]
+fn test_oracle_submit_result_emits_event() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    let events = env.events().all();
+    // Documented schema: topic = ["oracle", "result"], payload = (match_id: u64, result: Winner)
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("result").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "oracle result event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_id, ev_result): (u64, Winner) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, 0u64);
+    assert_eq!(ev_result, Winner::Player1);
+}
+
+#[test]
 fn test_submit_draw_result_emits_event() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
@@ -276,6 +307,27 @@ fn test_submit_draw_result_emits_event() {
         soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_id, 0u64);
     assert_eq!(ev_result, Winner::Draw);
+}
+
+#[test]
+fn test_submit_result_duplicate_game_id_rejected() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player2,
+    );
+    assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
 }
 
 #[test]
@@ -429,6 +481,22 @@ fn test_unpause_admin_only() {
         &Winner::Player1,
     );
     assert!(client.has_result(&0u64));
+}
+
+#[test]
+fn test_oracle_submit_result_while_paused() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
 #[test]
@@ -695,6 +763,18 @@ fn test_delete_result_emits_deletion_event() {
     let (_, _, data) = matched.unwrap();
     let ev_id: u64 = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_id, 0u64);
+}
+
+#[test]
+fn test_oracle_delete_result_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    // No admin set — delete_result must return Unauthorized.
+    let result = client.try_delete_result(&0u64);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
