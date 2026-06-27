@@ -21,6 +21,13 @@ impl Config {
         let contract_escrow = env::var("CONTRACT_ESCROW")
             .map_err(|_| anyhow!("CONTRACT_ESCROW environment variable not set"))?;
 
+        if contract_escrow.len() != 56 || !contract_escrow.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(anyhow!(
+                "CONTRACT_ESCROW must be a valid 56-character Stellar contract address, got {:?}",
+                contract_escrow
+            ));
+        }
+
         let db_path = env::var("EVENT_INDEXER_DB_PATH")
             .unwrap_or_else(|_| "./events.db".to_string());
 
@@ -67,7 +74,32 @@ mod tests {
     use super::*;
 
     fn base_env() {
-        env::set_var("CONTRACT_ESCROW", "CTEST");
+        env::set_var("CONTRACT_ESCROW", "CABD7H7QWXSTDZ6YPMPZRJ2FLGDWP5AYWLF5PYQRB5PQV6PDBGFPMTD");
+    }
+
+    fn valid_contract_address() -> &'static str {
+        "CABD7H7QWXSTDZ6YPMPZRJ2FLGDWP5AYWLF5PYQRB5PQV6PDBGFPMTD"
+    }
+
+    #[test]
+    fn valid_56_char_contract_address_is_accepted() {
+        env::set_var("CONTRACT_ESCROW", valid_contract_address());
+        env::set_var("EVENT_INDEXER_POLL_INTERVAL", "5");
+        assert!(Config::from_env().is_ok());
+    }
+
+    #[test]
+    fn short_contract_address_is_rejected() {
+        env::set_var("CONTRACT_ESCROW", "CSHORT");
+        env::set_var("EVENT_INDEXER_POLL_INTERVAL", "5");
+        assert!(Config::from_env().is_err());
+    }
+
+    #[test]
+    fn empty_contract_address_is_rejected() {
+        env::set_var("CONTRACT_ESCROW", "");
+        env::set_var("EVENT_INDEXER_POLL_INTERVAL", "5");
+        assert!(Config::from_env().is_err());
     }
 
     #[test]

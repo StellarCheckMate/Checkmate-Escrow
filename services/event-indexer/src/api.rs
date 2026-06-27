@@ -1,10 +1,11 @@
 use axum::{
     extract::{Query, Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -38,6 +39,17 @@ pub struct EventQuery {
     pub offset: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct MatchQuery {
+    pub status: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct PaginationQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
 pub fn build_router(
     db: Arc<Database>,
     cache: Arc<RwLock<EventCache>>,
@@ -48,6 +60,7 @@ pub fn build_router(
         .route("/health", get(health_check))
         .route("/events", get(get_events))
         .route("/events/:match_id", get(get_match_events))
+        .route("/matches", get(get_matches))
         .route("/match/:match_id", get(get_match_info))
         .route("/stats", get(get_stats))
         .with_state(state)
@@ -71,12 +84,11 @@ pub async fn start_server(
     Ok(())
 }
 
-async fn health_check() -> Json<ApiResponse<String>> {
-    Json(ApiResponse {
-        success: true,
-        data: Some("Event Indexer is healthy".to_string()),
-        error: None,
-    })
+async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> {
+    match state.db.ping() {
+        Ok(_) => Json(serde_json::json!({"db": "ok"})),
+        Err(e) => Json(serde_json::json!({"db": "error", "detail": e.to_string()})),
+    }
 }
 
 async fn get_events(
@@ -135,23 +147,30 @@ async fn get_events(
 async fn get_match_events(
     State(state): State<AppState>,
     Path(match_id): Path<u64>,
+    Query(pagination): Query<PaginationQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<IndexedEvent>>>) {
-    let cache_lock = state.cache.read().await;
-    let cached_events = cache_lock.get_by_match(match_id);
-    drop(cache_lock);
+    let limit = pagination.limit.unwrap_or(100);
+    let offset = pagination.offset.unwrap_or(0);
 
-    if !cached_events.is_empty() {
-        return (
-            StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(cached_events),
-                error: None,
-            }),
-        );
+    // Only use cache when no pagination is requested (default first page, default limit)
+    if pagination.limit.is_none() && pagination.offset.is_none() {
+        let cache_lock = state.cache.read().await;
+        let cached_events = cache_lock.get_by_match(match_id);
+        drop(cache_lock);
+
+        if !cached_events.is_empty() {
+            return (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(cached_events),
+                    error: None,
+                }),
+            );
+        }
     }
 
-    match state.db.get_events_by_match(match_id) {
+    match state.db.get_events_by_match_paginated(match_id, limit, offset) {
         Ok(events) => {
             if events.is_empty() {
                 (
@@ -173,6 +192,39 @@ async fn get_match_events(
                 )
             }
         }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+async fn get_matches(
+    State(state): State<AppState>,
+    Query(query): Query<MatchQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
+    let status = query.status.as_ref().map(|s| match s.as_str() {
+        "pending" => MatchStatus::Pending,
+        "active" => MatchStatus::Active,
+        "completed" => MatchStatus::Completed,
+        "cancelled" => MatchStatus::Cancelled,
+        "expired" => MatchStatus::Expired,
+        _ => MatchStatus::Pending,
+    });
+
+    match state.db.get_matches_by_status(status.as_ref()) {
+        Ok(matches) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(matches),
+                error: None,
+            }),
+        ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse {
