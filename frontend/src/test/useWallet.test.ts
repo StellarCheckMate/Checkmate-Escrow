@@ -83,6 +83,20 @@ describe('useWallet', () => {
     expect(result.current.publicKey).toBeNull();
   });
 
+  it('disconnect resets all state', async () => {
+    vi.mocked(freighter.freighterIsAvailable).mockResolvedValue(true);
+    vi.mocked(freighter.freighterGetPublicKey).mockResolvedValue(FAKE_KEY);
+
+    const { result } = renderHook(() => useWallet());
+    await act(() => result.current.connect('freighter'));
+    act(() => result.current.disconnect());
+
+    expect(result.current.connected).toBe(false);
+    expect(result.current.publicKey).toBeNull();
+    expect(result.current.type).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
   it('switches wallet without page reload', async () => {
     vi.mocked(freighter.freighterIsAvailable).mockResolvedValue(true);
     vi.mocked(freighter.freighterGetPublicKey).mockResolvedValue(FAKE_KEY);
