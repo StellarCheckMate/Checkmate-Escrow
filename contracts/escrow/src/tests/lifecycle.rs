@@ -109,6 +109,72 @@ fn test_create_match() {
 }
 
 #[test]
+fn test_duplicate_game_id_cross_platform_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "duplicate_game_id");
+
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::ChessDotCom,
+    );
+
+    assert_eq!(result, Err(Ok(Error::DuplicateGameId)));
+}
+
+#[test]
+fn test_escrow_balance_zero_after_payout() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Scenario 1: Winner payout
+    let id_winner = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "winner_game"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id_winner, &player1);
+    client.deposit(&id_winner, &player2);
+    assert_eq!(client.get_escrow_balance(&id_winner), 200);
+
+    client.submit_result(&id_winner, &Winner::Player1);
+    assert_eq!(client.get_escrow_balance(&id_winner), 0);
+
+    // Scenario 2: Draw refund
+    let id_draw = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "draw_game"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id_draw, &player1);
+    client.deposit(&id_draw, &player2);
+    assert_eq!(client.get_escrow_balance(&id_draw), 200);
+
+    client.submit_result(&id_draw, &Winner::Draw);
+    assert_eq!(client.get_escrow_balance(&id_draw), 0);
+}
+
+#[test]
 fn test_match_state_pending_immediately_after_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
