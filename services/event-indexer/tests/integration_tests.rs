@@ -1,11 +1,27 @@
 use axum::body::to_bytes;
 use axum::http::{Request, StatusCode};
+use axum::Router;
+use chrono::Utc;
+use event_indexer::{
+    api::{build_router, ApiResponse},
+    cache::EventCache,
+    db::Database,
+    rpc::SorobanRpcClient,
+};
+use rusqlite::Connection;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use rusqlite::Connection;
+use tower::ServiceExt;
+
+fn test_app() -> Router {
+    let db = Arc::new(Database::new(":memory:").expect("in-memory db"));
+    db.init_schema().expect("init schema");
+    let cache = Arc::new(RwLock::new(EventCache::new(1000)));
+    let rpc = Arc::new(SorobanRpcClient::new("http://localhost:1").expect("rpc"));
+    build_router(db, cache, rpc)
+}
 
 /// Verifies that total_event_count returns the real row count from the events table.
-/// Mirrors the logic in db.rs so the test is self-contained for a binary crate.
 #[test]
 fn test_total_event_count() {
     let conn = Connection::open_in_memory().unwrap();
@@ -44,7 +60,6 @@ fn test_total_event_count() {
 #[test]
 fn test_event_indexing() {
     let rt = tokio::runtime::Runtime::new().unwrap();
-
     rt.block_on(async {
         assert!(true, "Event indexing test placeholder");
     });
@@ -58,7 +73,6 @@ fn test_event_filtering() {
 #[test]
 fn test_cache_operations() {
     let rt = tokio::runtime::Runtime::new().unwrap();
-
     rt.block_on(async {
         assert!(true, "Cache operations test placeholder");
     });

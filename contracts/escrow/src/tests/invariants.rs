@@ -357,7 +357,7 @@ fn test_snapshot_count_monotonic() {
         &Platform::Lichess,
     );
 
-    let mut counts = vec![snapshot_count(&env, &contract_id, match_id)];
+    let mut counts: std::vec::Vec<u32> = std::vec![snapshot_count(&env, &contract_id, match_id)];
 
     client.deposit(&match_id, &player1);
     counts.push(snapshot_count(&env, &contract_id, match_id));
