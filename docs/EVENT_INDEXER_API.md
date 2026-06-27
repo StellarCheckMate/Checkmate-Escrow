@@ -47,14 +47,20 @@ REST API (Axum)
 
 **Endpoint:** `GET /health`
 
-**Description:** Check if the service is running and healthy.
+**Description:** Check if the service is running and healthy, including a live database connectivity check.
 
-**Response:**
+**Response (healthy):**
 ```json
 {
-  "success": true,
-  "data": "Event Indexer is healthy",
-  "error": null
+  "db": "ok"
+}
+```
+
+**Response (database error):**
+```json
+{
+  "db": "error",
+  "detail": "unable to open database file"
 }
 ```
 
@@ -113,14 +119,18 @@ curl "http://localhost:8080/events?player_address=GA7QSTFKSQX4K3DWORVLKFWQIHD7DK
 
 **Endpoint:** `GET /events/:match_id`
 
-**Description:** Get all events for a specific match in chronological order.
+**Description:** Get events for a specific match in chronological order. Supports pagination.
 
 **Path Parameters:**
 - `match_id` (required): The match ID to query
 
+**Query Parameters:**
+- `limit` (optional): Maximum number of results (default: 100)
+- `offset` (optional): Pagination offset (default: 0)
+
 **Example Request:**
 ```bash
-curl "http://localhost:8080/events/1"
+curl "http://localhost:8080/events/1?limit=50&offset=100"
 ```
 
 **Response:**
@@ -161,7 +171,49 @@ curl "http://localhost:8080/events/1"
 
 ---
 
-### 4. Get Match Info
+### 4. Get Matches
+
+**Endpoint:** `GET /matches`
+
+**Description:** Get all matches, optionally filtered by status.
+
+**Query Parameters:**
+- `status` (optional): Filter by match status (`pending`, `active`, `completed`, `cancelled`, `expired`)
+
+**Example Request:**
+```bash
+curl "http://localhost:8080/matches?status=active"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "match_id": 1,
+      "player1": "GA7QSTFKSQX4K3DWORVLKFWQIHD7DKD3UD5RN7NXLKPX22FQVQY5HQW",
+      "player2": "GBBD47UZQ5SYWBZMW5XJBZPMZ5XLQNB4BBFZGHKZVKNXZX2FMGD2KVYF",
+      "status": "active",
+      "winner": null,
+      "stake_amount": "1000000",
+      "token": "CABD7H7QWXSTDZ6YPMPZRJ2FLGDWP5AYWLF5PYQRB5PQV6PDBGFPMTD",
+      "game_id": "abc12345",
+      "platform": "lichess",
+      "created_ledger": 10000,
+      "completed_ledger": 10000,
+      "events": []
+    }
+  ],
+  "error": null
+}
+```
+
+**Latency:** < 50ms
+
+---
+
+### 5. Get Match Info
 
 **Endpoint:** `GET /match/:match_id`
 
@@ -209,7 +261,7 @@ curl "http://localhost:8080/match/1"
 
 ---
 
-### 5. Get Statistics
+### 6. Get Statistics
 
 **Endpoint:** `GET /stats`
 
