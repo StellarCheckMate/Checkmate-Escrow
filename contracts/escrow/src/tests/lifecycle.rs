@@ -109,6 +109,34 @@ fn test_create_match() {
 }
 
 #[test]
+fn test_duplicate_game_id_cross_platform_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "duplicate_game_id");
+
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &game_id,
+        &Platform::ChessDotCom,
+    );
+
+    assert_eq!(result, Err(Ok(Error::DuplicateGameId)));
+}
+
+#[test]
 fn test_match_state_pending_immediately_after_create_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
