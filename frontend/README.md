@@ -34,6 +34,32 @@ During local development, requests to `/api` are automatically proxied to the ev
 npm test
 ```
 
+### Running tests with coverage
+
+To run tests with coverage reporting:
+
+```bash
+npm run test:coverage
+```
+
+Or using the longer form:
+
+```bash
+npm test -- --coverage
+```
+
+This will generate:
+- Console output showing coverage percentages
+- HTML coverage report in the `coverage/` directory
+- JSON coverage data for CI/CD integration
+
+The project enforces minimum coverage thresholds:
+- Lines: 70%
+- Functions: 70%
+- Branches: 60%
+
+Tests will fail if coverage falls below these thresholds.
+
 ### Building for production
 
 ```bash
