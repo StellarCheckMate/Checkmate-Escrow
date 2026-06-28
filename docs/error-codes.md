@@ -86,7 +86,8 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- deposit \
 | 17 | `TokenNotAllowed` | [`create_match`](../contracts/escrow/src/lib.rs) | The token allowlist is active (at least one token was ever added) and the supplied token isn't on it. | Admin must call `add_allowed_token` for that token, or the caller should pick an already-allowed one via `get_allowed_tokens`. | `create_match` with an unlisted custom token after the admin enabled allowlisting → `#17`. |
 | 18 | `InvalidAddress` | [`initialize`](../contracts/escrow/src/lib.rs), [`update_oracle`](../contracts/escrow/src/lib.rs) | The `oracle`/`new_oracle` address equals the escrow contract's own address. | Supply a distinct external account or contract address. | `initialize` called with `oracle = <ESCROW_CONTRACT_ID itself>` → `#18`. |
 | 19 | `MatchAlreadyActive` | [`cancel_match`](../contracts/escrow/src/lib.rs) | `cancel_match` was called on a match that's already `Active` (both players deposited) — voluntary cancellation is pre-activation only. | Let the match proceed to `submit_result`, or wait for `expire_match` eligibility if it stalls. Active matches cannot be cancelled by players. | A player tries to back out after both stakes are in → `#19`. |
-| 20 | `InvalidTimeout` | [`set_match_timeout`](../contracts/escrow/src/lib.rs) | `timeout` is outside `[MIN_MATCH_TIMEOUT_LEDGERS (17,280), MAX_MATCH_TIMEOUT_LEDGERS (1,555,200)]` (1–90 days). | Pass a timeout within the 1–90 day ledger range. | `set_match_timeout` with `timeout = 100` (≈8 minutes) → `#20`. |
+| 20 | `InvalidTimeout` | [`set_match_timeout`](../contracts/escrow/src/lib.rs) | `timeout` is outside `[17,280, 1,555,200]` ledgers (1–90 days @ ~6 sec/ledger, or ~1 min – ~104 days wall-clock). | Pass a timeout within the 1–90 day ledger range. Use `MIN_MATCH_TIMEOUT_LEDGERS = 17,280` (1 day) and `MAX_MATCH_TIMEOUT_LEDGERS = 1,555,200` (90 days) as bounds. | `set_match_timeout` with `timeout = 100` (≈10 minutes) → `#20`. |
+| 21 | `SnapshotNotFound` | [`submit_result`](../contracts/escrow/src/lib.rs) (ledger snapshot verification) | An internal ledger snapshot required to verify the oracle's result proof is not available — typically when the result is submitted too far in the past (TTL expired) or ledger data was purged. | Resubmit the result sooner after the game finishes. Ensure oracle service processes results within a few hours of completion, not days later. | Oracle attempts to verify a result 1+ months after the game ended → `#21` (ledger snapshot purged). |
 
 ### Fatal errors
 
@@ -147,7 +148,7 @@ Use this when you only know the *symptom*, not the code.
 
 This document covers all variants present in source as of commit `81a3793`:
 
-- Escrow (`contracts/escrow/src/errors.rs`): 20/20 variants documented (17 recoverable, 2 fatal, 2 reserved/unused).
+- Escrow (`contracts/escrow/src/errors.rs`): 22/22 variants documented (19 recoverable, 2 fatal, 1 reserved/unused).
 - Oracle (`contracts/oracle/src/errors.rs`): 10/10 variants documented (10 recoverable).
 
 If `cargo build` or a code review surfaces a new variant in either

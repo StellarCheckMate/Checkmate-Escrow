@@ -156,6 +156,7 @@ Prefer to learn by watching or testing yourself?
 
 - [Interactive Tutorial](docs/tutorial-step-by-step.md) — guided, hands-on intro for new users
 - [Tutorial Quiz & Checklist](docs/tutorial-quiz.md) — verify your understanding
+- [FAQ](docs/faq.md) — common questions and answers
 - [Architecture Overview](docs/architecture.md)
 - [Oracle Design](docs/oracle.md)
 - [Threat Model & Security](docs/security.md)
