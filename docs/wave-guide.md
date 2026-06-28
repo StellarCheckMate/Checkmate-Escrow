@@ -16,13 +16,15 @@ The Drips Wave program rewards contributors for fixing issues in the Checkmate-E
 
 ## Point Values
 
-Issues are assigned point values based on complexity and impact:
+Issues are assigned point values based on complexity and impact. Earn points by completing wave-ready issues and redeem them for rewards.
 
-- **Low (1-5 points)**: Simple bug fixes, documentation updates, minor improvements
-- **Medium (6-15 points)**: Feature additions, moderate refactoring, test coverage improvements
-- **High (16-30 points)**: Major features, significant architectural changes, security fixes
+| Label | Points | Example Task |
+|-------|--------|--------------|
+| `trivial` | 100 | Documentation updates, simple tests, minor bug fixes |
+| `medium` | 150 | Oracle helpers, validation logic, moderate features |
+| `high` | 200 | Core escrow logic, Oracle integrations, security enhancements |
 
-Point values are listed in each wave-ready issue description.
+Point values are listed in each wave-ready issue description. See the [README.md](../README.md#-drips-wave-contributors) for the full roadmap of funded work.
 
 ## Submission Process
 
