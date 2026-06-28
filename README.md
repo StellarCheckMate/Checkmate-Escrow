@@ -67,6 +67,8 @@ Pending ──► Active ──► Completed
 
 ## 🛠️ Quick Start
 
+**New to Checkmate-Escrow?** Start with the [Local Development Setup](docs/local-dev.md) guide for step-by-step instructions on building, testing, and running the full stack locally.
+
 ### Prerequisites
 
 - Rust (1.70+)
