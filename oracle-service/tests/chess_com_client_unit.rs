@@ -5,18 +5,34 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
 async fn validate_game_id_rejects_empty() {
-    assert!(ChessComClient::validate_game_id("").is_err());
+    let err = ChessComClient::validate_game_id("").unwrap_err();
+    assert!(matches!(err, ChessComError::InvalidGameId));
 }
 
 #[tokio::test]
 async fn validate_game_id_rejects_non_numeric() {
-    assert!(ChessComClient::validate_game_id("abc").is_err());
-    assert!(ChessComClient::validate_game_id("12a").is_err());
+    let err = ChessComClient::validate_game_id("abc").unwrap_err();
+    assert!(matches!(err, ChessComError::InvalidGameId));
+    let err = ChessComClient::validate_game_id("12a").unwrap_err();
+    assert!(matches!(err, ChessComError::InvalidGameId));
 }
 
 #[tokio::test]
 async fn validate_game_id_accepts_numeric() {
     ChessComClient::validate_game_id("123456789").unwrap();
+}
+
+#[tokio::test]
+async fn validate_game_id_accepts_very_long_numeric_string() {
+    let long_id = "1".repeat(1000);
+    ChessComClient::validate_game_id(&long_id).unwrap();
+}
+
+#[tokio::test]
+async fn validate_game_id_rejects_very_long_non_numeric_string() {
+    let long_invalid = "1".repeat(999) + "x";
+    let err = ChessComClient::validate_game_id(&long_invalid).unwrap_err();
+    assert!(matches!(err, ChessComError::InvalidGameId));
 }
 
 #[tokio::test]
