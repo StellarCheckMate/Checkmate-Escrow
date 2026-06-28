@@ -34,6 +34,32 @@ During local development, requests to `/api` are automatically proxied to the ev
 npm test
 ```
 
+### Updating Snapshots
+
+When component output changes intentionally (e.g., updating UI text, modifying component structure), snapshot tests will fail. To update snapshots after verifying the changes are correct:
+
+```bash
+npm test -- --update-snapshots
+```
+
+Or update snapshots in watch mode:
+
+```bash
+npm run test:watch -- --update-snapshots
+```
+
+**When to update snapshots:**
+- ✅ You've intentionally changed component output (markup, text, styling)
+- ✅ You've reviewed the snapshot diff and confirmed the changes are correct
+- ✅ The change is part of a planned feature or refactor
+
+**When NOT to update snapshots:**
+- ❌ A test is failing and you haven't made any intentional changes
+- ❌ You haven't reviewed what changed in the snapshot
+- ❌ The failure might indicate a bug or unintended side effect
+
+**Tip:** Always review snapshot diffs carefully. A failing snapshot test is often catching a real issue. Only update snapshots when you're certain the new output is correct.
+
 ### Building for production
 
 ```bash
