@@ -285,22 +285,36 @@ wallet), so the escrow balance for that match is <code>0</code>.
 
 ---
 
-## 🎬 Video walkthroughs
+## 🎬 Video Walkthroughs
 
-Short screen recordings of each step. Recordings are produced with
-[OBS Studio](https://obsproject.com/) or [Loom](https://www.loom.com/) and
-checked into `docs/assets/tutorial/` (or linked below once published).
+Short screen recordings of the full tutorial flow and individual steps. Each walkthrough shows setup, match creation, funding, and payout verification.
 
-| Walkthrough | Length | Link |
-|-------------|--------|------|
-| Full run (setup → payout) | ~12 min | _Add link — see [assets guide](assets/tutorial/README.md)_ |
-| Step 1 — Create a match | ~2 min | _Add link_ |
-| Step 2 — Deposit funds | ~2 min | _Add link_ |
-| Step 3 — Check result & payout | ~3 min | _Add link_ |
+### Planned Walkthroughs
 
-> 📹 **Contributing a recording?** Follow the capture checklist in the
-> [assets guide](assets/tutorial/README.md) so recordings stay consistent
-> (same window size, redacted secret keys, captions on each step).
+| Title | Duration | Status |
+|-------|----------|--------|
+| **Full Tutorial Run** — From setup to payout, end-to-end | ~15 min | [Coming Soon] |
+| **Part 1: Setup & Deploy** — Building contracts and initializing on testnet | ~6 min | [Coming Soon] |
+| **Part 2: Create & Fund a Match** — Creating a match and depositing stakes | ~5 min | [Coming Soon] |
+| **Part 3: Verify Result & Claim Winnings** — Oracle submission and automatic payout | ~4 min | [Coming Soon] |
+
+### Recording Guidelines
+
+Recordings are produced with [OBS Studio](https://obsproject.com/) or [Loom](https://www.loom.com/) and follow the checklist in [docs/assets/tutorial/README.md](assets/tutorial/README.md):
+
+- Consistent window size and zoom level
+- Redacted secret keys and private data
+- Captions or text overlays for each major step
+- Clear audio or screen annotations
+
+### Contributing a Walkthrough
+
+We welcome video contributions! To submit:
+
+1. Record your walkthrough following the guidelines above
+2. Save to `docs/assets/tutorial/` with a descriptive filename (e.g., `setup-and-deploy.mp4`)
+3. Update the table above with your link
+4. Submit a PR with the video and any new documentation
 
 ---
 
