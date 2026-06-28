@@ -66,3 +66,51 @@ impl EventCache {
         self.events.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn make_event(id: &str) -> IndexedEvent {
+        IndexedEvent {
+            id: id.to_string(),
+            ledger_sequence: 1,
+            match_id: 1,
+            event_type: "test".to_string(),
+            player1: None,
+            player2: None,
+            status: None,
+            winner: None,
+            stake_amount: None,
+            token: None,
+            game_id: None,
+            platform: None,
+            timestamp: Utc::now(),
+            txn_hash: None,
+        }
+    }
+
+    #[test]
+    fn test_eviction_at_capacity() {
+        let capacity = 2;
+        let mut cache = EventCache::new(capacity);
+
+        cache.insert(make_event("evt-1"));
+        cache.insert(make_event("evt-2"));
+        assert_eq!(cache.size(), 2);
+
+        // Inserting beyond capacity must evict one existing entry
+        cache.insert(make_event("evt-3"));
+
+        assert_eq!(cache.size(), capacity, "cache must not exceed max_size after eviction");
+        assert!(cache.get("evt-3").is_some(), "newly inserted event must be present");
+
+        // Exactly one of the two original entries was evicted
+        let surviving_old = ["evt-1", "evt-2"]
+            .iter()
+            .filter(|id| cache.get(id).is_some())
+            .count();
+        assert_eq!(surviving_old, 1, "exactly one old entry must survive eviction");
+    }
+}
