@@ -41,12 +41,12 @@ stateDiagram-v2
 
 | From | To | Triggering Function | Authorized Caller | Conditions | Key Errors |
 |---|---|---|---|---|---|
-| `*` | `Pending` | `create_match` | `player1` | Contract not paused; `stake_amount > 0`; `game_id` non-empty and unique; token on allowlist (if enforced). | `ContractPaused`, `InvalidAmount`, `AlreadyExists`, `InvalidGameId`, `InvalidToken` |
-| `Pending` | `Pending` | `deposit` | `player1` or `player2` | Match exists; contract not paused; caller has not already deposited; transfers `stake_amount` to escrow. | `ContractPaused`, `MatchNotFound`, `InvalidState`, `Unauthorized`, `AlreadyFunded` |
-| `Pending` | `Active` | `deposit` | `player1` or `player2` | Same as above, **and** this deposit completes funding (both `player1_deposited` and `player2_deposited` are now `true`). | (same as single deposit) |
+| `*` | `Pending` | `create_match` | `player1` | Contract not paused; `stake_amount > 0`; `game_id` non-empty and unique; token on allowlist (if enforced). | `ContractPaused`, `InvalidAmount`, `Al[...]
+| `Pending` | `Pending` | `deposit` | `player1` or `player2` | Match exists; contract not paused; caller has not already deposited; transfers `stake_amount` to escrow. | `ContractPaused`, `MatchNo[...]
+| `Pending` | `Active` | `deposit` | `player1` or `player2` | Same as above, **and** this deposit completes funding (both `player1_deposited` and `player2_deposited` are now `true`). | (same as si[...]
 | `Pending` | `Cancelled` | `cancel_match` | `player1` or `player2` | Match is in `Pending` state; refunds any deposited stakes. | `MatchNotFound`, `MatchAlreadyActive`, `Unauthorized` |
-| `Pending` | `Cancelled` | `expire_match` | Anyone | Match is in `Pending` state; ledger timeout (`MatchTimeout`, default ~24h) has elapsed since `created_ledger`; refunds any deposited stakes. | `MatchNotFound`, `InvalidState`, `MatchNotExpired` |
-| `Active` | `Completed` | `submit_result` | Oracle address stored at initialization | Match is in `Active` state; contract not paused; both players have deposited; oracle auth required. **Payout is executed inline** (winner receives `2 * stake_amount`, or each player receives `stake_amount` on draw). | `Unauthorized`, `ContractPaused`, `MatchNotFound`, `NotFunded`, `InvalidState` |
+| `Pending` | `Cancelled` | `expire_match` | Anyone | Match is in `Pending` state; ledger timeout (`MatchTimeout`, default ~24h) has elapsed since `created_ledger`; refunds any deposited stakes. |[...]
+| `Active` | `Completed` | `submit_result` | Oracle address stored at initialization | Match is in `Active` state; contract not paused; both players have deposited; oracle auth required. **Payout [...]
 | `Completed` | — | — | — | Terminal state. No further transitions. | — |
 | `Cancelled` | — | — | — | Terminal state. No further transitions. | — |
 
@@ -109,7 +109,7 @@ Balance snapshots provide an audit trail of a match's escrow balance at key life
 | Field              | Type            | Description |
 |--------------------|-----------------|-------------|
 | `match_id`         | `u64`           | The match this snapshot belongs to. |
-| `index`            | `u32`           | Monotonically increasing position in the full chronological sequence. Storage keys are computed as `slot = index % MAX_SNAPSHOTS_PER_MATCH` (8). May have gaps if older snapshots were pruned. |
+| `index`            | `u32`           | Monotonically increasing position in the full chronological sequence. Storage keys are computed as `slot = index % MAX_SNAPSHOTS_PER_MATCH` (8). May have [...]
 | `reason`           | `SnapshotReason`  | Lifecycle event that triggered the snapshot: `Created`, `Deposit`, `Completed`, or `Cancelled`. |
 | `ledger`           | `u32`           | Ledger sequence at snapshot time. |
 | `token`            | `Address`       | Token contract address used for staking. |
@@ -127,9 +127,9 @@ Snapshots are recorded automatically at key lifecycle transitions:
 - **`Completed`** — when `submit_result` executes the payout
 - **`Cancelled`** — when cancellation occurs (before or after activation)
 
-The ring buffer has a fixed capacity of `MAX_SNAPSHOTS_PER_MATCH = 8` slots per match. Snapshots are stored at keys `DataKey::Snapshot(match_id, slot)` where `slot = index % MAX_SNAPSHOTS_PER_MATCH`. When the buffer fills, the oldest entry is silently overwritten — this is the storage-pruning mechanism.
+The ring buffer has a fixed capacity of `MAX_SNAPSHOTS_PER_MATCH = 8` slots per match. Snapshots are stored at keys `DataKey::Snapshot(match_id, slot)` where `slot = index % MAX_SNAPSHOTS_PER_MAT[...]
 
-**Interpreting the `index` field:** The `index` is monotonically increasing and never resets, enabling callers to detect when pruning has occurred. If `get_balance_snapshots` returns snapshots with indices like `[5, 6, 7, 8]`, you know snapshots `0` through `4` were pruned because only 8 slots are retained. The `SnapshotCount(match_id)` tracks the total ever recorded, allowing calculation of the actual sequence range.
+**Interpreting the `index` field:** The `index` is monotonically increasing and never resets, enabling callers to detect when pruning has occurred. If `get_balance_snapshots` returns snapshots wi[...]
 
 ### Contract Functions
 
@@ -154,7 +154,7 @@ The ring buffer has a fixed capacity of `MAX_SNAPSHOTS_PER_MATCH = 8` slots per 
 | Function | Signature | Description |
 |----------|-----------|-------------|
 
-| `submit_result` | `(match_id: u64, winner: Winner)` | Oracle submits the verified match result. Payout (or draw refund) is executed atomically in the same transaction — there are no separate `verify_result` or `execute_payout` functions. |
+| `submit_result` | `(match_id: u64, winner: Winner)` | Oracle submits the verified match result. Payout (or draw refund) is executed atomically in the same transaction — there are no separate [...]
 
 #### Read Indexes
 
@@ -177,7 +177,7 @@ The ring buffer has a fixed capacity of `MAX_SNAPSHOTS_PER_MATCH = 8` slots per 
 
 ### Player-Match Index (`get_player_matches`)
 
-`get_player_matches` reads a `Vec<u64>` stored under `DataKey::PlayerMatches(player)` in persistent storage. The index is append-only: a match ID is added when `create_match` is called and is **never removed**, regardless of the match outcome. This means:
+`get_player_matches` reads a `Vec<u64>` stored under `DataKey::PlayerMatches(player)` in persistent storage. The index is append-only: a match ID is added when `create_match` is called and is **n[...]
 
 - The list grows monotonically over a player's lifetime.
 - It includes `Completed` and `Cancelled` matches as well as live ones.
@@ -185,19 +185,19 @@ The ring buffer has a fixed capacity of `MAX_SNAPSHOTS_PER_MATCH = 8` slots per 
 
 ### Pending-Match Query (`get_pending_matches`)
 
-`get_pending_matches` scans all created matches and returns those currently in `Pending` state. A pending match has been created but has not yet reached full funding; it may have zero, one, or both deposits recorded, but it remains pending until the second player deposits.
+`get_pending_matches` scans all created matches and returns those currently in `Pending` state. A pending match has been created but has not yet reached full funding; it may have zero, one, or bo[...]
 
 ### Active-Match Query (`get_active_matches`)
 
-`get_active_matches` scans all created matches and returns those currently in `Active` state. An active match is fully funded and ready for result submission. It excludes pending, completed, and cancelled matches.
+`get_active_matches` scans all created matches and returns those currently in `Active` state. An active match is fully funded and ready for result submission. It excludes pending, completed, and [...]
 
 > **Note:** Because these query methods scan per-match storage, off-chain consumers should still verify a match's current state with `get_match(match_id)` before taking critical action.
 
 ### TTL Caveats
 
-`get_player_matches` is a persistent append-only index stored under `DataKey::PlayerMatches(player)`. The index is updated on `create_match` and carries a TTL of `MATCH_TTL_LEDGERS` (~30 days at 5 s/ledger). If no matches are created or resolved for a player for ~30 days, that player-specific index may expire and `get_player_matches` can return an empty list.
+`get_player_matches` is a persistent append-only index stored under `DataKey::PlayerMatches(player)`. The index is updated on `create_match` and carries a TTL of `MATCH_TTL_LEDGERS` (~30 days at [...]
 
-`get_pending_matches` and `get_active_matches` are filtered getters that scan all `Match` records by state. They do not rely on separate persistent index entries and therefore reflect current match state directly from stored match data.
+`get_pending_matches` and `get_active_matches` are filtered getters that scan all `Match` records by state. They do not rely on separate persistent index entries and therefore reflect current mat[...]
 
 Individual `Match` records in persistent storage follow the same ~30-day TTL and are extended on every write to that match.
 
@@ -205,7 +205,7 @@ Off-chain indexers should not rely solely on these on-chain values for long-term
 
 ### Pagination
 
-`get_pending_matches` and `get_active_matches` return the full filtered result set in a single call. Use `get_pending_matches_paginated(player, offset, limit)` or `get_active_matches_paginated(offset, limit)` to fetch bounded pages of pending or active matches respectively.
+`get_pending_matches` and `get_active_matches` return the full filtered result set in a single call. Use `get_pending_matches_paginated(player, offset, limit)` or `get_active_matches_paginated(of[...]
 
 `get_player_matches` also returns the full vector of match IDs for a player. For large player histories, apply client-side slicing on the returned `Vec<u64>`.
 
@@ -214,4 +214,36 @@ Off-chain indexers should not rely solely on these on-chain values for long-term
 let all_ids = client.get_player_matches(&player);
 let page: Vec<u64> = all_ids.iter().skip(40).take(20).collect();
 ```
+
+## Glossary
+
+This glossary defines terms used throughout this repository and clarifies how they're used in the context of Checkmate-Escrow.
+
+- Ledger
+  - In Stellar, a ledger is a single committed state of the network (a block of transactions). Each ledger has a monotonically increasing sequence number. In this project we record `created_ledger` and `completed_ledger` to timestamp on-chain events and to implement TTL/timeout checks (e.g., `expire_match` compares the current ledger sequence against a stored ledger + TTL).
+
+- TTL (Time-To-Live)
+  - TTL is the duration a storage entry is retained on-chain, expressed in ledger counts in this project (e.g., `MATCH_TTL_LEDGERS` ≈ 30 days worth of ledgers). When a record's TTL expires the Soroban host may prune it; writing to a record typically extends its TTL.
+
+- Instance Storage
+  - Instance storage refers to storage scoped to a specific contract instance (the contract's own on-chain key-value entries). These are the per-match and per-contract data entries the contract reads and writes at runtime. Instance storage entries may be subject to TTL and pruning rules.
+
+- Persistent Storage
+  - Persistent storage denotes the durable on-chain key/value entries that the contract intentionally maintains across transactions (e.g., `DataKey::PlayerMatches(player)`, `Match` records, and snapshots). "Persistent" here is relative — entries are durable while within their TTL window and are extended on writes.
+
+- Oracle
+  - An off-chain service (and its on-chain oracle contract) responsible for fetching and verifying match results from external chess platforms (Lichess/Chess.com) and submitting authenticated results to the escrow contract via `submit_result`. The escrow contract trusts only the configured oracle address for result submissions.
+
+- Escrow
+  - The escrow contract is the on-chain smart contract that holds player stakes while a match is in progress, enforces the match lifecycle (create → deposit → active → completed/cancelled), and performs payouts when a verified result is submitted.
+
+- Match
+  - A match represents a wagered game between two players. It contains metadata (players, stake, token, external `game_id`, `platform`) and lifecycle state (`Pending`, `Active`, `Completed`, `Cancelled`). Matches are stored in contract storage and referenced by `match_id`.
+
+- Payout
+  - The transfer of escrowed funds to the winning player(s) once a match result is verified. In this project, payout execution occurs atomically within `submit_result` so a separate `execute_payout` call is not required.
+
+- Wave
+  - A wave is a single logical processing pass or batch of related on-chain actions (for example: a set of oracle submissions, a group of payouts, or a processing tick from an off-chain indexer/operator). In Checkmate-Escrow we use the term informally to describe a discrete round of result processing or payout activity; each wave should be idempotent and auditable via ledger snapshots and contract events.
+
 
