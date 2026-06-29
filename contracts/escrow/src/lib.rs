@@ -130,11 +130,10 @@ impl EscrowContract {
             if count == 0 {
                 env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
             }
-            Self::append_allowed_token(&env, &token);
         } else {
             env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
-            Self::append_allowed_token(&env, &token);
         }
+        Self::append_allowed_token(&env, &token);
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("token_add")),
@@ -592,11 +591,12 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state == MatchState::Active {
-            return Err(Error::MatchAlreadyActive);
-        }
         if m.state != MatchState::Pending {
-            return Err(Error::InvalidState);
+            return Err(if m.state == MatchState::Active {
+                Error::MatchAlreadyActive
+            } else {
+                Error::InvalidState
+            });
         }
 
         // Either player1 or player2 can cancel a pending match
