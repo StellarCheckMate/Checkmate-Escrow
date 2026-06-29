@@ -12,6 +12,7 @@ pub mod helpers;
 
 mod admin;
 mod events;
+mod fuzz;
 mod index;
 mod invariants;
 mod lifecycle;
