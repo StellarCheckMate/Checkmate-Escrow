@@ -25,6 +25,15 @@ pub enum Winner {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlayerTier {
+    Bronze,
+    Silver,
+    Gold,
+    Platinum,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Match {
     pub id: u64,
