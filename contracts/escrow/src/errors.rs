@@ -24,4 +24,5 @@ pub enum Error {
     MatchAlreadyActive = 19,
     InvalidTimeout = 20,
     SnapshotNotFound = 21,
+    InvalidConversionRate = 22,
 }

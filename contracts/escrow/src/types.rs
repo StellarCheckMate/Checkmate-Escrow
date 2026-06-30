@@ -41,6 +41,8 @@ pub struct Match {
     pub created_ledger: u32,
     /// Ledger sequence number when match reached terminal state (Completed or Cancelled).
     pub completed_ledger: Option<u32>,
+    pub conversion_rate: i128,
+    pub token_b: Option<Address>,
 }
 
 #[contracttype]

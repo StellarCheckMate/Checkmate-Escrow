@@ -20,6 +20,7 @@ mod security;
 mod snapshots;
 mod ttl;
 mod token_allowlist;
+mod multi_token;
 
 // ── Base fixture ─────────────────────────────────────────────────────────────
 
