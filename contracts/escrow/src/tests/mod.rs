@@ -43,6 +43,9 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
+    client.update_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+    });
 
     (
         env,
