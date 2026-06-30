@@ -78,6 +78,33 @@ jobs:
           cd contracts/escrow && cargo build --target wasm32-unknown-unknown --release
           cd ../oracle && cargo build --target wasm32-unknown-unknown --release
 
+  lighthouse-accessibility:
+    name: Lighthouse Accessibility Audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Run Lighthouse CI accessibility audit
+        run: npx --yes @lhci/cli@0.14.x autorun
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+
   benchmark:
     name: Performance Benchmarks
     runs-on: ubuntu-latest
