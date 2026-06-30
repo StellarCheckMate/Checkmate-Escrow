@@ -5,7 +5,7 @@ pub mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
-use types::{BalanceSnapshot, DataKey, Match, MatchState, Platform, SnapshotReason, Winner};
+use types::{BalanceSnapshot, DataKey, Match, MatchState, Platform, ProtocolConfig, SnapshotReason, Winner};
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -61,6 +61,11 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
         env.storage().instance().set(&DataKey::AllowedTokenCount, &0u32);
+        let config = ProtocolConfig {
+            cancellation_fee_basis_points: 100,
+            treasury: admin.clone(),
+        };
+        env.storage().instance().set(&DataKey::ProtocolConfig, &config);
         env.events().publish(
             (Symbol::new(&env, "escrow"), symbol_short!("init")),
             (oracle, admin),
@@ -96,6 +101,23 @@ impl EscrowContract {
         env.events()
             .publish((Symbol::new(&env, "admin"), symbol_short!("unpaused")), ());
         Ok(())
+    }
+
+    /// Update the protocol configuration.
+    pub fn set_protocol_config(env: Env, config: ProtocolConfig) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::ProtocolConfig, &config);
+        Ok(())
+    }
+
+    /// Get the current protocol configuration.
+    pub fn get_protocol_config(env: Env) -> Result<ProtocolConfig, Error> {
+        env.storage().instance().get(&DataKey::ProtocolConfig).ok_or(Error::NotInitialized)
     }
 
     /// Add a token to the allowlist — admin only.
@@ -611,11 +633,33 @@ impl EscrowContract {
 
         let client = token::Client::new(&env, &m.token);
 
+        let config: ProtocolConfig = env.storage().instance().get(&DataKey::ProtocolConfig).unwrap_or(ProtocolConfig {
+            cancellation_fee_basis_points: 0,
+            treasury: env.current_contract_address(),
+        });
+        
+        let fee_amount = if config.cancellation_fee_basis_points > 0 {
+            m.stake_amount.checked_mul(config.cancellation_fee_basis_points as i128).ok_or(Error::Overflow)? / 10_000
+        } else {
+            0
+        };
+        let refund_amount = m.stake_amount.checked_sub(fee_amount).ok_or(Error::Overflow)?;
+
         if m.player1_deposited {
-            client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+            if is_p1 && fee_amount > 0 {
+                client.transfer(&env.current_contract_address(), &m.player1, &refund_amount);
+                client.transfer(&env.current_contract_address(), &config.treasury, &fee_amount);
+            } else {
+                client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+            }
         }
         if m.player2_deposited {
-            client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+            if is_p2 && fee_amount > 0 {
+                client.transfer(&env.current_contract_address(), &m.player2, &refund_amount);
+                client.transfer(&env.current_contract_address(), &config.treasury, &fee_amount);
+            } else {
+                client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+            }
         }
 
         m.state = MatchState::Cancelled;
