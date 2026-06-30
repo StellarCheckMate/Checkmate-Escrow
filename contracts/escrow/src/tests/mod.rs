@@ -16,6 +16,7 @@ mod index;
 mod invariants;
 mod lifecycle;
 mod pagination;
+mod player_balance_history;
 mod security;
 mod snapshots;
 mod ttl;
