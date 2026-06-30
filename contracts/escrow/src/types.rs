@@ -5,6 +5,7 @@ use soroban_sdk::{contracttype, Address, String};
 pub enum MatchState {
     Pending,   // created, awaiting deposits
     Active,    // both players deposited, game in progress
+    Paused,    // game paused (extended match)
     Completed, // result submitted, payout executed
     Cancelled, // cancelled before activation
 }
@@ -41,6 +42,10 @@ pub struct Match {
     pub created_ledger: u32,
     /// Ledger sequence number when match reached terminal state (Completed or Cancelled).
     pub completed_ledger: Option<u32>,
+    /// Ledger sequence number when match was most recently paused.
+    pub paused_ledger: Option<u32>,
+    /// Total number of ledgers the match has spent in Paused state (accumulated across multiple pause/resume cycles).
+    pub total_pause_duration: u32,
 }
 
 #[contracttype]
@@ -73,6 +78,8 @@ pub enum DataKey {
 pub enum SnapshotReason {
     Created,
     Deposit,
+    Paused,
+    Resumed,
     Completed,
     Cancelled,
 }

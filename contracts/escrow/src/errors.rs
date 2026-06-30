@@ -24,4 +24,7 @@ pub enum Error {
     MatchAlreadyActive = 19,
     InvalidTimeout = 20,
     SnapshotNotFound = 21,
+    MatchNotPaused = 22,
+    MatchAlreadyPaused = 23,
+    InvalidPauseState = 24,
 }
