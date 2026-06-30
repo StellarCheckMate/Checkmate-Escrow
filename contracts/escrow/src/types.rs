@@ -25,6 +25,13 @@ pub enum Winner {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolConfig {
+    pub cancellation_fee_basis_points: u32,
+    pub treasury: Address,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Match {
     pub id: u64,
@@ -65,6 +72,7 @@ pub enum DataKey {
     Snapshot(u64, u32),
     /// Total number of snapshots ever recorded for a match (monotonic, never reset).
     SnapshotCount(u64),
+    ProtocolConfig,
 }
 
 /// The lifecycle event that triggered a balance snapshot.
