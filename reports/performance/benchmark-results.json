@@ -1,0 +1,110 @@
+{
+  "generated_by": "contracts/escrow/tests/benchmarks.rs",
+  "results": [
+    {
+      "name": "deposit (1st, Pending -> Pending)",
+      "sample_size": 1,
+      "cpu_instructions": 284551,
+      "memory_bytes": 42528,
+      "wall_time_micros": 2653
+    },
+    {
+      "name": "cancel_match (Pending, 1 deposit refunded)",
+      "sample_size": 1,
+      "cpu_instructions": 280540,
+      "memory_bytes": 40132,
+      "wall_time_micros": 1589
+    },
+    {
+      "name": "submit_result (Active -> Completed, 1 active match)",
+      "sample_size": 1,
+      "cpu_instructions": 333701,
+      "memory_bytes": 45021,
+      "wall_time_micros": 1554
+    },
+    {
+      "name": "deposit (activation: appends to ActiveMatches index)",
+      "sample_size": 1,
+      "cpu_instructions": 348599,
+      "memory_bytes": 52842,
+      "wall_time_micros": 1749
+    },
+    {
+      "name": "deposit (activation: appends to ActiveMatches index)",
+      "sample_size": 10,
+      "cpu_instructions": 479550,
+      "memory_bytes": 112944,
+      "wall_time_micros": 2528
+    },
+    {
+      "name": "deposit (activation: appends to ActiveMatches index)",
+      "sample_size": 100,
+      "cpu_instructions": 1608087,
+      "memory_bytes": 713964,
+      "wall_time_micros": 9838
+    },
+    {
+      "name": "submit_result (removes from ActiveMatches index)",
+      "sample_size": 1,
+      "cpu_instructions": 333713,
+      "memory_bytes": 45054,
+      "wall_time_micros": 1592
+    },
+    {
+      "name": "submit_result (removes from ActiveMatches index)",
+      "sample_size": 10,
+      "cpu_instructions": 472084,
+      "memory_bytes": 106164,
+      "wall_time_micros": 2450
+    },
+    {
+      "name": "submit_result (removes from ActiveMatches index)",
+      "sample_size": 100,
+      "cpu_instructions": 1730403,
+      "memory_bytes": 752904,
+      "wall_time_micros": 10200
+    },
+    {
+      "name": "cancel_match (Pending, no deposits)",
+      "sample_size": 1,
+      "cpu_instructions": 129527,
+      "memory_bytes": 24039,
+      "wall_time_micros": 721
+    },
+    {
+      "name": "cancel_match (Pending, no deposits)",
+      "sample_size": 10,
+      "cpu_instructions": 210570,
+      "memory_bytes": 58815,
+      "wall_time_micros": 1191
+    },
+    {
+      "name": "cancel_match (Pending, no deposits)",
+      "sample_size": 100,
+      "cpu_instructions": 934292,
+      "memory_bytes": 406575,
+      "wall_time_micros": 5954
+    },
+    {
+      "name": "get_active_matches (scans 0..match_count)",
+      "sample_size": 1,
+      "cpu_instructions": 91460,
+      "memory_bytes": 10595,
+      "wall_time_micros": 402
+    },
+    {
+      "name": "get_active_matches (scans 0..match_count)",
+      "sample_size": 10,
+      "cpu_instructions": 413269,
+      "memory_bytes": 45452,
+      "wall_time_micros": 1989
+    },
+    {
+      "name": "get_active_matches (scans 0..match_count)",
+      "sample_size": 100,
+      "cpu_instructions": 3944983,
+      "memory_bytes": 429662,
+      "wall_time_micros": 19363
+    }
+  ]
+}

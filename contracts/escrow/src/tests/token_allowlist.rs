@@ -1,0 +1,287 @@
+use super::*;
+
+#[test]
+fn test_is_token_allowed_returns_false_for_unknown_tokens() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let unknown_token = Address::generate(&env);
+    let result = client.is_token_allowed(&unknown_token);
+    assert!(!result, "unknown token should not be allowed");
+}
+
+#[test]
+fn test_is_token_allowed_returns_true_for_allowed_tokens() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+    let result = client.is_token_allowed(&token);
+    assert!(result, "allowed token should be reported as allowed");
+}
+
+#[test]
+fn test_add_allowed_token_emits_event() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        soroban_sdk::symbol_short!("token_add").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "token_add event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_token: Address = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_token, token);
+}
+
+#[test]
+fn test_removed_tokens_are_rejected_when_other_allowed_tokens_remain() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+    let asset_client2 = StellarAssetClient::new(&env, &token2_addr);
+    asset_client2.mint(&player1, &1000);
+    asset_client2.mint(&player2, &1000);
+
+    client.add_allowed_token(&token);
+    client.add_allowed_token(&token2_addr);
+    client.remove_allowed_token(&token);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "removed_token_game"),
+        &Platform::Lichess,
+    );
+    assert!(result.is_err(), "create_match should reject removed token");
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token2_addr,
+        &String::from_str(&env, "remaining_token_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id, 0, "remaining allowed token should still be accepted");
+}
+
+#[test]
+fn test_get_allowed_tokens_returns_empty_before_any_tokens_added() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let allowed_tokens = client.get_allowed_tokens();
+    assert_eq!(allowed_tokens.len(), 0, "allowed tokens should be empty before any are added");
+}
+
+#[test]
+fn test_get_allowed_tokens_returns_tokens_in_order() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+
+    client.add_allowed_token(&token);
+    client.add_allowed_token(&token2_addr);
+
+    let allowed_tokens = client.get_allowed_tokens();
+    assert_eq!(allowed_tokens.len(), 2, "allowed tokens should contain both tokens");
+    assert_eq!(allowed_tokens.get(0).unwrap(), &token);
+    assert_eq!(allowed_tokens.get(1).unwrap(), &token2_addr);
+}
+
+#[test]
+fn test_get_allowed_tokens_updates_after_remove_allowed_token() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+
+    client.add_allowed_token(&token);
+    client.add_allowed_token(&token2_addr);
+    client.remove_allowed_token(&token);
+
+    let allowed_tokens = client.get_allowed_tokens();
+    assert_eq!(allowed_tokens.len(), 1, "allowed tokens should reflect removed token");
+    assert_eq!(allowed_tokens.get(0).unwrap(), &token2_addr);
+}
+
+#[test]
+fn test_removing_last_allowed_token_disables_allowlist_enforcement() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+    client.remove_allowed_token(&token);
+
+    assert!(!client.is_token_allowed(&token));
+
+    let unknown_token = Address::generate(&env);
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &unknown_token,
+        &String::from_str(&env, "rollback_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id, 0, "create_match should accept any token after last allowed token is removed");
+}
+
+#[test]
+fn test_remove_allowed_token_requires_admin_auth() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let attacker = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "remove_allowed_token",
+            args: (token.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert!(
+        matches!(client.try_remove_allowed_token(&token), Err(Err(_)) | Err(Ok(Error::Unauthorized))),
+        "expected auth failure for non-admin caller"
+    );
+}
+
+#[test]
+fn test_remove_last_allowed_token_disables_allowlist() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+    client.remove_allowed_token(&token);
+
+    let other_token = Address::generate(&env);
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &other_token,
+        &String::from_str(&env, "allowlist_disabled_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id, 0, "create_match should accept new token once the allowlist is disabled");
+}
+
+#[test]
+fn test_remove_allowed_token_requires_admin() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+
+    let attacker = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "remove_allowed_token",
+            args: (token.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_remove_allowed_token(&token);
+    assert!(
+        matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
+        "expected auth failure for non-admin caller"
+    );
+}
+
+#[test]
+fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enabled() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+    let asset_client2 = StellarAssetClient::new(&env, &token2_addr);
+    asset_client2.mint(&player1, &1000);
+    asset_client2.mint(&player2, &1000);
+
+    client.add_allowed_token(&token);
+    client.add_allowed_token(&token2_addr);
+
+    let id1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "game_token1"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id1, 0, "first match with token1 should succeed");
+
+    let id2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token2_addr,
+        &String::from_str(&env, "game_token2"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id2, 1, "second match with token2 should succeed");
+
+    let unknown_token = Address::generate(&env);
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &unknown_token,
+        &String::from_str(&env, "game_unknown"),
+        &Platform::Lichess,
+    );
+    assert!(
+        result.is_err(),
+        "create_match should reject unknown token when allowlist is enforced"
+    );
+}
+
+#[test]
+fn test_allowlist_enforcement_clears_when_empty() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Initially, allowlist should not be enforced
+    assert!(
+        !client.is_allowlist_enforced(),
+        "allowlist should not be enforced initially"
+    );
+
+    // Add a token - enforcement should be enabled
+    client.add_allowed_token(&token);
+    assert!(
+        client.is_allowlist_enforced(),
+        "allowlist should be enforced after adding a token"
+    );
+
+    // Remove the last token - enforcement should be disabled
+    client.remove_allowed_token(&token);
+    assert!(
+        !client.is_allowlist_enforced(),
+        "allowlist should not be enforced after removing the last token"
+    );
+}

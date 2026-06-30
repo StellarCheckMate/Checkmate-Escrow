@@ -1,0 +1,15 @@
+#landing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  gap: 16px;
+  text-align: center;
+  padding: 24px;
+}
+
+.tagline {
+  color: var(--text-2, #888);
+  max-width: 480px;
+}

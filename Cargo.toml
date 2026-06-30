@@ -1,12 +1,10 @@
 [workspace]
-members = [
-    "contracts/escrow",
-    "contracts/oracle",
-]
+members = ["contracts/escrow", "contracts/oracle", "oracle-service", "services/event-indexer"]
 resolver = "2"
+license = "MIT"
 
 [workspace.dependencies]
-soroban-sdk = { version = "22.0.0" }
+soroban-sdk = "21.7.5"
 
 [profile.release]
 opt-level = "z"
