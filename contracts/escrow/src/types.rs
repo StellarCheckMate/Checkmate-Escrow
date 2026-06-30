@@ -3,10 +3,11 @@ use soroban_sdk::{contracttype, Address, String};
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MatchState {
-    Pending,   // created, awaiting deposits
-    Active,    // both players deposited, game in progress
-    Completed, // result submitted, payout executed
-    Cancelled, // cancelled before activation
+    Pending,       // created, awaiting deposits
+    Active,        // both players deposited, game in progress
+    PendingResult, // oracle submitted result, awaiting dispute window or finalization
+    Completed,     // payout executed
+    Cancelled,     // cancelled before activation
 }
 
 #[contracttype]
@@ -65,6 +66,20 @@ pub enum DataKey {
     Snapshot(u64, u32),
     /// Total number of snapshots ever recorded for a match (monotonic, never reset).
     SnapshotCount(u64),
+    /// Dispute period in ledgers. 0 means no dispute period (immediate payout).
+    DisputePeriod,
+    /// Dispute by ID.
+    Dispute(u64),
+    /// Mapping from match_id to dispute_id (separate from Dispute to avoid key collisions).
+    MatchDispute(u64),
+    /// Monotonically increasing dispute counter.
+    DisputeCount,
+    /// Whether a voter has already voted on a dispute.
+    DisputeVote(u64, Address),
+    /// Pending winner for a match in PendingResult state.
+    PendingWinner(u64),
+    /// Ledger sequence by which a dispute must be raised for the match.
+    ResultDeadline(u64),
 }
 
 /// The lifecycle event that triggered a balance snapshot.
@@ -75,6 +90,8 @@ pub enum SnapshotReason {
     Deposit,
     Completed,
     Cancelled,
+    ResultSubmitted,
+    Finalized,
 }
 
 /// A point-in-time record of a match's escrowed balance, taken at key
@@ -100,4 +117,30 @@ pub struct BalanceSnapshot {
     pub escrow_balance: i128,
     pub player1_deposited: bool,
     pub player2_deposited: bool,
+}
+
+/// State of a dispute against an oracle result.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DisputeState {
+    Active,
+    ResolvedUpheld,
+    ResolvedOverturned,
+}
+
+/// A community dispute raised against an oracle-submitted match result.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dispute {
+    pub id: u64,
+    pub match_id: u64,
+    pub disputer: Address,
+    pub evidence_hash: String,
+    /// Total "yes" votes (overturn the oracle result).
+    pub yes_votes: i128,
+    /// Total "no" votes (uphold the oracle result).
+    pub no_votes: i128,
+    /// Ledger sequence by which voting must conclude.
+    pub voting_deadline: u32,
+    pub state: DisputeState,
 }

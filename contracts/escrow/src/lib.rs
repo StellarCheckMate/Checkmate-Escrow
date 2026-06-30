@@ -4,8 +4,13 @@ pub mod errors;
 pub mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
-use types::{BalanceSnapshot, DataKey, Match, MatchState, Platform, SnapshotReason, Winner};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec,
+};
+use types::{
+    BalanceSnapshot, DataKey, Dispute, DisputeState, Match, MatchState, Platform, SnapshotReason,
+    Winner,
+};
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -24,6 +29,9 @@ pub const MIN_MATCH_TIMEOUT_LEDGERS: u32 = 17_280;
 
 /// Maximum match timeout: 90 days (1,555,200 ledgers at 5s/ledger).
 pub const MAX_MATCH_TIMEOUT_LEDGERS: u32 = 1_555_200;
+
+/// Default voting period for disputes: 1 day (17,280 ledgers at 5s/ledger).
+pub const VOTING_PERIOD_LEDGERS: u32 = 17_280;
 
 /// Maximum allowed byte length for a game_id string.
 ///
@@ -61,6 +69,7 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Paused, &false);
         env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
         env.storage().instance().set(&DataKey::AllowedTokenCount, &0u32);
+        env.storage().instance().set(&DataKey::DisputePeriod, &0u32);
         env.events().publish(
             (Symbol::new(&env, "escrow"), symbol_short!("init")),
             (oracle, admin),
@@ -482,6 +491,15 @@ impl EscrowContract {
     }
 
     /// Oracle submits the verified match result and triggers payout.
+    ///
+    /// If the dispute period is configured (non-zero), the payout is not
+    /// executed immediately. Instead the match transitions to `PendingResult`
+    /// and waits for the dispute window to elapse. Anyone may then call
+    /// [`finalize_match`] to complete the payout, or a player may call
+    /// [`dispute_oracle_result`] to challenge the result.
+    ///
+    /// If the dispute period is zero (default), the payout executes
+    /// immediately — preserving the original immediate-payout behaviour.
     pub fn submit_result(
         env: Env,
         match_id: u64,
@@ -517,37 +535,80 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
-        let client = token::Client::new(&env, &m.token);
-        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+        let dispute_period: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputePeriod)
+            .unwrap_or(0);
 
-        match winner {
-            Winner::Player1 => client.transfer(&env.current_contract_address(), &m.player1, &pot),
-            Winner::Player2 => client.transfer(&env.current_contract_address(), &m.player2, &pot),
-            Winner::Draw => {
-                client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
-                client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
-            }
+        if dispute_period == 0 {
+            // Immediate payout (original behaviour)
+            Self::execute_payout(&env, &m, &winner)?;
+            Self::remove_active_match(&env, match_id);
+
+            m.state = MatchState::Completed;
+            m.completed_ledger = Some(env.ledger().sequence());
+            env.storage()
+                .persistent()
+                .set(&DataKey::Match(match_id), &m);
+            env.storage().persistent().extend_ttl(
+                &DataKey::Match(match_id),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+
+            Self::record_snapshot(&env, &m, SnapshotReason::Completed);
+
+            let topics = (Symbol::new(&env, "match"), symbol_short!("completed"));
+            env.events().publish(topics, (match_id, winner));
+
+            Ok(())
+        } else {
+            // Delayed payout: store the pending result and set dispute deadline
+            let deadline = env
+                .ledger()
+                .sequence()
+                .checked_add(dispute_period)
+                .ok_or(Error::Overflow)?;
+
+            m.state = MatchState::PendingResult;
+
+            env.storage()
+                .persistent()
+                .set(&DataKey::Match(match_id), &m);
+            env.storage().persistent().extend_ttl(
+                &DataKey::Match(match_id),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+
+            env.storage()
+                .persistent()
+                .set(&DataKey::PendingWinner(match_id), &winner);
+            env.storage().persistent().extend_ttl(
+                &DataKey::PendingWinner(match_id),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+
+            env.storage()
+                .persistent()
+                .set(&DataKey::ResultDeadline(match_id), &deadline);
+            env.storage().persistent().extend_ttl(
+                &DataKey::ResultDeadline(match_id),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+
+            Self::record_snapshot(&env, &m, SnapshotReason::ResultSubmitted);
+
+            env.events().publish(
+                (Symbol::new(&env, "match"), Symbol::new(&env, "pending_result")),
+                (match_id, winner, deadline),
+            );
+
+            Ok(())
         }
-
-        Self::remove_active_match(&env, match_id);
-
-        m.state = MatchState::Completed;
-        m.completed_ledger = Some(env.ledger().sequence());
-        env.storage()
-            .persistent()
-            .set(&DataKey::Match(match_id), &m);
-        env.storage().persistent().extend_ttl(
-            &DataKey::Match(match_id),
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
-
-        Self::record_snapshot(&env, &m, SnapshotReason::Completed);
-
-        let topics = (Symbol::new(&env, "match"), symbol_short!("completed"));
-        env.events().publish(topics, (match_id, winner));
-
-        Ok(())
     }
 
     /// Submit result with oracle record integration.
@@ -895,6 +956,405 @@ impl EscrowContract {
         } else {
             Self::depositor_count(m) * m.stake_amount
         }
+    }
+
+    // ── Payout helper ────────────────────────────────────────────────────────
+
+    /// Execute the payout for a match based on the winner. Transfers tokens
+    /// from the contract to the winner(s).
+    fn execute_payout(env: &Env, m: &Match, winner: &Winner) -> Result<(), Error> {
+        let client = token::Client::new(env, &m.token);
+        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+        match winner {
+            Winner::Player1 => {
+                client.transfer(&env.current_contract_address(), &m.player1, &pot);
+            }
+            Winner::Player2 => {
+                client.transfer(&env.current_contract_address(), &m.player2, &pot);
+            }
+            Winner::Draw => {
+                client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+                client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+            }
+        }
+        Ok(())
+    }
+
+    /// Finalize an undisputed match after the dispute period has elapsed.
+    /// Anyone may call this once `result_deadline` has passed and no dispute
+    /// was raised.
+    pub fn finalize_match(env: Env, match_id: u64) -> Result<(), Error> {
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::PendingResult {
+            return Err(Error::MatchNotInPendingResult);
+        }
+
+        let deadline: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ResultDeadline(match_id))
+            .ok_or(Error::PendingResultNotFound)?;
+
+        if env.ledger().sequence() < deadline {
+            return Err(Error::DisputePeriodNotElapsed);
+        }
+
+        // Ensure no active dispute exists for this match
+        // (dispute creates a separate resolution path)
+        if env.storage().persistent().has(&DataKey::MatchDispute(match_id)) {
+            return Err(Error::DisputeAlreadyRaised);
+        }
+
+        let winner: Winner = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingWinner(match_id))
+            .ok_or(Error::PendingResultNotFound)?;
+        Self::execute_payout(&env, &m, &winner)?;
+        Self::remove_active_match(&env, match_id);
+
+        m.state = MatchState::Completed;
+        m.completed_ledger = Some(env.ledger().sequence());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Finalized);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), Symbol::new(&env, "finalized")),
+            (match_id, winner),
+        );
+
+        Ok(())
+    }
+
+    /// Raise a dispute against an oracle-submitted result.
+    ///
+    /// Any player (either player1 or player2 of the match) may call this
+    /// before the dispute deadline elapses. An `evidence_hash` must be
+    /// provided as a reference to off-chain evidence.
+    ///
+    /// Once a dispute is raised, the match must be resolved via voting
+    /// instead of the normal `finalize_match` path.
+    pub fn dispute_oracle_result(
+        env: Env,
+        match_id: u64,
+        disputer: Address,
+        evidence_hash: String,
+    ) -> Result<u64, Error> {
+        disputer.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::PendingResult {
+            return Err(Error::MatchNotInPendingResult);
+        }
+
+        // Only match participants may dispute
+        if disputer != m.player1 && disputer != m.player2 {
+            return Err(Error::Unauthorized);
+        }
+
+        let deadline: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ResultDeadline(match_id))
+            .ok_or(Error::PendingResultNotFound)?;
+        if env.ledger().sequence() >= deadline {
+            return Err(Error::DisputePeriodNotElapsed);
+        }
+
+        if evidence_hash.len() == 0 {
+            return Err(Error::InvalidEvidenceHash);
+        }
+
+        // Check if a dispute already exists for this match
+        if env.storage().persistent().has(&DataKey::MatchDispute(match_id)) {
+            return Err(Error::DisputeAlreadyRaised);
+        }
+
+        let dispute_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeCount)
+            .unwrap_or(0);
+
+        let voting_deadline = env
+            .ledger()
+            .sequence()
+            .checked_add(VOTING_PERIOD_LEDGERS)
+            .ok_or(Error::Overflow)?;
+
+        let dispute = Dispute {
+            id: dispute_id,
+            match_id,
+            disputer: disputer.clone(),
+            evidence_hash: evidence_hash.clone(),
+            yes_votes: 0,
+            no_votes: 0,
+            voting_deadline,
+            state: DisputeState::Active,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(dispute_id), &dispute);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Dispute(dispute_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        // Store a mapping from match_id -> dispute_id for quick lookup
+        env.storage()
+            .persistent()
+            .set(&DataKey::MatchDispute(match_id), &dispute_id);
+        env.storage().persistent().extend_ttl(
+            &DataKey::MatchDispute(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let next_id = dispute_id.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeCount, &next_id);
+
+        env.events().publish(
+            (Symbol::new(&env, "dispute"), Symbol::new(&env, "created")),
+            (dispute_id, match_id, disputer, evidence_hash),
+        );
+
+        Ok(dispute_id)
+    }
+
+    /// Vote on an active dispute.
+    ///
+    /// Only addresses that hold a positive balance of the match's escrow
+    /// token may vote (`stakers`). `vote` is `true` to overturn the oracle
+    /// result, `false` to uphold it.
+    ///
+    /// Each address may only vote once per dispute.
+    pub fn vote_on_dispute(
+        env: Env,
+        dispute_id: u64,
+        voter: Address,
+        vote: bool,
+    ) -> Result<(), Error> {
+        voter.require_auth();
+
+        let mut dispute: Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+            .ok_or(Error::DisputeNotFound)?;
+
+        if dispute.state != DisputeState::Active {
+            return Err(Error::DisputeAlreadyResolved);
+        }
+
+        if env.ledger().sequence() >= dispute.voting_deadline {
+            return Err(Error::VotingPeriodElapsed);
+        }
+
+        // Check voter hasn't already voted
+        let vote_key = DataKey::DisputeVote(dispute_id, voter.clone());
+        if env.storage().persistent().has(&vote_key) {
+            return Err(Error::AlreadyVoted);
+        }
+
+        // Verify voter holds a positive balance of the match's escrow token
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(dispute.match_id))
+            .ok_or(Error::MatchNotFound)?;
+        let client = token::Client::new(&env, &m.token);
+        let balance = client.balance(&voter);
+        if balance <= 0 {
+            return Err(Error::NotStaker);
+        }
+
+        // Record vote
+        env.storage()
+            .persistent()
+            .set(&vote_key, &vote);
+        env.storage().persistent().extend_ttl(
+            &vote_key,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        // Tally vote
+        if vote {
+            dispute.yes_votes = dispute.yes_votes.saturating_add(balance);
+        } else {
+            dispute.no_votes = dispute.no_votes.saturating_add(balance);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(dispute_id), &dispute);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Dispute(dispute_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "dispute"), Symbol::new(&env, "voted")),
+            (dispute_id, voter, vote),
+        );
+
+        Ok(())
+    }
+
+    /// Resolve a dispute after the voting period has elapsed.
+    ///
+    /// Executes payout based on the majority vote:
+    /// - If the majority votes to overturn (`yes_votes > no_votes`), stakes
+    ///   are refunded to both players (draw outcome).
+    /// - If the majority upholds (`no_votes >= yes_votes`), the original
+    ///   oracle result stands and the winner receives the full pot.
+    pub fn resolve_dispute_by_vote(env: Env, dispute_id: u64) -> Result<(), Error> {
+        let mut dispute: Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+            .ok_or(Error::DisputeNotFound)?;
+
+        if dispute.state != DisputeState::Active {
+            return Err(Error::DisputeAlreadyResolved);
+        }
+
+        if env.ledger().sequence() < dispute.voting_deadline {
+            return Err(Error::VotingPeriodNotElapsed);
+        }
+
+        let match_id = dispute.match_id;
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::PendingResult {
+            return Err(Error::MatchNotInPendingResult);
+        }
+
+        let pending_winner: Winner = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingWinner(match_id))
+            .ok_or(Error::PendingResultNotFound)?;
+
+        let winner = if dispute.yes_votes > dispute.no_votes {
+            // Overturned: refund both players (draw outcome)
+            dispute.state = DisputeState::ResolvedOverturned;
+            Winner::Draw
+        } else {
+            // Upheld: original oracle result stands
+            dispute.state = DisputeState::ResolvedUpheld;
+            pending_winner
+        };
+
+        Self::execute_payout(&env, &m, &winner)?;
+        Self::remove_active_match(&env, match_id);
+
+        m.state = MatchState::Completed;
+        m.completed_ledger = Some(env.ledger().sequence());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Dispute(dispute_id), &dispute);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Dispute(dispute_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Finalized);
+
+        env.events().publish(
+            (Symbol::new(&env, "dispute"), Symbol::new(&env, "resolved")),
+            (dispute_id, match_id, dispute.state, winner),
+        );
+
+        Ok(())
+    }
+
+    /// Set the dispute period in ledgers. Admin only.
+    /// Set to 0 to disable the dispute period (immediate payout).
+    pub fn set_dispute_period(env: Env, period: u32) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputePeriod, &period);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "dispute_period")),
+            period,
+        );
+        Ok(())
+    }
+
+    /// Return the current dispute period in ledgers.
+    pub fn get_dispute_period(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::DisputePeriod)
+            .unwrap_or(0)
+    }
+
+    /// Get a dispute by ID.
+    pub fn get_dispute(env: Env, dispute_id: u64) -> Result<Dispute, Error> {
+        let dispute: Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+            .ok_or(Error::DisputeNotFound)?;
+        env.storage().persistent().extend_ttl(
+            &DataKey::Dispute(dispute_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        Ok(dispute)
+    }
+
+    /// Return the dispute ID for a match, if one exists.
+    pub fn get_match_dispute_id(env: Env, match_id: u64) -> Result<u64, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MatchDispute(match_id))
+            .ok_or(Error::DisputeNotFound)
     }
 
     // ── Balance snapshots ───────────────────────────────────────────────────
@@ -1302,6 +1762,14 @@ impl EscrowContract {
             (admin, new_admin),
         );
         Ok(())
+    }
+
+    /// Returns true if the allowlist is enforced (at least one token has been added).
+    pub fn is_allowlist_enforced(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::AllowlistEnforced)
+            .unwrap_or(false)
     }
 
     /// Returns true if the contract is currently paused.

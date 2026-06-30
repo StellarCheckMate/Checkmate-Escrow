@@ -101,8 +101,8 @@ fn test_get_allowed_tokens_returns_tokens_in_order() {
 
     let allowed_tokens = client.get_allowed_tokens();
     assert_eq!(allowed_tokens.len(), 2, "allowed tokens should contain both tokens");
-    assert_eq!(allowed_tokens.get(0).unwrap(), &token);
-    assert_eq!(allowed_tokens.get(1).unwrap(), &token2_addr);
+    assert_eq!(allowed_tokens.get(0).unwrap(), token);
+    assert_eq!(allowed_tokens.get(1).unwrap(), token2_addr);
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn test_get_allowed_tokens_updates_after_remove_allowed_token() {
 
     let allowed_tokens = client.get_allowed_tokens();
     assert_eq!(allowed_tokens.len(), 1, "allowed tokens should reflect removed token");
-    assert_eq!(allowed_tokens.get(0).unwrap(), &token2_addr);
+    assert_eq!(allowed_tokens.get(0).unwrap(), token2_addr);
 }
 
 #[test]
