@@ -1,148 +1,13 @@
-# Checkmate Escrow Frontend
+# Checkmate-Escrow Frontend
 
-Frontend utilities and hooks for interacting with the Checkmate Escrow smart contract on Stellar.
+React + TypeScript + Vite frontend for the Checkmate-Escrow platform.
 
-## Hooks
+## Local Development
 
-### `useMatchStatus`
+### Prerequisites
 
-A React hook that polls for match state changes from the Soroban escrow contract.
-
-#### Features
-
-- 🔄 Automatic polling at configurable intervals (default: 10 seconds)
-- 🛑 Smart polling that stops when match reaches terminal states (Completed/Cancelled)
-- 🧹 Automatic cleanup on unmount
-- ⚡ Manual refetch capability
-- 🎯 TypeScript support with full type definitions
-- ✅ Comprehensive test coverage
-
-#### Usage
-
-```typescript
-import { useMatchStatus } from './hooks/useMatchStatus';
-import { SorobanClient } from '@stellar/stellar-sdk';
-
-function MatchMonitor({ matchId }: { matchId: number }) {
-  const { match, loading, error, refetch } = useMatchStatus(
-    matchId,
-    async (id) => {
-      // Your contract call implementation
-      const contract = new SorobanClient.Contract(contractId);
-      const result = await contract.call('get_match', { match_id: id });
-      return result;
-    },
-    {
-      interval: 5000, // Poll every 5 seconds (optional)
-      enabled: true,  // Enable polling (optional)
-    }
-  );
-
-  if (loading) return <div>Loading match data...</div>;
-  if (error) return <div>Error: {error.message}</div>;
-  if (!match) return <div>Match not found</div>;
-
-  return (
-    <div>
-      <h2>Match {match.id}</h2>
-      <p>State: {match.state}</p>
-      <p>Player 1: {match.player1}</p>
-      <p>Player 2: {match.player2}</p>
-      <p>Stake: {match.stake_amount}</p>
-      <button onClick={refetch}>Refresh Now</button>
-    </div>
-  );
-}
-```
-
-#### API
-
-##### Parameters
-
-- `matchId: number` - The ID of the match to monitor
-- `getMatchFn: (matchId: number) => Promise<Match>` - Function that fetches match data from the contract
-- `options?: UseMatchStatusOptions` - Configuration options:
-  - `interval?: number` - Polling interval in milliseconds (default: 10000)
-  - `enabled?: boolean` - Whether to enable polling (default: true)
-
-##### Return Value
-
-Returns a `UseMatchStatusReturn` object:
-
-```typescript
-{
-  match: Match | null;        // Current match data
-  loading: boolean;           // Loading state
-  error: Error | null;        // Error state
-  refetch: () => Promise<void>; // Manual refetch function
-}
-```
-
-##### Types
-
-```typescript
-enum MatchState {
-  Pending = 'Pending',
-  Active = 'Active',
-  Completed = 'Completed',
-  Cancelled = 'Cancelled',
-}
-
-interface Match {
-  id: number;
-  player1: string;
-  player2: string;
-  stake_amount: string;
-  token: string;
-  game_id: string;
-  platform: Platform;
-  state: MatchState;
-  player1_deposited: boolean;
-  player2_deposited: boolean;
-  created_ledger: number;
-}
-```
-
-#### Behavior
-
-1. **Initial Fetch**: Fetches match data immediately on mount
-2. **Polling**: Continues polling at the specified interval while match is in `Pending` or `Active` state
-3. **Auto-Stop**: Stops polling when match reaches `Completed` or `Cancelled` state
-4. **Cleanup**: Clears all intervals on unmount
-5. **Re-fetch**: Restarts polling when `matchId` changes
-6. **Manual Refresh**: Exposes `refetch()` function for manual updates
-
-#### Testing
-
-Run the test suite:
-
-```bash
-npm test
-```
-
-Run tests in watch mode:
-
-```bash
-npm run test:watch
-```
-
-Generate coverage report:
-
-```bash
-npm run test:coverage
-```
-
-The hook includes comprehensive tests covering:
-- Initial fetch behavior
-- Polling intervals
-- Terminal state detection
-- Cleanup on unmount
-- Match ID changes
-- Enable/disable toggling
-- Manual refetch
-- Error handling
-
-## Development
+- Node.js 18+
+- npm
 
 ### Setup
 
@@ -151,12 +16,126 @@ cd frontend
 npm install
 ```
 
-### Type Checking
+### Running the dev server
 
 ```bash
-npx tsc --noEmit
+npm run dev
 ```
 
-## License
+The dev server starts on `http://localhost:5173` by default.
 
-MIT
+#### API proxy (CORS)
+
+During local development, requests to `/api` are automatically proxied to the event-indexer at `http://localhost:8080`, avoiding CORS errors. Start the event-indexer on port 8080 before running the frontend.
+
+### Running tests
+
+```bash
+npm test
+```
+
+### Running tests with coverage
+
+To run tests with coverage reporting:
+
+```bash
+npm run test:coverage
+```
+
+Or using the longer form:
+
+```bash
+npm test -- --coverage
+```
+
+This will generate:
+- Console output showing coverage percentages
+- HTML coverage report in the `coverage/` directory
+- JSON coverage data for CI/CD integration
+
+The project enforces minimum coverage thresholds:
+- Lines: 70%
+- Functions: 70%
+- Branches: 60%
+
+Tests will fail if coverage falls below these thresholds.
+
+### Building for production
+
+```bash
+npm run build
+```
+
+---
+
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+
+Currently, two official plugins are available:
+
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+
+## React Compiler
+
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+
+## Expanding the ESLint configuration
+
+If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+
+```js
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
+
+      // Remove tseslint.configs.recommended and replace with this
+      tseslint.configs.recommendedTypeChecked,
+      // Alternatively, use this for stricter rules
+      tseslint.configs.strictTypeChecked,
+      // Optionally, add this for stylistic rules
+      tseslint.configs.stylisticTypeChecked,
+
+      // Other configs...
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
+```
+
+You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+
+```js
+// eslint.config.js
+import reactX from 'eslint-plugin-react-x'
+import reactDom from 'eslint-plugin-react-dom'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      // Other configs...
+      // Enable lint rules for React
+      reactX.configs['recommended-typescript'],
+      // Enable lint rules for React DOM
+      reactDom.configs.recommended,
+    ],
+    languageOptions: {
+      parserOptions: {
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        tsconfigRootDir: import.meta.dirname,
+      },
+      // other options...
+    },
+  },
+])
+```

@@ -1,0 +1,17 @@
+# Tarpaulin coverage configuration for Escrow contract
+# See: https://github.com/xd009642/tarpaulin
+
+[coverage]
+# Minimum coverage thresholds
+min-coverage = 90
+timeout = 300
+exact = false
+
+# Exclude test helpers and test utilities
+exclude-files = ["tests/*", "helpers.rs"]
+
+# Output format
+out = ["Html"]
+
+# Ignore panics in coverage calculation
+ignore-panics = false

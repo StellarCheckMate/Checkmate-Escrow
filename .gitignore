@@ -1,3 +1,39 @@
-/target
+# Build artifacts
+target/
+
+# Environment secrets
 .env
+
+# Test snapshots
 **/test_snapshots/
+**/*.snap
+
+# IDE / editor
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Wasm build output
+*.wasm
+
+# Lock file (optional — remove if you want to commit it)
+# Cargo.lock
+
+# Task files
+task1.md
+
+# Task files
+task1.md
+
+# Task files
+task1.md
+
+# Task files
+task1.md

@@ -1,0 +1,108 @@
+name: Code Coverage
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'contracts/escrow/**'
+      - '.github/workflows/coverage.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'contracts/escrow/**'
+      - '.github/workflows/coverage.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  coverage:
+    name: Code Coverage Report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Run coverage
+        run: |
+          cd contracts/escrow
+          cargo tarpaulin \
+            --lib \
+            --out Html \
+            --output-dir coverage \
+            --timeout 300 \
+            --exclude-files tests/* \
+            --exclude-files helpers.rs \
+            -- --test-threads 1
+
+      - name: Check coverage thresholds
+        run: |
+          cd contracts/escrow
+          # Extract coverage percentage from index.html
+          COVERAGE_LINE=$(grep -oP 'overall.*?>\K[0-9.]+' coverage/index.html | head -1)
+          echo "Line Coverage: ${COVERAGE_LINE}%"
+
+          # Enforce minimum 95% line coverage for contracts
+          if (( $(echo "$COVERAGE_LINE < 90.0" | bc -l) )); then
+            echo "❌ Line coverage ${COVERAGE_LINE}% is below minimum threshold of 90%"
+            exit 1
+          else
+            echo "✅ Line coverage ${COVERAGE_LINE}% meets minimum threshold"
+          fi
+
+      - name: Upload coverage as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: contracts/escrow/coverage/
+          retention-days: 30
+
+      - name: Comment coverage on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            // Try to extract coverage from HTML report
+            try {
+              const htmlPath = path.join(process.env.GITHUB_WORKSPACE, 'contracts/escrow/coverage/index.html');
+              const html = fs.readFileSync(htmlPath, 'utf8');
+
+              // Extract coverage percentage
+              const match = html.match(/overall.*?>([0-9.]+)%/);
+              const coverage = match ? match[1] : 'Unknown';
+
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `📊 **Code Coverage Report**\n\nLine Coverage: **${coverage}%**\n\nMinimum Required: **90%**\n\n[View detailed coverage report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+              });
+            } catch (err) {
+              console.error('Failed to post coverage comment:', err);
+            }
+
+      - name: Fail if coverage below threshold
+        if: failure()
+        run: exit 1

@@ -1,3 +1,21 @@
+# Network environment configurations for Stellar CLI / Soroban CLI.
+# Each section corresponds to a named network passed via --network <name>.
+#
+# Fields:
+#   rpc_url           - Soroban RPC endpoint for the network
+#   network_passphrase - Unique string identifying the network; must match exactly
+#
+# To add a custom network, append a new section:
+#   [my_network]
+#   rpc_url = "https://my-rpc-endpoint"
+#   network_passphrase = "My Custom Network ; YYYY"
+#
+# Match Timeout Configuration (set via set_match_timeout admin function):
+#   Testnet:   1-7 days (17,280 - 120,960 ledgers) for faster testing
+#   Mainnet:   14-30 days (241,920 - 518,400 ledgers) for production stability
+#   Standalone: 1 day (17,280 ledgers) for development
+#   Min/Max:   1-90 days (17,280 - 1,555,200 ledgers)
+
 [testnet]
 rpc_url = "https://soroban-testnet.stellar.org"
 network_passphrase = "Test SDF Network ; September 2015"
@@ -11,5 +29,6 @@ rpc_url = "https://rpc-futurenet.stellar.org"
 network_passphrase = "Test SDF Future Network ; October 2022"
 
 [standalone]
+# Local development node — start with `stellar network start local`
 rpc_url = "http://localhost:8000/soroban/rpc"
 network_passphrase = "Standalone Network ; February 2017"

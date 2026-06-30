@@ -1,0 +1,81 @@
+use event_indexer::{api, cache, config, db, rpc};
+
+use anyhow::Result;
+use config::Config;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use tracing::{info, error};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let config = Config::from_env()?;
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(format!("event_indexer={}", config.log_level).parse()?),
+        )
+        .init();
+    info!("Event Indexer starting with config: {:?}", config);
+
+    let db = Arc::new(db::Database::new(&config.db_path)?);
+    let cache = Arc::new(RwLock::new(cache::EventCache::new(config.cache_size)));
+
+    db.init_schema()?;
+    info!("Database initialized");
+
+    let rpc_client = Arc::new(rpc::SorobanRpcClient::new(&config.rpc_url)?);
+
+    let api_handle = {
+        let db = db.clone();
+        let cache = cache.clone();
+        let rpc = rpc_client.clone();
+        let bind_addr = config.bind_addr.clone();
+        tokio::spawn(async move {
+            if let Err(e) = api::start_server(
+                &bind_addr,
+                config.bind_port,
+                db,
+                cache,
+                rpc,
+            )
+            .await
+            {
+                error!("API server error: {}", e);
+            }
+        })
+    };
+
+    let poller_handle = {
+        let db = db.clone();
+        let cache = cache.clone();
+        let rpc = rpc_client.clone();
+        let config = config.clone();
+        tokio::spawn(async move {
+            if let Err(e) = rpc::event_poller(
+                rpc,
+                db,
+                cache,
+                &config.contract_escrow,
+                config.poll_interval_secs,
+            )
+            .await
+            {
+                error!("Event poller error: {}", e);
+            }
+        })
+    };
+
+    info!("Event Indexer running on {}:{}", config.bind_addr, config.bind_port);
+
+    tokio::select! {
+        _ = api_handle => {
+            error!("API server stopped unexpectedly");
+        }
+        _ = poller_handle => {
+            error!("Event poller stopped unexpectedly");
+        }
+    }
+
+    Ok(())
+}

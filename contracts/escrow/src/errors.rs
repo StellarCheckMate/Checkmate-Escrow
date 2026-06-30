@@ -18,4 +18,10 @@ pub enum Error {
     DuplicateGameId = 13,
     MatchNotExpired = 14,
     InvalidGameId = 15,
+    InvalidPlayers = 16,
+    TokenNotAllowed = 17,
+    InvalidAddress = 18,
+    MatchAlreadyActive = 19,
+    InvalidTimeout = 20,
+    SnapshotNotFound = 21,
 }
