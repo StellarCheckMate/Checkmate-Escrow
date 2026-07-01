@@ -78,6 +78,31 @@ jobs:
           cd contracts/escrow && cargo build --target wasm32-unknown-unknown --release
           cd ../oracle && cargo build --target wasm32-unknown-unknown --release
 
+  frontend:
+    name: Frontend Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-node-
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Lint
+        run: npm run lint
+        working-directory: frontend
+
+      - name: Test
+        run: npm test
+        working-directory: frontend
+
   benchmark:
     name: Performance Benchmarks
     runs-on: ubuntu-latest
