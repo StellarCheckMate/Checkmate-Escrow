@@ -55,6 +55,61 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
 }
 
 #[test]
+fn test_register_oracle_with_stake_transfers_tokens_and_allows_submission() {
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    asset_client.mint(&oracle_admin, &200);
+    client.register_oracle_with_stake(&oracle_admin, &200i128, &token_addr);
+
+    assert_eq!(balance_client.balance(&contract_id), 200);
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+}
+
+#[test]
+fn test_slash_oracle_reduces_stake_and_transfers_tokens() {
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    asset_client.mint(&oracle_admin, &300);
+    client.register_oracle_with_stake(&oracle_admin, &300i128, &token_addr);
+
+    let admin_balance_before = balance_client.balance(&oracle_admin);
+    client.slash_oracle(&oracle_admin, &75i128);
+
+    assert_eq!(balance_client.balance(&contract_id), 225);
+    assert_eq!(balance_client.balance(&oracle_admin), admin_balance_before + 75);
+}
+
+#[test]
+fn test_submit_result_rejects_registered_oracle_without_sufficient_stake() {
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+
+    asset_client.mint(&oracle_admin, &100);
+    client.register_oracle_with_stake(&oracle_admin, &100i128, &token_addr);
+    client.slash_oracle(&oracle_admin, &100i128);
+
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::InsufficientStake)));
+}
+
+#[test]
 fn test_initialize_emits_event() {
     let env = Env::default();
     env.mock_all_auths();

@@ -4,10 +4,12 @@ mod errors;
 pub mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec,
+};
 use types::{
-    BatchResultEntry, DataKey, Platform, RateLimitConfig, RateLimitStatus, RateWindow, ResultEntry,
-    Winner,
+    BatchResultEntry, DataKey, OracleRegistration, Platform, RateLimitConfig, RateLimitStatus,
+    RateWindow, ResultEntry, Winner,
 };
 
 /// Maximum number of entries accepted in a single batch submission.
@@ -61,6 +63,77 @@ impl OracleContract {
         Ok(())
     }
 
+    /// Register an oracle with a token stake that can be slashed if needed.
+    pub fn register_oracle_with_stake(
+        env: Env,
+        oracle_address: Address,
+        stake_amount: i128,
+        token: Address,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        oracle_address.require_auth();
+
+        if stake_amount <= 0 {
+            return Err(Error::InsufficientStake);
+        }
+
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&oracle_address, &env.current_contract_address(), &stake_amount);
+
+        env.storage().instance().set(
+            &DataKey::OracleRegistration(oracle_address.clone()),
+            &OracleRegistration {
+                oracle_address: oracle_address.clone(),
+                oracle_stake: stake_amount,
+                token: token.clone(),
+            },
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("stake")),
+            (oracle_address, stake_amount, token),
+        );
+
+        Ok(())
+    }
+
+    /// Slash a registered oracle's stake. Admin-only.
+    pub fn slash_oracle(env: Env, oracle_address: Address, slash_amount: i128) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let mut registration: OracleRegistration = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_address.clone()))
+            .ok_or(Error::InsufficientStake)?;
+
+        if slash_amount <= 0 || slash_amount > registration.oracle_stake {
+            return Err(Error::InsufficientStake);
+        }
+
+        registration.oracle_stake -= slash_amount;
+        env.storage().instance().set(
+            &DataKey::OracleRegistration(oracle_address.clone()),
+            &registration,
+        );
+
+        let token_client = token::Client::new(&env, &registration.token);
+        token_client.transfer(&env.current_contract_address(), &admin, &slash_amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("slash")),
+            (oracle_address, slash_amount),
+        );
+
+        Ok(())
+    }
+
     /// Admin submits a verified match result on-chain.
     /// Invariant: No results can be submitted while the contract is paused.
     ///
@@ -94,6 +167,17 @@ impl OracleContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+
+        let registration: Option<OracleRegistration> = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(admin.clone()));
+        if let Some(registration) = registration {
+            if registration.oracle_stake <= 0 {
+                return Err(Error::InsufficientStake);
+            }
+        }
+
         Self::check_oracle_rate_limit(&env, &admin, 1)?;
 
         if env.storage().persistent().has(&DataKey::Result(match_id)) {
@@ -162,6 +246,16 @@ impl OracleContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+
+        let registration: Option<OracleRegistration> = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(admin.clone()));
+        if let Some(registration) = registration {
+            if registration.oracle_stake <= 0 {
+                return Err(Error::InsufficientStake);
+            }
+        }
 
         let len = entries.len();
         if len > MAX_BATCH_SIZE {
