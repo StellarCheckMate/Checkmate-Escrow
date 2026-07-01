@@ -18,3 +18,19 @@ async fn health_check() -> Json<HealthStatus> {
         last_checked_at: Utc::now().to_rfc3339(),
     })
 }
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/health", get(health_check));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:8000")
+        .await
+        .expect("Failed to bind to port 8000");
+
+    println!("Oracle service listening on http://127.0.0.1:8000");
+
+    axum::serve(listener, app)
+        .await
+        .expect("Failed to start server");
+}
