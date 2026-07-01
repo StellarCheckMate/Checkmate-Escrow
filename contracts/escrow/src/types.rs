@@ -3,10 +3,11 @@ use soroban_sdk::{contracttype, Address, String};
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MatchState {
-    Pending,   // created, awaiting deposits
-    Active,    // both players deposited, game in progress
-    Completed, // result submitted, payout executed
-    Cancelled, // cancelled before activation
+    Pending,       // created, awaiting deposits
+    Active,        // both players deposited, game in progress
+    PendingResult, // oracle submitted result, awaiting dispute window or finalization
+    Completed,     // payout executed
+    Cancelled,     // cancelled before activation
 }
 
 #[contracttype]
@@ -86,6 +87,8 @@ pub enum SnapshotReason {
     Deposit,
     Completed,
     Cancelled,
+    ResultSubmitted,
+    Finalized,
 }
 
 /// A point-in-time record of a match's escrowed balance, taken at key
