@@ -8,6 +8,7 @@ pub enum MatchState {
     PendingResult, // oracle submitted result, awaiting dispute window or finalization
     Completed,     // payout executed
     Cancelled,     // cancelled before activation
+    Paused,        // match paused by player
 }
 
 #[contracttype]
@@ -27,8 +28,19 @@ pub enum Winner {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlayerTier {
+    Bronze,
+    Silver,
+    Gold,
+    Platinum,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolConfig {
     pub vesting_duration_seconds: u64,
+    pub cancellation_fee_basis_points: u32,
+    pub treasury: Address,
 }
 
 #[contracttype]
@@ -52,6 +64,14 @@ pub struct Match {
     pub vested_at: Option<u64>,
     pub player1_claimed: bool,
     pub player2_claimed: bool,
+    /// Optional conversion rate for multi-token matches.
+    pub conversion_rate: Option<i128>,
+    /// Optional second token for multi-token matches.
+    pub token_b: Option<Address>,
+    /// Ledger when pause started (if any).
+    pub paused_ledger: Option<u32>,
+    /// Total pause duration in ledgers.
+    pub total_pause_duration: u32,
 }
 
 #[contracttype]
@@ -77,6 +97,24 @@ pub enum DataKey {
     /// Total number of snapshots ever recorded for a match (monotonic, never reset).
     SnapshotCount(u64),
     ProtocolConfig,
+    /// Dispute period in ledger blocks (0 = immediate payout).
+    DisputePeriod,
+    /// Pending result winner for a match awaiting dispute resolution.
+    PendingWinner(u64),
+    /// Deadline ledger for dispute voting on a match.
+    ResultDeadline(u64),
+    /// Dispute record for a match.
+    Dispute(u64),
+    /// Dispute vote by voter on a match.
+    DisputeVote(u64, Address),
+    /// Global dispute count.
+    DisputeCount,
+    /// Match dispute ID.
+    MatchDispute(u64),
+    /// Player balance snapshot: (player, index % MAX_PLAYER_SNAPSHOTS).
+    PlayerBalanceSnapshot(Address, u64),
+    /// Total count of player balance snapshots (monotonic).
+    PlayerBalanceSnapshotCount(Address),
 }
 
 /// The lifecycle event that triggered a balance snapshot.
@@ -91,6 +129,34 @@ pub enum SnapshotReason {
     Cancelled,
     ResultSubmitted,
     Finalized,
+}
+
+/// Dispute state for contested match results.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeState {
+    Active,
+    Upheld,
+    Overturned,
+    ResolvedUpheld,
+    ResolvedOverturned,
+}
+
+/// Dispute record for a contested match result.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dispute {
+    pub id: u64,
+    pub match_id: u64,
+    pub disputer: Address,
+    pub created_ledger: u32,
+    pub voting_deadline: u32,
+    pub state: DisputeState,
+    pub evidence_hash: String,
+    pub uphold_votes: u32,
+    pub overturn_votes: u32,
+    pub yes_votes: u32,
+    pub no_votes: u32,
 }
 
 /// A point-in-time record of a match's escrowed balance, taken at key
