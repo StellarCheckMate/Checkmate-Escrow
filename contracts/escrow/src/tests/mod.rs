@@ -151,3 +151,4 @@ pub fn setup_with_four_players() -> (
 pub fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, amount: i128) {
     asset_client.mint(player, &amount);
 }
+mod cancellation_fee;
