@@ -1,0 +1,23 @@
+services:
+  event-indexer:
+    build:
+      context: .
+      dockerfile: services/event-indexer/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
+      CONTRACT_ESCROW: ${CONTRACT_ESCROW}
+      EVENT_INDEXER_DB_PATH: /data/events.db
+      EVENT_INDEXER_BIND_ADDR: 0.0.0.0
+      EVENT_INDEXER_PORT: 8080
+      EVENT_INDEXER_CACHE_SIZE: ${EVENT_INDEXER_CACHE_SIZE:-10000}
+      EVENT_INDEXER_POLL_INTERVAL: ${EVENT_INDEXER_POLL_INTERVAL:-5}
+      EVENT_INDEXER_LOG_LEVEL: ${EVENT_INDEXER_LOG_LEVEL:-info}
+    env_file:
+      - .env
+    volumes:
+      - event-indexer-data:/data
+
+volumes:
+  event-indexer-data:
