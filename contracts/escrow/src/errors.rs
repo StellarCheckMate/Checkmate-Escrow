@@ -24,5 +24,6 @@ pub enum Error {
     MatchAlreadyActive = 19,
     InvalidTimeout = 20,
     SnapshotNotFound = 21,
-    NotInitialized = 22,
+    VestingNotExpired = 22,
+    AlreadyClaimed = 23,
 }

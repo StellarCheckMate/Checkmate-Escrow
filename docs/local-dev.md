@@ -57,6 +57,16 @@ cargo run --release
 
 The event indexer tracks on-chain events and indexes them for quick queries. Configuration is in `services/event-indexer/src/config.rs`.
 
+#### Using Docker Compose
+
+Alternatively, run the event indexer in a container via Docker Compose. Make sure `.env` is set up first (see [Environment variables](#environment-variables)):
+
+```bash
+docker compose up --build
+```
+
+This builds the `event-indexer` service from `services/event-indexer/Dockerfile`, persists its SQLite database in a named Docker volume, and exposes the API on `http://localhost:8080`. Environment variables are sourced from `.env` at the repo root, with sensible defaults applied for anything not set (see `docker-compose.yml`).
+
 ## Configuration
 
 ### Environment variables

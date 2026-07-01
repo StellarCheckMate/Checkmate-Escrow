@@ -11,15 +11,20 @@ pub use std::{format, vec::Vec};
 pub mod helpers;
 
 mod admin;
+mod dispute;
 mod events;
+mod fuzz;
 mod index;
+mod integration;
 mod invariants;
 mod lifecycle;
 mod pagination;
+mod player_balance_history;
 mod security;
 mod snapshots;
-mod ttl;
+mod tier;
 mod token_allowlist;
+mod ttl;
 
 // ── Base fixture ─────────────────────────────────────────────────────────────
 
@@ -43,6 +48,9 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
+    client.update_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+    });
 
     (
         env,
@@ -91,7 +99,16 @@ pub fn setup_with_funded_match() -> (
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
 
-    (env, contract_id, oracle, player1, player2, token, admin, match_id)
+    (
+        env,
+        contract_id,
+        oracle,
+        player1,
+        player2,
+        token,
+        admin,
+        match_id,
+    )
 }
 
 /// Like `setup`, but mints tokens for two additional players (`player3`,
@@ -116,7 +133,17 @@ pub fn setup_with_four_players() -> (
     asset_client.mint(&player3, &1000);
     asset_client.mint(&player4, &1000);
 
-    (env, contract_id, oracle, player1, player2, player3, player4, token, admin)
+    (
+        env,
+        contract_id,
+        oracle,
+        player1,
+        player2,
+        player3,
+        player4,
+        token,
+        admin,
+    )
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
