@@ -15,7 +15,7 @@ axum = "0.7"
 chrono = { version = "0.4", features = ["serde"] }
 
 # Optional: used only if/when you wire to Soroban for submissions.
-soroban-sdk = { version = "21.7.5", default-features = false, features = [] }
+soroban-sdk = { version = "26.1.0", default-features = false, features = [] }
 contracts-oracle = { package = "oracle", path = "../contracts/oracle" }
 
 [dev-dependencies]
