@@ -154,6 +154,7 @@ Prefer to learn by watching or testing yourself?
 
 ## 📖 Documentation
 
+- [Changelog](CHANGELOG.md) — release history and notable changes
 - [Interactive Tutorial](docs/tutorial-step-by-step.md) — guided, hands-on intro for new users
 - [Tutorial Quiz & Checklist](docs/tutorial-quiz.md) — verify your understanding
 - [FAQ](docs/faq.md) — common questions and answers
