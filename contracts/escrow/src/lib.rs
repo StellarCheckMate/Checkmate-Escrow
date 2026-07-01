@@ -125,6 +125,23 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Update the protocol configuration.
+    pub fn set_protocol_config(env: Env, config: ProtocolConfig) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::ProtocolConfig, &config);
+        Ok(())
+    }
+
+    /// Get the current protocol configuration.
+    pub fn get_protocol_config(env: Env) -> Result<ProtocolConfig, Error> {
+        env.storage().instance().get(&DataKey::ProtocolConfig).ok_or(Error::NotInitialized)
+    }
+
     /// Add a token to the allowlist — admin only.
     pub fn add_allowed_token(env: Env, token: Address) -> Result<(), Error> {
         let admin: Address = env
@@ -860,6 +877,18 @@ impl EscrowContract {
         caller.require_auth();
 
         let is_multi_token = m.token_b.is_some() && m.conversion_rate > 0;
+
+        let config: ProtocolConfig = env.storage().instance().get(&DataKey::ProtocolConfig).unwrap_or(ProtocolConfig {
+            cancellation_fee_basis_points: 0,
+            treasury: env.current_contract_address(),
+        });
+        
+        let fee_amount = if config.cancellation_fee_basis_points > 0 {
+            m.stake_amount.checked_mul(config.cancellation_fee_basis_points as i128).ok_or(Error::Overflow)? / 10_000
+        } else {
+            0
+        };
+        let refund_amount = m.stake_amount.checked_sub(fee_amount).ok_or(Error::Overflow)?;
 
         if m.player1_deposited {
             let client_a = token::Client::new(&env, &m.token);
