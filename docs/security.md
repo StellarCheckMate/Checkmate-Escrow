@@ -5,6 +5,7 @@ This document outlines the security considerations, trust assumptions, and risk 
 ## Table of Contents
 
 - [Oracle Trust Assumptions](#oracle-trust-assumptions)
+- [Oracle Compromise](#oracle-compromise)
 - [Admin Key Risks](#admin-key-risks)
 - [Re-initialization Protection](#re-initialization-protection)
 - [Pause Mechanism](#pause-mechanism)
@@ -15,6 +16,7 @@ This document outlines the security considerations, trust assumptions, and risk 
 ## Oracle Trust Assumptions
 
 The oracle system is a critical component that bridges off-chain chess game results to on-chain payouts. The following trust assumptions and mitigations apply:
+
 
 ### Trust Model
 
@@ -40,6 +42,24 @@ The oracle system is a critical component that bridges off-chain chess game resu
 | Oracle submits before deposits complete | State validation (`NotFunded` error) |
 | Oracle key compromise | Admin can pause contract, rotate oracle address |
 | Front-running result submission | Atomic result submission with proper sequencing |
+
+## Oracle Compromise
+
+### Attack Vector
+If an attacker compromises the private key of the authorized oracle, they gain the ability to call the `submit_result` function as the oracle. The attacker can bypass the off-chain platform API verification checks entirely and submit fraudulent or manipulated match outcomes.
+
+### Impact
+By submitting malicious results, the attacker can force the escrow contract to release locked funds to an arbitrary address, causing a fraudulent payout. This allows them to drain active escrows for matches that are currently funded but not yet settled.
+
+### Current Mitigations
+1. **Contract Pausing**: The escrow admin can immediately call `pause` to halt match resolution and prevent the malicious oracle from submitting further results.
+2. **Oracle Rotation**: The escrow admin can rotate the compromised oracle key to a secure new address by calling the `update_oracle` admin function in the escrow contract.
+3. **Audit Trail / Event Emission**: The `update_oracle` function emits an `oracle_up` event (with the topic `admin`) containing the `old_oracle` and `new_oracle` addresses as data. This provides a clear, verifiable on-chain history of oracle rotation for indexing and alerting services.
+
+### Recommended Hardening
+To prevent and mitigate oracle compromise in production environments, the following hardening measures are recommended:
+1. **Hardware Security Modules (HSM)**: Store the oracle private key in an HSM (e.g., AWS KMS or similar secure enclave) to prevent key extraction.
+2. **Multi-signature Oracle**: Transition from a single-key oracle to a multi-signature oracle or a consensus of multiple independent oracles, requiring multiple signatures before a result is considered valid on-chain.
 
 ## Admin Key Risks
 
