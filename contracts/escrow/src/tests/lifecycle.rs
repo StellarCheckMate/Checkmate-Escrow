@@ -199,7 +199,7 @@ fn test_get_match_returns_stake_and_token() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let stake_amount = 500i128;
+    let stake_amount = 100i128;
     let id = client.create_match(
         &player1,
         &player2,
