@@ -612,6 +612,87 @@ impl OracleContract {
             );
         }
     }
+
+    pub fn set_rate(
+        env: Env,
+        token_a: Address,
+        token_b: Address,
+        rate: i128,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if rate <= 0 {
+            return Err(Error::InvalidRateLimit);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Rate(token_a.clone(), token_b.clone()), &rate);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Rate(token_a, token_b),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        Ok(())
+    }
+
+    pub fn get_rate(
+        env: Env,
+        token_a: Address,
+        token_b: Address,
+    ) -> Result<i128, Error> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::Rate(token_a, token_b))
+            .ok_or(Error::ResultNotFound)
+    }
+
+    pub fn swap(
+        env: Env,
+        token_in: Address,
+        token_out: Address,
+        amount_in: i128,
+        recipient: Address,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        let mut amount_out = 0i128;
+        if let Some(rate) = env
+            .storage()
+            .persistent()
+            .get::<_, i128>(&DataKey::Rate(token_out.clone(), token_in.clone()))
+        {
+            amount_out = amount_in
+                .checked_mul(10_000_000)
+                .ok_or(Error::Unauthorized)?
+                .checked_div(rate)
+                .ok_or(Error::Unauthorized)?;
+        } else if let Some(rate) = env
+            .storage()
+            .persistent()
+            .get::<_, i128>(&DataKey::Rate(token_in.clone(), token_out.clone()))
+        {
+            amount_out = amount_in
+                .checked_mul(rate)
+                .ok_or(Error::Unauthorized)?
+                .checked_div(10_000_000)
+                .ok_or(Error::Unauthorized)?;
+        } else {
+            return Err(Error::ResultNotFound);
+        }
+
+        let client_out = soroban_sdk::token::Client::new(&env, &token_out);
+        client_out.transfer(&env.current_contract_address(), &recipient, &amount_out);
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

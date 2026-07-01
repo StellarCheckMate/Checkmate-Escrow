@@ -87,6 +87,18 @@ pub fn run_full_match(
     let id = create_default_match(client, env, player1, player2, token, game_id);
     fund_match(client, id, player1, player2);
     client.submit_result(&id, winner);
+    match winner {
+        Winner::Player1 => {
+            client.claim_vested_payout(&id, player1);
+        }
+        Winner::Player2 => {
+            client.claim_vested_payout(&id, player2);
+        }
+        Winner::Draw => {
+            client.claim_vested_payout(&id, player1);
+            client.claim_vested_payout(&id, player2);
+        }
+    }
     id
 }
 

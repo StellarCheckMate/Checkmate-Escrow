@@ -127,6 +127,17 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match_timeout
 
 ---
 
+## Mainnet Deployment Checklist
+
+Before launching on mainnet, verify each item below. These checks are intended to reduce operational risk and confirm that the deployment is configured for production use.
+
+- [ ] Key management is locked down. Store deployer and admin keys in hardware-backed wallets or a secure multisig setup, and remove any temporary single-signature keys once the deployment is complete. This reduces the risk of losing access to the contracts or exposing a critical key.
+- [ ] Admin control has been transferred to a multisig. Confirm that the escrow and oracle admin roles are controlled by a multisig account rather than a single operator key. This prevents a single compromised key from changing critical contract parameters.
+- [ ] Oracle addresses have been verified. Double-check the oracle contract ID and any admin or authorized addresses used during initialization. This ensures results are routed to the intended oracle and avoids misconfiguration at launch.
+- [ ] The token allowlist has been reviewed. Confirm that the approved token set and contract IDs match the production plan. This prevents unintended assets from being accepted in matches.
+- [ ] Contract audit confirmation is recorded. Make sure the deployed contracts have passed a recent security review or audit and that any outstanding issues are understood and accepted. This lowers the chance of launching with an unresolved vulnerability.
+- [ ] Monitoring and alerting are in place. Configure alerts for deployment status, admin changes, oracle submissions, pause events, and unusual match activity. This gives operators early visibility into incidents or unexpected behavior.
+
 ## Security Notes
 
 - Steps 2 and 4 must be executed **in the same transaction or immediately after

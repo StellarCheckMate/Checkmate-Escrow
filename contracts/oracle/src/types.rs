@@ -51,6 +51,7 @@ pub enum DataKey {
     OracleHourlyWindow(Address),
     /// Sliding window submission counters for the daily limit, keyed by oracle address.
     OracleDailyWindow(Address),
+    Rate(Address, Address),
 }
 
 /// Configurable submission limits for a single oracle address.
