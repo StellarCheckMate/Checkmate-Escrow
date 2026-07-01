@@ -5,10 +5,7 @@ pub mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
-use types::{
-    BalanceSnapshot, DataKey, Match, MatchState, Platform, PlayerBalanceSnapshot,
-    SnapshotReason, Winner,
-};
+use types::{BalanceSnapshot, DataKey, Match, MatchState, Platform, ProtocolConfig, SnapshotReason, Winner};
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -43,6 +40,20 @@ pub const MAX_MATCH_TIMEOUT_LEDGERS: u32 = 1_555_200;
 /// Both formats fit well within this limit.
 const MAX_GAME_ID_LEN: u32 = 64;
 
+/// Completed-match thresholds for unlocking progressively higher stake bands.
+const SILVER_MIN_COMPLETED_MATCHES: u32 = 3;
+const GOLD_MIN_COMPLETED_MATCHES: u32 = 6;
+const PLATINUM_MIN_COMPLETED_MATCHES: u32 = 10;
+
+/// Stake bounds for each tier.
+const BRONZE_MIN_STAKE: i128 = 1;
+const BRONZE_MAX_STAKE: i128 = 100;
+const SILVER_MIN_STAKE: i128 = 101;
+const SILVER_MAX_STAKE: i128 = 500;
+const GOLD_MIN_STAKE: i128 = 501;
+const GOLD_MAX_STAKE: i128 = 1_000;
+const PLATINUM_MIN_STAKE: i128 = 1_001;
+
 /// Extend instance storage TTL on every invocation so Admin, Oracle, Paused, and other
 /// instance keys never expire.
 fn extend_instance_ttl(env: &Env) {
@@ -68,8 +79,12 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::MatchCount, &0u64);
         env.storage().instance().set(&DataKey::Paused, &false);
-        env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
-        env.storage().instance().set(&DataKey::AllowedTokenCount, &0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowlistEnforced, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedTokenCount, &0u32);
         env.events().publish(
             (Symbol::new(&env, "escrow"), symbol_short!("init")),
             (oracle, admin),
@@ -137,13 +152,14 @@ impl EscrowContract {
                 .instance()
                 .set(&DataKey::AllowedTokenCount, &next_count);
             if count == 0 {
-                env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::AllowlistEnforced, &true);
             }
-            Self::append_allowed_token(&env, &token);
         } else {
             env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
-            Self::append_allowed_token(&env, &token);
         }
+        Self::append_allowed_token(&env, &token);
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("token_add")),
@@ -165,7 +181,9 @@ impl EscrowContract {
             .storage()
             .instance()
             .has(&DataKey::AllowedToken(token.clone()));
-        env.storage().instance().remove(&DataKey::AllowedToken(token.clone()));
+        env.storage()
+            .instance()
+            .remove(&DataKey::AllowedToken(token.clone()));
 
         if was_allowed {
             let count: u32 = env
@@ -178,26 +196,23 @@ impl EscrowContract {
                 .instance()
                 .set(&DataKey::AllowedTokenCount, &next_count);
             if next_count == 0 {
-                env.storage().instance().set(&DataKey::AllowlistEnforced, &false);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::AllowlistEnforced, &false);
             }
         }
 
         Self::remove_allowed_token_from_list(&env, &token);
 
-        env.events().publish(
-            (Symbol::new(&env, "admin"), symbol_short!("tok_rm")),
-            token,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "admin"), symbol_short!("tok_rm")), token);
         Ok(())
     }
 
     /// Check if a token is allowed.
     pub fn is_token_allowed(env: Env, token: Address) -> bool {
         let key = DataKey::AllowedToken(token.clone());
-        env.storage()
-            .instance()
-            .get(&key)
-            .unwrap_or(false)
+        env.storage().instance().get(&key).unwrap_or(false)
     }
 
     /// Return the current allowlist as an ordered list.
@@ -206,14 +221,12 @@ impl EscrowContract {
     }
 
     fn get_allowed_token_list(env: &Env) -> soroban_sdk::Vec<Address> {
-        if let Some(allowed_tokens) = env
-            .storage()
-            .persistent()
-            .get(&DataKey::AllowedTokens)
-        {
-            env.storage()
-                .persistent()
-                .extend_ttl(&DataKey::AllowedTokens, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        if let Some(allowed_tokens) = env.storage().persistent().get(&DataKey::AllowedTokens) {
+            env.storage().persistent().extend_ttl(
+                &DataKey::AllowedTokens,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
             allowed_tokens
         } else {
             soroban_sdk::vec![env]
@@ -227,9 +240,11 @@ impl EscrowContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::AllowedTokens, allowed_tokens);
-            env.storage()
-                .persistent()
-                .extend_ttl(&DataKey::AllowedTokens, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+            env.storage().persistent().extend_ttl(
+                &DataKey::AllowedTokens,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
         }
     }
 
@@ -243,9 +258,11 @@ impl EscrowContract {
             allowed_tokens.push_back(token.clone());
             Self::set_allowed_token_list(env, &allowed_tokens);
         } else if env.storage().persistent().has(&DataKey::AllowedTokens) {
-            env.storage()
-                .persistent()
-                .extend_ttl(&DataKey::AllowedTokens, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+            env.storage().persistent().extend_ttl(
+                &DataKey::AllowedTokens,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
         }
     }
 
@@ -314,6 +331,8 @@ impl EscrowContract {
         if stake_amount <= 0 {
             return Err(Error::InvalidAmount);
         }
+        Self::require_player_tier_for_stake(&env, &player1, stake_amount)?;
+        Self::require_player_tier_for_stake(&env, &player2, stake_amount)?;
         if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
         }
@@ -326,7 +345,11 @@ impl EscrowContract {
             return Err(Error::InvalidPlayers);
         }
 
-        if env.storage().persistent().has(&DataKey::GameId(game_id.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GameId(game_id.clone()))
+        {
             return Err(Error::DuplicateGameId);
         }
 
@@ -353,6 +376,10 @@ impl EscrowContract {
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
             completed_ledger: None,
+            winner: None,
+            vested_at: None,
+            player1_claimed: false,
+            player2_claimed: false,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -364,7 +391,9 @@ impl EscrowContract {
         // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
-        env.storage().persistent().set(&DataKey::GameId(m.game_id.clone()), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::GameId(m.game_id.clone()), &true);
         env.storage().persistent().extend_ttl(
             &DataKey::GameId(m.game_id.clone()),
             MATCH_TTL_LEDGERS,
@@ -449,6 +478,8 @@ impl EscrowContract {
             return Err(Error::AlreadyFunded);
         }
 
+        Self::require_player_tier_for_stake(&env, &player, m.stake_amount)?;
+
         let client = token::Client::new(&env, &m.token);
         client.transfer(&player, &env.current_contract_address(), &m.stake_amount);
 
@@ -491,7 +522,7 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Oracle submits the verified match result and triggers payout.
+    /// Oracle submits the verified match result and triggers payout vesting.
     pub fn submit_result(
         env: Env,
         match_id: u64,
@@ -527,22 +558,13 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
-        let client = token::Client::new(&env, &m.token);
-        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
-
-        match winner {
-            Winner::Player1 => client.transfer(&env.current_contract_address(), &m.player1, &pot),
-            Winner::Player2 => client.transfer(&env.current_contract_address(), &m.player2, &pot),
-            Winner::Draw => {
-                client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
-                client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
-            }
-        }
-
         Self::remove_active_match(&env, match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
+        m.winner = Some(winner.clone());
+        m.vested_at = Some(env.ledger().timestamp());
+
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -604,11 +626,12 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state == MatchState::Active {
-            return Err(Error::MatchAlreadyActive);
-        }
         if m.state != MatchState::Pending {
-            return Err(Error::InvalidState);
+            return Err(if m.state == MatchState::Active {
+                Error::MatchAlreadyActive
+            } else {
+                Error::InvalidState
+            });
         }
 
         // Either player1 or player2 can cancel a pending match
@@ -741,15 +764,70 @@ impl EscrowContract {
             .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS)
     }
 
-    fn get_active_match_ids(env: &Env) -> soroban_sdk::Vec<u64> {
-        if let Some(active_matches) = env
+    fn completed_match_count(env: &Env, player: &Address) -> u32 {
+        let key = DataKey::PlayerMatches(player.clone());
+        let player_matches: soroban_sdk::Vec<u64> = env
             .storage()
             .persistent()
-            .get(&DataKey::ActiveMatches)
-        {
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::vec![env]);
+
+        if env.storage().persistent().has(&key) {
             env.storage()
                 .persistent()
-                .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+                .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        }
+
+        let mut completed_matches = 0u32;
+        for match_id in player_matches.iter() {
+            if let Some(m) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
+            {
+                if m.state == MatchState::Completed {
+                    completed_matches = completed_matches.saturating_add(1);
+                }
+            }
+        }
+        completed_matches
+    }
+
+    fn tier_for_completed_matches(completed_matches: u32) -> PlayerTier {
+        if completed_matches >= PLATINUM_MIN_COMPLETED_MATCHES {
+            PlayerTier::Platinum
+        } else if completed_matches >= GOLD_MIN_COMPLETED_MATCHES {
+            PlayerTier::Gold
+        } else if completed_matches >= SILVER_MIN_COMPLETED_MATCHES {
+            PlayerTier::Silver
+        } else {
+            PlayerTier::Bronze
+        }
+    }
+
+    fn require_player_tier_for_stake(
+        env: &Env,
+        player: &Address,
+        stake_amount: i128,
+    ) -> Result<(), Error> {
+        let tier = Self::tier_for_completed_matches(Self::completed_match_count(env, player));
+        let min_stake = Self::min_tier_stake(env.clone(), tier.clone());
+        let max_stake = Self::max_tier_stake(env.clone(), tier);
+
+        if stake_amount < min_stake || stake_amount > max_stake {
+            return Err(Error::TierStakeNotAllowed);
+        }
+
+        Ok(())
+    }
+
+    fn get_active_match_ids(env: &Env) -> soroban_sdk::Vec<u64> {
+        if let Some(active_matches) = env.storage().persistent().get(&DataKey::ActiveMatches) {
+            env.storage().persistent().extend_ttl(
+                &DataKey::ActiveMatches,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
             active_matches
         } else {
             soroban_sdk::vec![env]
@@ -760,9 +838,11 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::ActiveMatches, active_matches);
-        env.storage()
-            .persistent()
-            .extend_ttl(&DataKey::ActiveMatches, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &DataKey::ActiveMatches,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
     }
 
     fn append_active_match(env: &Env, match_id: u64) {
@@ -791,6 +871,29 @@ impl EscrowContract {
         Ok(Self::current_match_timeout(&env))
     }
 
+    pub fn tier_from_match_count(env: Env, player: Address) -> PlayerTier {
+        let completed_matches = Self::completed_match_count(&env, &player);
+        Self::tier_for_completed_matches(completed_matches)
+    }
+
+    pub fn min_tier_stake(_env: Env, tier: PlayerTier) -> i128 {
+        match tier {
+            PlayerTier::Bronze => BRONZE_MIN_STAKE,
+            PlayerTier::Silver => SILVER_MIN_STAKE,
+            PlayerTier::Gold => GOLD_MIN_STAKE,
+            PlayerTier::Platinum => PLATINUM_MIN_STAKE,
+        }
+    }
+
+    pub fn max_tier_stake(_env: Env, tier: PlayerTier) -> i128 {
+        match tier {
+            PlayerTier::Bronze => BRONZE_MAX_STAKE,
+            PlayerTier::Silver => SILVER_MAX_STAKE,
+            PlayerTier::Gold => GOLD_MAX_STAKE,
+            PlayerTier::Platinum => i128::MAX,
+        }
+    }
+
     pub fn set_match_timeout(env: Env, timeout: u32) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -804,7 +907,9 @@ impl EscrowContract {
         }
 
         let old_timeout = Self::current_match_timeout(&env);
-        env.storage().instance().set(&DataKey::MatchTimeout, &timeout);
+        env.storage()
+            .instance()
+            .set(&DataKey::MatchTimeout, &timeout);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("timeout")),
             (old_timeout, timeout),
@@ -867,11 +972,11 @@ impl EscrowContract {
     }
 
     /// Check whether both players have deposited their stakes.
-    /// 
+    ///
     /// This returns `true` as long as both `player1_deposited` and `player2_deposited` flags
     /// are set, regardless of match state. Specifically, it remains `true` after payout
     /// (when state transitions to `Completed`) because the deposit flags are never cleared.
-    /// 
+    ///
     /// This indicates historical deposit status, not current escrowed funds.
     /// To check if funds are currently held in escrow, use [`is_currently_escrowed`].
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
@@ -910,8 +1015,12 @@ impl EscrowContract {
 
     fn depositor_count(m: &Match) -> i128 {
         let mut count: i128 = 0;
-        if m.player1_deposited { count += 1; }
-        if m.player2_deposited { count += 1; }
+        if m.player1_deposited {
+            count += 1;
+        }
+        if m.player2_deposited {
+            count += 1;
+        }
         count
     }
 
@@ -1494,6 +1603,127 @@ impl EscrowContract {
         env.storage().instance().has(&DataKey::Oracle)
     }
 
+    /// Return the protocol config.
+    pub fn get_protocol_config(env: Env) -> ProtocolConfig {
+        Self::get_config(&env)
+    }
+
+    /// Update the protocol config — admin only.
+    pub fn update_protocol_config(env: Env, config: ProtocolConfig) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::ProtocolConfig, &config);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("config")),
+            config.vesting_duration_seconds,
+        );
+        Ok(())
+    }
+
+    /// Claim a vested match payout. Callable by players after the vesting period ends.
+    pub fn claim_vested_payout(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        player.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::Completed {
+            return Err(Error::InvalidState);
+        }
+
+        let vested_at = m.vested_at.ok_or(Error::InvalidState)?;
+        let config = Self::get_config(&env);
+        if env.ledger().timestamp() < vested_at.checked_add(config.vesting_duration_seconds).ok_or(Error::Overflow)? {
+            return Err(Error::VestingNotExpired);
+        }
+
+        let is_p1 = player == m.player1;
+        let is_p2 = player == m.player2;
+
+        if !is_p1 && !is_p2 {
+            return Err(Error::Unauthorized);
+        }
+
+        let winner = m.winner.as_ref().ok_or(Error::InvalidState)?;
+        let client = token::Client::new(&env, &m.token);
+        let amount_claimed;
+
+        if is_p1 {
+            if m.player1_claimed {
+                return Err(Error::AlreadyClaimed);
+            }
+
+            match winner {
+                Winner::Player1 => {
+                    let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                    client.transfer(&env.current_contract_address(), &m.player1, &pot);
+                    amount_claimed = pot;
+                }
+                Winner::Draw => {
+                    client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+                    amount_claimed = m.stake_amount;
+                }
+                Winner::Player2 => {
+                    return Err(Error::Unauthorized);
+                }
+            }
+            m.player1_claimed = true;
+        } else {
+            if m.player2_claimed {
+                return Err(Error::AlreadyClaimed);
+            }
+
+            match winner {
+                Winner::Player2 => {
+                    let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                    client.transfer(&env.current_contract_address(), &m.player2, &pot);
+                    amount_claimed = pot;
+                }
+                Winner::Draw => {
+                    client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+                    amount_claimed = m.stake_amount;
+                }
+                Winner::Player1 => {
+                    return Err(Error::Unauthorized);
+                }
+            }
+            m.player2_claimed = true;
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("claim")),
+            (match_id, player, amount_claimed, m.token.clone()),
+        );
+
+        Ok(())
+    }
+
+}
+
+impl EscrowContract {
+    fn get_config(env: &Env) -> ProtocolConfig {
+        env.storage().instance().get(&DataKey::ProtocolConfig).unwrap_or(ProtocolConfig {
+            vesting_duration_seconds: 259_200, // 3 days
+        })
+    }
 }
 
 #[cfg(test)]

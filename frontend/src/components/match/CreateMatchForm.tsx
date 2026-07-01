@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { StakeAmountInput } from '../StakeAmountInput';
 
 export interface CreateMatchData {
   player2: string;
@@ -50,8 +51,13 @@ export function CreateMatchForm({ onSubmit }: CreateMatchFormProps) {
       </div>
       <div>
         <label htmlFor="stakeAmount">Stake Amount</label>
-        <input id="stakeAmount" type="number" min="0" value={form.stakeAmount} onChange={set('stakeAmount')} />
-        {errors.stakeAmount && <span role="alert">{errors.stakeAmount}</span>}
+        <StakeAmountInput
+          id="stakeAmount"
+          tokenSymbol={form.token || "TOKEN"}
+          value={form.stakeAmount}
+          onChange={set('stakeAmount')}
+          min={0}
+        />
       </div>
       <div>
         <label htmlFor="token">Token Address</label>

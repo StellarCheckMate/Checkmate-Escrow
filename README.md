@@ -154,9 +154,11 @@ Prefer to learn by watching or testing yourself?
 
 ## 📖 Documentation
 
+- [Changelog](CHANGELOG.md) — release history and notable changes
 - [Interactive Tutorial](docs/tutorial-step-by-step.md) — guided, hands-on intro for new users
 - [Tutorial Quiz & Checklist](docs/tutorial-quiz.md) — verify your understanding
 - [FAQ](docs/faq.md) — common questions and answers
+- [Glossary](docs/glossary.md) — key terms (escrow, oracle, match states, Soroban, wave-ready, and more) for new contributors
 - [Architecture Overview](docs/architecture.md)
 - [Oracle Design](docs/oracle.md)
 - [Threat Model & Security](docs/security.md)

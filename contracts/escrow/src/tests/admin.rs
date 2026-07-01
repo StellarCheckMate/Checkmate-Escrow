@@ -50,6 +50,56 @@ fn test_admin_unpause_allows_create_match() {
 }
 
 #[test]
+fn test_admin_unpause_allows_deposit_after_paused() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "unpaused_deposit_game"),
+        &Platform::Lichess,
+    );
+
+    client.pause();
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+
+    client.unpause();
+    client.deposit(&id, &player1);
+    let m = client.get_match(&id);
+    assert!(m.player1_deposited, "deposit should succeed after unpause");
+}
+
+#[test]
+fn test_admin_unpause_allows_submit_result_after_paused() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "unpaused_submit_game"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    client.pause();
+    let result = client.try_submit_result(&id, &Winner::Player1);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+
+    client.unpause();
+    client.submit_result(&id, &Winner::Player1);
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Completed);
+}
+
+#[test]
 fn test_paused_contract_rejects_deposit() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);

@@ -23,6 +23,26 @@ Checkmate-Escrow is a trustless chess wagering platform built on Stellar Soroban
 - **Escrow Contract** (`contracts/escrow`): Holds player stakes, enforces match lifecycle, and executes payouts.
 - **Oracle Contract** (`contracts/oracle`): Bridges external chess platform APIs to the escrow contract, submitting verified match results on-chain.
 
+## Event Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Frontend
+    participant StellarRPC as Stellar RPC
+    participant Escrow as Escrow Contract
+    participant Indexer as Event Indexer
+
+    User->>Frontend: Create / deposit / cancel match
+    Frontend->>StellarRPC: Submit signed transaction
+    StellarRPC->>Escrow: Invoke contract function
+    Escrow-->>StellarRPC: Emit contract event<br/>(match.created / match.result / match.cancelled)
+    StellarRPC-->>Indexer: Stream ledger events
+    Indexer->>Indexer: Persist & index event data
+    Indexer-->>Frontend: Serve indexed state (REST / WebSocket)
+    Frontend-->>User: Update UI
+```
+
 ## Match Lifecycle
 
 ```mermaid
@@ -216,6 +236,8 @@ let page: Vec<u64> = all_ids.iter().skip(40).take(20).collect();
 ```
 
 ## Glossary
+
+> For the complete project glossary — escrow, oracle, match lifecycle states, Soroban, XLM, stake, payout, draw, wave-ready, `game_id`, allowlist, admin, epoch, ledger, Freighter, and more — see [docs/glossary.md](glossary.md). A few architecture-specific terms are summarized below.
 
 - **Ledger**: A single batch of transactions finalized by the Stellar network. In this project, ledger sequence numbers are used to record when matches were created, completed, or cancelled, and to enforce time-based rules such as match expiry.
 - **TTL**: Time-to-live, expressed in ledgers. In Soroban, TTL controls how long contract data remains valid in storage before it expires. The project uses ledger-based TTL values for match and index records.
