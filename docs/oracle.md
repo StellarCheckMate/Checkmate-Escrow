@@ -1,14 +1,8 @@
-# Oracle Integration Guide
+## Health Check
 
-This document describes the current oracle architecture used by Checkmate
-Escrow. It explains the two distinct on-chain oracle components and how they
-work together with the off-chain oracle service.
+The oracle exposes a /health endpoint to monitor connectivity and uptime.
 
-The current design has:
-- an `EscrowContract` that stores a trusted `oracle` address and authorises
-  result submissions for on-chain payout,
-- an `OracleContract` that stores an independent, auditable copy of verified
-  match results.
+**Endpoint:** GET /health
 
 The escrow contract uses its configured oracle address as the authoritative
 permission for submitting results to trigger payouts. The oracle contract is
