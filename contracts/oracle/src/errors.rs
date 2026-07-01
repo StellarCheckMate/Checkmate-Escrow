@@ -22,4 +22,6 @@ pub enum Error {
     RateLimitExceeded = 9,
     /// Rate limit values supplied to `set_oracle_rate_limits` are invalid.
     InvalidRateLimit = 10,
+    /// The oracle does not have enough staked balance to submit a result.
+    InsufficientStake = 11,
 }
