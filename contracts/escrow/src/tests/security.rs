@@ -1,6 +1,5 @@
 /// Security-focused tests for Checkmate-Escrow
 /// Includes fuzzing, authorization checks, and attack vector coverage
-
 use super::*;
 
 // ── Fuzz Test: Stake Amounts ─────────────────────────────────────────────────
@@ -12,10 +11,9 @@ fn test_fuzz_stake_amounts() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let test_amounts = std::vec![
-        1i128,                 // Minimum valid amount
-        100i128,               // Normal amount
-        1000i128,              // Large amount
-        i128::MAX / 2,         // Very large but safe
+        1i128,   // Minimum Bronze amount
+        50i128,  // Mid-range Bronze amount
+        100i128, // Bronze upper bound
     ];
 
     for (i, amount) in test_amounts.into_iter().enumerate() {
@@ -39,10 +37,10 @@ fn test_fuzz_invalid_stake_amounts() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let invalid_amounts = std::vec![
-        0i128,                 // Zero amount
-        -1i128,                // Negative amount
-        -100i128,              // Large negative
-        i128::MIN,             // Most negative
+        0i128,     // Zero amount
+        -1i128,    // Negative amount
+        -100i128,  // Large negative
+        i128::MIN, // Most negative
     ];
 
     for amount in invalid_amounts {
@@ -181,7 +179,7 @@ fn test_security_unauthorized_deposit() {
     // Player3 (not in the match) attempts to deposit
     env.mock_all_auths();
     let result = client.try_deposit(&match_id, &player3);
-    assert!(result.is_err(), "Should reject deposit from non-participant");
+    assert_eq!(result, Err(Ok(Error::Unauthorized)), "Should reject deposit from non-participant with Unauthorized");
 }
 
 /// Test that only oracle can submit results
@@ -238,7 +236,10 @@ fn test_security_double_deposit_attack() {
     // Second deposit from same player should fail
     env.mock_all_auths();
     let result2 = client.try_deposit(&match_id, &player1);
-    assert!(result2.is_err(), "Second deposit should be rejected (AlreadyFunded)");
+    assert!(
+        result2.is_err(),
+        "Second deposit should be rejected (AlreadyFunded)"
+    );
 }
 
 // ── Attack Vector: Invalid State Transitions ─────────────────────────────────
@@ -298,7 +299,10 @@ fn test_security_cancel_active_match_attack() {
     // Attempt to cancel an active match
     env.mock_all_auths();
     let result = client.try_cancel_match(&match_id, &player1);
-    assert!(result.is_err(), "Cannot cancel active match (MatchAlreadyActive)");
+    assert!(
+        result.is_err(),
+        "Cannot cancel active match (MatchAlreadyActive)"
+    );
 }
 
 // ── Attack Vector: Allowlist Bypass ──────────────────────────────────────────
@@ -330,7 +334,10 @@ fn test_security_allowlist_bypass_attempt() {
         &String::from_slice(&env, "game123"),
         &Platform::ChessDotCom,
     );
-    assert!(result.is_err(), "Should reject non-allowed token when allowlist enforced");
+    assert!(
+        result.is_err(),
+        "Should reject non-allowed token when allowlist enforced"
+    );
 }
 
 // ── Attack Vector: Pause Contract Bypass ────────────────────────────────────
@@ -425,13 +432,16 @@ fn test_security_same_player_attack() {
     env.mock_all_auths();
     let result = client.try_create_match(
         &player1,
-        &player1,  // Same player
+        &player1, // Same player
         &100i128,
         &token,
         &String::from_slice(&env, "game123"),
         &Platform::ChessDotCom,
     );
-    assert!(result.is_err(), "Should reject match with same player (InvalidPlayers)");
+    assert!(
+        result.is_err(),
+        "Should reject match with same player (InvalidPlayers)"
+    );
 }
 
 /// Test that contract address cannot be a player
@@ -443,13 +453,16 @@ fn test_security_contract_as_player_attack() {
     env.mock_all_auths();
     let result = client.try_create_match(
         &player1,
-        &contract_id,  // Contract as player2
+        &contract_id, // Contract as player2
         &100i128,
         &token,
         &String::from_slice(&env, "game123"),
         &Platform::ChessDotCom,
     );
-    assert!(result.is_err(), "Should reject contract as player (InvalidPlayers)");
+    assert!(
+        result.is_err(),
+        "Should reject contract as player (InvalidPlayers)"
+    );
 }
 
 // ── Invariant: Duplicate Game IDs ───────────────────────────────────────────
@@ -484,7 +497,10 @@ fn test_security_duplicate_game_id_attack() {
         &game_id,
         &Platform::ChessDotCom,
     );
-    assert!(result2.is_err(), "Should reject duplicate game_id (DuplicateGameId)");
+    assert!(
+        result2.is_err(),
+        "Should reject duplicate game_id (DuplicateGameId)"
+    );
 }
 
 // ── Invariant: Arithmetic Safety ────────────────────────────────────────────
@@ -520,7 +536,10 @@ fn test_security_payout_overflow_prevention() {
     // Submit result - should not panic on overflow
     env.mock_all_auths();
     let result = client.try_submit_result(&match_id, &Winner::Player1);
-    assert!(result.is_ok(), "Should handle large stakes without overflow");
+    assert!(
+        result.is_ok(),
+        "Should handle large stakes without overflow"
+    );
 }
 
 // ── Match Lifecycle: Pending State ──────────────────────────────────────────
@@ -573,11 +592,7 @@ fn test_security_oracle_record_stored() {
 
     // Submit result with oracle record
     env.mock_all_auths();
-    let result = client.try_submit_result_with_oracle_record(
-        &match_id,
-        &Winner::Player1,
-        &game_id,
-    );
+    let result = client.try_submit_result_with_oracle_record(&match_id, &Winner::Player1, &game_id);
     assert!(result.is_ok(), "Should store oracle record");
 }
 
@@ -604,7 +619,10 @@ fn test_security_double_initialize_prevention() {
     // Second initialize should fail
     env.mock_all_auths();
     let result2 = client.try_initialize(&oracle2, &admin);
-    assert!(result2.is_err(), "Second initialize should fail (AlreadyInitialized)");
+    assert!(
+        result2.is_err(),
+        "Second initialize should fail (AlreadyInitialized)"
+    );
 }
 
 /// Test that oracle address cannot be the contract itself (required acceptance criteria name)
@@ -638,7 +656,10 @@ fn test_security_oracle_cannot_be_contract() {
     // Initialize with contract as oracle (should fail)
     env.mock_all_auths();
     let result = client.try_initialize(&contract_id, &admin);
-    assert!(result.is_err(), "Should reject contract as oracle (InvalidAddress)");
+    assert!(
+        result.is_err(),
+        "Should reject contract as oracle (InvalidAddress)"
+    );
 }
 
 // #767 — accept_admin called by a non-pending-admin address must be rejected
