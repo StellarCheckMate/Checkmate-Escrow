@@ -377,6 +377,7 @@ fn test_full_match_lifecycle_winner_and_draw_scenarios() {
     assert_eq!(client.get_escrow_balance(&winner_match_id), 200);
 
     client.submit_result(&winner_match_id, &Winner::Player1);
+    client.claim_vested_payout(&winner_match_id, &player1);
     let winner_match = client.get_match(&winner_match_id);
     assert_eq!(winner_match.state, MatchState::Completed);
     assert_eq!(token_client.balance(&player1), 1100);
@@ -413,6 +414,8 @@ fn test_full_match_lifecycle_winner_and_draw_scenarios() {
     assert_eq!(client.get_escrow_balance(&draw_match_id), 150);
 
     client.submit_result(&draw_match_id, &Winner::Draw);
+    client.claim_vested_payout(&draw_match_id, &player3);
+    client.claim_vested_payout(&draw_match_id, &player4);
     let draw_match = client.get_match(&draw_match_id);
     assert_eq!(draw_match.state, MatchState::Completed);
     assert_eq!(token_client.balance(&player3), 1000);
@@ -448,6 +451,7 @@ fn test_full_match_lifecycle() {
     assert_eq!(client.get_escrow_balance(&id), 200);
 
     client.submit_result(&id, &Winner::Player1);
+    client.claim_vested_payout(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
     assert_eq!(token_client.balance(&player1), 1100);
     assert_eq!(token_client.balance(&player2), 900);
@@ -472,6 +476,7 @@ fn test_payout_winner() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
     client.submit_result(&id, &Winner::Player1);
+    client.claim_vested_payout(&id, &player1);
 
     assert_eq!(token_client.balance(&player1), 1100);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
@@ -496,6 +501,8 @@ fn test_draw_refund() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
     client.submit_result(&id, &Winner::Draw);
+    client.claim_vested_payout(&id, &player1);
+    client.claim_vested_payout(&id, &player2);
 
     assert_eq!(token_client.balance(&player1), 1000);
     assert_eq!(token_client.balance(&player2), 1000);
@@ -522,6 +529,8 @@ fn test_draw_refund_balances() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
     client.submit_result(&id, &Winner::Draw);
+    client.claim_vested_payout(&id, &player1);
+    client.claim_vested_payout(&id, &player2);
 
     assert_eq!(token_client.balance(&player1), player1_balance_before);
     assert_eq!(token_client.balance(&player2), player2_balance_before);
@@ -1784,4 +1793,128 @@ fn test_create_match_empty_game_id_rejected() {
         &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+}
+
+#[test]
+fn test_default_vesting_duration_seconds() {
+    let test_env = Env::default();
+    let contract_addr = test_env.register_contract(None, EscrowContract);
+    let test_client = EscrowContractClient::new(&test_env, &contract_addr);
+
+    let config = test_client.get_protocol_config();
+    assert_eq!(config.vesting_duration_seconds, 259_200); // 3 days
+}
+
+#[test]
+fn test_update_protocol_config() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.update_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 600,
+    });
+
+    let config = client.get_protocol_config();
+    assert_eq!(config.vesting_duration_seconds, 600);
+}
+
+#[test]
+fn test_vesting_enforced() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    // Set vesting duration to 1 hour (3600 seconds)
+    client.update_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 3600,
+    });
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "vesting_enforce_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Submit result
+    client.submit_result(&id, &Winner::Player1);
+
+    // Try to claim immediately - should fail
+    let claim_res = client.try_claim_vested_payout(&id, &player1);
+    assert_eq!(claim_res, Err(Ok(Error::VestingNotExpired)));
+
+    // Advance time by 3599 seconds - should still fail
+    env.ledger().with_mut(|info| {
+        info.timestamp = info.timestamp.saturating_add(3599);
+    });
+    let claim_res = client.try_claim_vested_payout(&id, &player1);
+    assert_eq!(claim_res, Err(Ok(Error::VestingNotExpired)));
+
+    // Advance time by 1 more second (total 3600) - should succeed
+    env.ledger().with_mut(|info| {
+        info.timestamp = info.timestamp.saturating_add(1);
+    });
+    let claim_res = client.claim_vested_payout(&id, &player1);
+    assert_eq!(claim_res, ());
+
+    assert_eq!(token_client.balance(&player1), 1100);
+}
+
+#[test]
+fn test_cannot_double_claim() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "double_claim_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1);
+
+    // First claim - succeeds (vesting is 0 by default in setup)
+    client.claim_vested_payout(&id, &player1);
+
+    // Second claim - fails
+    let claim_res = client.try_claim_vested_payout(&id, &player1);
+    assert_eq!(claim_res, Err(Ok(Error::AlreadyClaimed)));
+}
+
+#[test]
+fn test_claim_unauthorized_parties() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let outsider = Address::generate(&env);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "outsider_claim_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1);
+
+    // Outsider trying to claim - fails
+    let claim_res = client.try_claim_vested_payout(&id, &outsider);
+    assert_eq!(claim_res, Err(Ok(Error::Unauthorized)));
+
+    // Player 2 trying to claim (P1 won, so P2 payout is 0) - fails
+    let claim_res = client.try_claim_vested_payout(&id, &player2);
+    assert_eq!(claim_res, Err(Ok(Error::Unauthorized)));
 }

@@ -179,10 +179,7 @@ fn test_security_unauthorized_deposit() {
     // Player3 (not in the match) attempts to deposit
     env.mock_all_auths();
     let result = client.try_deposit(&match_id, &player3);
-    assert!(
-        result.is_err(),
-        "Should reject deposit from non-participant"
-    );
+    assert_eq!(result, Err(Ok(Error::Unauthorized)), "Should reject deposit from non-participant with Unauthorized");
 }
 
 /// Test that only oracle can submit results

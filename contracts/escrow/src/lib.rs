@@ -5,9 +5,7 @@ pub mod types;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
-use types::{
-    BalanceSnapshot, DataKey, Match, MatchState, Platform, PlayerTier, SnapshotReason, Winner,
-};
+use types::{BalanceSnapshot, DataKey, Match, MatchState, Platform, ProtocolConfig, SnapshotReason, Winner};
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -152,13 +150,10 @@ impl EscrowContract {
                     .instance()
                     .set(&DataKey::AllowlistEnforced, &true);
             }
-            Self::append_allowed_token(&env, &token);
         } else {
-            env.storage()
-                .instance()
-                .set(&DataKey::AllowlistEnforced, &true);
-            Self::append_allowed_token(&env, &token);
+            env.storage().instance().set(&DataKey::AllowlistEnforced, &true);
         }
+        Self::append_allowed_token(&env, &token);
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("token_add")),
@@ -375,6 +370,10 @@ impl EscrowContract {
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
             completed_ledger: None,
+            winner: None,
+            vested_at: None,
+            player1_claimed: false,
+            player2_claimed: false,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -516,8 +515,12 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Oracle submits the verified match result and triggers payout.
-    pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+    /// Oracle submits the verified match result and triggers payout vesting.
+    pub fn submit_result(
+        env: Env,
+        match_id: u64,
+        winner: Winner,
+    ) -> Result<(), Error> {
         if env
             .storage()
             .instance()
@@ -548,22 +551,13 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
-        let client = token::Client::new(&env, &m.token);
-        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
-
-        match winner {
-            Winner::Player1 => client.transfer(&env.current_contract_address(), &m.player1, &pot),
-            Winner::Player2 => client.transfer(&env.current_contract_address(), &m.player2, &pot),
-            Winner::Draw => {
-                client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
-                client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
-            }
-        }
-
         Self::remove_active_match(&env, match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
+        m.winner = Some(winner.clone());
+        m.vested_at = Some(env.ledger().timestamp());
+
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -623,11 +617,12 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state == MatchState::Active {
-            return Err(Error::MatchAlreadyActive);
-        }
         if m.state != MatchState::Pending {
-            return Err(Error::InvalidState);
+            return Err(if m.state == MatchState::Active {
+                Error::MatchAlreadyActive
+            } else {
+                Error::InvalidState
+            });
         }
 
         // Either player1 or player2 can cancel a pending match
@@ -1434,6 +1429,128 @@ impl EscrowContract {
     pub fn is_initialized(env: Env) -> bool {
         extend_instance_ttl(&env);
         env.storage().instance().has(&DataKey::Oracle)
+    }
+
+    /// Return the protocol config.
+    pub fn get_protocol_config(env: Env) -> ProtocolConfig {
+        Self::get_config(&env)
+    }
+
+    /// Update the protocol config — admin only.
+    pub fn update_protocol_config(env: Env, config: ProtocolConfig) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::ProtocolConfig, &config);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("config")),
+            config.vesting_duration_seconds,
+        );
+        Ok(())
+    }
+
+    /// Claim a vested match payout. Callable by players after the vesting period ends.
+    pub fn claim_vested_payout(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        player.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::Completed {
+            return Err(Error::InvalidState);
+        }
+
+        let vested_at = m.vested_at.ok_or(Error::InvalidState)?;
+        let config = Self::get_config(&env);
+        if env.ledger().timestamp() < vested_at.checked_add(config.vesting_duration_seconds).ok_or(Error::Overflow)? {
+            return Err(Error::VestingNotExpired);
+        }
+
+        let is_p1 = player == m.player1;
+        let is_p2 = player == m.player2;
+
+        if !is_p1 && !is_p2 {
+            return Err(Error::Unauthorized);
+        }
+
+        let winner = m.winner.as_ref().ok_or(Error::InvalidState)?;
+        let client = token::Client::new(&env, &m.token);
+        let amount_claimed;
+
+        if is_p1 {
+            if m.player1_claimed {
+                return Err(Error::AlreadyClaimed);
+            }
+
+            match winner {
+                Winner::Player1 => {
+                    let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                    client.transfer(&env.current_contract_address(), &m.player1, &pot);
+                    amount_claimed = pot;
+                }
+                Winner::Draw => {
+                    client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+                    amount_claimed = m.stake_amount;
+                }
+                Winner::Player2 => {
+                    return Err(Error::Unauthorized);
+                }
+            }
+            m.player1_claimed = true;
+        } else {
+            if m.player2_claimed {
+                return Err(Error::AlreadyClaimed);
+            }
+
+            match winner {
+                Winner::Player2 => {
+                    let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                    client.transfer(&env.current_contract_address(), &m.player2, &pot);
+                    amount_claimed = pot;
+                }
+                Winner::Draw => {
+                    client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+                    amount_claimed = m.stake_amount;
+                }
+                Winner::Player1 => {
+                    return Err(Error::Unauthorized);
+                }
+            }
+            m.player2_claimed = true;
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("claim")),
+            (match_id, player, amount_claimed, m.token.clone()),
+        );
+
+        Ok(())
+    }
+
+}
+
+impl EscrowContract {
+    fn get_config(env: &Env) -> ProtocolConfig {
+        env.storage().instance().get(&DataKey::ProtocolConfig).unwrap_or(ProtocolConfig {
+            vesting_duration_seconds: 259_200, // 3 days
+        })
     }
 }
 

@@ -26,11 +26,8 @@ pub enum Winner {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PlayerTier {
-    Bronze,
-    Silver,
-    Gold,
-    Platinum,
+pub struct ProtocolConfig {
+    pub vesting_duration_seconds: u64,
 }
 
 #[contracttype]
@@ -50,6 +47,10 @@ pub struct Match {
     pub created_ledger: u32,
     /// Ledger sequence number when match reached terminal state (Completed or Cancelled).
     pub completed_ledger: Option<u32>,
+    pub winner: Option<Winner>,
+    pub vested_at: Option<u64>,
+    pub player1_claimed: bool,
+    pub player2_claimed: bool,
 }
 
 #[contracttype]
@@ -74,6 +75,7 @@ pub enum DataKey {
     Snapshot(u64, u32),
     /// Total number of snapshots ever recorded for a match (monotonic, never reset).
     SnapshotCount(u64),
+    ProtocolConfig,
 }
 
 /// The lifecycle event that triggered a balance snapshot.
