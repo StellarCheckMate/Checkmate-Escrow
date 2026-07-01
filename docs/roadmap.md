@@ -168,3 +168,20 @@ Beyond v4.0, potential features include:
 Have ideas for features or improvements? Open an issue or discussion on GitHub. We welcome community input on prioritization and new feature proposals.
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for details on how to contribute.
+
+## v2.0: Multi-game Tournaments & Bracket Payouts
+
+### Tournament Data Model
+- **Tournament Entity:** Stores metadata (name, entry fee, game ID).
+- **Bracket Structure:** A tree-based model where each node represents a 'Match'.
+- **Match Entity:** Links two Participant IDs, stores WinnerID, and Status (Pending/Complete).
+
+### Bracket Payout Distribution Logic
+- **Mechanism:** Single-elimination tournament style.
+- **Payout:** Winner takes X% of the pool; remaining Y% distributed to runner-up/finalists based on a configurable PayoutTable.
+- **Escrow Integration:** Funds are locked at tournament start and released automatically via execute_payout upon Match conclusion.
+
+### Open Design Questions
+- **Entry Fees:** Should fees be collected per game or per tournament?
+- **Sponsorship:** How can third-party sponsors inject liquidity into the prize pool?
+- **Cancellation:** What is the mechanism for refunding entries if a tournament fails to fill?
