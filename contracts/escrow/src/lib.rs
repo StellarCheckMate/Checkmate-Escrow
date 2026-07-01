@@ -218,6 +218,14 @@ impl EscrowContract {
         env.storage().instance().get(&key).unwrap_or(false)
     }
 
+    /// Check if the allowlist enforcement is currently active.
+    pub fn is_allowlist_enforced(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::AllowlistEnforced)
+            .unwrap_or(false)
+    }
+
     /// Return the current allowlist as an ordered list.
     pub fn get_allowed_tokens(env: Env) -> Result<soroban_sdk::Vec<Address>, Error> {
         Ok(Self::get_allowed_token_list(&env))
@@ -397,6 +405,167 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::GameId(m.game_id.clone()), &true);
+        env.storage().persistent().extend_ttl(
+            &DataKey::GameId(m.game_id.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        // Add match ID to both players' match lists
+        let mut player1_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player1.clone()))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        player1_matches.push_back(id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerMatches(player1.clone()), &player1_matches);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerMatches(player1),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let mut player2_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player2.clone()))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        player2_matches.push_back(id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerMatches(player2.clone()), &player2_matches);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerMatches(player2),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Created);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("created")),
+            (id, m.player1, m.player2, stake_amount),
+        );
+
+        Ok(id)
+    }
+
+    /// Create a new match with multi-token support and conversion rates.
+    pub fn create_match_with_conversion(
+        env: Env,
+        player1: Address,
+        player2: Address,
+        stake_amount: i128,
+        token_a: Address,
+        token_b: Address,
+        rate: i128,
+        game_id: String,
+        platform: Platform,
+    ) -> Result<u64, Error> {
+        extend_instance_ttl(&env);
+        player1.require_auth();
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        // Check allowlist enforcement for both tokens
+        let allowlist_enforced: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowlistEnforced)
+            .unwrap_or(false);
+        if allowlist_enforced {
+            if !Self::is_token_allowed(env.clone(), token_a.clone()) || !Self::is_token_allowed(env.clone(), token_b.clone()) {
+                return Err(Error::TokenNotAllowed);
+            }
+        }
+
+        if stake_amount <= 0 || rate <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
+            return Err(Error::InvalidGameId);
+        }
+
+        // Reject if either player is invalid
+        if player1 == player2 {
+            return Err(Error::InvalidPlayers);
+        }
+        if player2 == env.current_contract_address() {
+            return Err(Error::InvalidPlayers);
+        }
+
+        if env.storage().persistent().has(&DataKey::GameId(game_id.clone())) {
+            return Err(Error::DuplicateGameId);
+        }
+
+        let id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+
+        if env.storage().persistent().has(&DataKey::Match(id)) {
+            return Err(Error::AlreadyExists);
+        }
+
+        // Oracle call to verify conversion rate within ±5%
+        let oracle_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+
+        // Retrieve oracle rate.
+        let oracle_rate: i128 = env.invoke_contract(
+            &oracle_address,
+            &Symbol::new(&env, "get_rate"),
+            soroban_sdk::vec![&env, token_a.clone().into_val(&env), token_b.clone().into_val(&env)],
+        );
+
+        // Verify conversion rate within ±5%
+        // rate * 100 >= oracle_rate * 95 && rate * 100 <= oracle_rate * 105
+        if rate.checked_mul(100).ok_or(Error::Overflow)? < oracle_rate.checked_mul(95).ok_or(Error::Overflow)?
+            || rate.checked_mul(100).ok_or(Error::Overflow)? > oracle_rate.checked_mul(105).ok_or(Error::Overflow)?
+        {
+            return Err(Error::InvalidConversionRate);
+        }
+
+        let m = Match {
+            id,
+            player1: player1.clone(),
+            player2: player2.clone(),
+            stake_amount,
+            token: token_a,
+            game_id,
+            platform,
+            state: MatchState::Pending,
+            player1_deposited: false,
+            player2_deposited: false,
+            created_ledger: env.ledger().sequence(),
+            completed_ledger: None,
+            conversion_rate: rate,
+            token_b: Some(token_b),
+        };
+
+        env.storage().persistent().set(&DataKey::Match(id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage().instance().set(&DataKey::MatchCount, &next_id);
+        env.storage().persistent().set(&DataKey::GameId(m.game_id.clone()), &true);
         env.storage().persistent().extend_ttl(
             &DataKey::GameId(m.game_id.clone()),
             MATCH_TTL_LEDGERS,
@@ -690,13 +859,25 @@ impl EscrowContract {
 
         caller.require_auth();
 
-        let client = token::Client::new(&env, &m.token);
+        let is_multi_token = m.token_b.is_some() && m.conversion_rate > 0;
 
         if m.player1_deposited {
-            client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+            let client_a = token::Client::new(&env, &m.token);
+            client_a.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
         }
         if m.player2_deposited {
-            client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+            let token_b = m.token_b.clone().unwrap_or_else(|| m.token.clone());
+            let amount_b = if is_multi_token {
+                m.stake_amount
+                    .checked_mul(m.conversion_rate)
+                    .ok_or(Error::Overflow)?
+                    .checked_div(10_000_000)
+                    .ok_or(Error::Overflow)?
+            } else {
+                m.stake_amount
+            };
+            let client_b = token::Client::new(&env, &token_b);
+            client_b.transfer(&env.current_contract_address(), &m.player2, &amount_b);
         }
 
         m.state = MatchState::Cancelled;
@@ -749,13 +930,25 @@ impl EscrowContract {
             return Err(Error::MatchNotExpired);
         }
 
-        let client = token::Client::new(&env, &m.token);
+        let is_multi_token = m.token_b.is_some() && m.conversion_rate > 0;
 
         if m.player1_deposited {
-            client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+            let client_a = token::Client::new(&env, &m.token);
+            client_a.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
         }
         if m.player2_deposited {
-            client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+            let token_b = m.token_b.clone().unwrap_or_else(|| m.token.clone());
+            let amount_b = if is_multi_token {
+                m.stake_amount
+                    .checked_mul(m.conversion_rate)
+                    .ok_or(Error::Overflow)?
+                    .checked_div(10_000_000)
+                    .ok_or(Error::Overflow)?
+            } else {
+                m.stake_amount
+            };
+            let client_b = token::Client::new(&env, &token_b);
+            client_b.transfer(&env.current_contract_address(), &m.player2, &amount_b);
         }
 
         m.state = MatchState::Cancelled;
