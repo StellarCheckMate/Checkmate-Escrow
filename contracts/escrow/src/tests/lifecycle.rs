@@ -994,6 +994,329 @@ fn test_match_count_increments_sequentially() {
     assert_eq!(last.state, MatchState::Pending);
 }
 
+// ── Pause/Resume tests ────────────────────────────────────────────────────────
+
+#[test]
+fn test_pause_active_match_sets_paused_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pause_state_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    client.pause_match(&id, &player1);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Paused);
+    assert!(m.paused_ledger.is_some());
+}
+
+#[test]
+fn test_resume_paused_match_sets_active_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "resume_state_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.pause_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Paused);
+
+    client.resume_match(&id, &player2);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Active);
+    assert!(m.paused_ledger.is_none());
+}
+
+#[test]
+fn test_pause_accumulates_total_pause_duration() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pause_duration_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // First pause
+    env.ledger().set_sequence(100);
+    client.pause_match(&id, &player1);
+
+    // Resume after 10 ledgers
+    env.ledger().set_sequence(110);
+    client.resume_match(&id, &player2);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.total_pause_duration, 10);
+
+    // Second pause
+    env.ledger().set_sequence(200);
+    client.pause_match(&id, &player2);
+
+    // Resume after 15 ledgers
+    env.ledger().set_sequence(215);
+    client.resume_match(&id, &player1);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.total_pause_duration, 25); // 10 + 15
+}
+
+#[test]
+fn test_pause_fails_on_non_active_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pause_pending_test"),
+        &Platform::Lichess,
+    );
+
+    // Cannot pause a pending match
+    let result = client.try_pause_match(&id, &player1);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_resume_fails_on_non_paused_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "resume_active_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Cannot resume an active match
+    let result = client.try_resume_match(&id, &player1);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_unauthorized_player_cannot_pause() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pause_unauth_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let unauthorized = Address::generate(&env);
+    let result = client.try_pause_match(&id, &unauthorized);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_unauthorized_player_cannot_resume() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "resume_unauth_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.pause_match(&id, &player1);
+
+    let unauthorized = Address::generate(&env);
+    let result = client.try_resume_match(&id, &unauthorized);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_pause_resume_cycle_preserves_escrow_balance() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pause_balance_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_escrow_balance(&id), 200);
+
+    client.pause_match(&id, &player1);
+    assert_eq!(client.get_escrow_balance(&id), 200);
+
+    client.resume_match(&id, &player2);
+    assert_eq!(client.get_escrow_balance(&id), 200);
+
+    // Verify token balances unchanged
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 900);
+    assert_eq!(token_client.balance(&contract_id), 200);
+}
+
+#[test]
+fn test_submit_result_fails_on_paused_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pause_submit_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.pause_match(&id, &player1);
+
+    // Cannot submit result on paused match
+    let result = client.try_submit_result(&id, &Winner::Player1);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_deposit_fails_on_paused_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pause_deposit_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.pause_match(&id, &player1);
+
+    // Cannot deposit on paused match
+    let result = client.try_deposit(&id, &player2);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_multiple_pause_resume_cycles() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "multi_pause_cycle"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Cycle 1
+    client.pause_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Paused);
+    client.resume_match(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Cycle 2
+    client.pause_match(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Paused);
+    client.resume_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Cycle 3
+    client.pause_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Paused);
+    client.resume_match(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    let m = client.get_match(&id);
+    assert!(m.total_pause_duration > 0);
+}
+
+#[test]
+fn test_pause_resume_with_snapshots() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pause_snapshot_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let snapshots_before = client.get_balance_snapshots(&id, &_admin);
+    let count_before = snapshots_before.len();
+
+    client.pause_match(&id, &player1);
+    let snapshots_after_pause = client.get_balance_snapshots(&id, &_admin);
+    assert_eq!(snapshots_after_pause.len(), count_before + 1);
+
+    client.resume_match(&id, &player2);
+    let snapshots_after_resume = client.get_balance_snapshots(&id, &_admin);
+    assert_eq!(snapshots_after_resume.len(), count_before + 2);
+}
+
 // #296 — get_escrow_balance returns 0 after draw payout
 #[test]
 fn test_escrow_balance_zero_after_draw() {

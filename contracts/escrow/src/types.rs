@@ -85,6 +85,8 @@ pub enum DataKey {
 pub enum SnapshotReason {
     Created,
     Deposit,
+    Paused,
+    Resumed,
     Completed,
     Cancelled,
     ResultSubmitted,

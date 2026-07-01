@@ -938,8 +938,103 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Pause an active match — either player can pause.
+    /// Sets match state to Paused and records the pause start ledger.
+    pub fn pause_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        caller.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidPauseState);
+        }
+
+        let is_p1 = caller == m.player1;
+        let is_p2 = caller == m.player2;
+
+        if !is_p1 && !is_p2 {
+            return Err(Error::Unauthorized);
+        }
+
+        m.state = MatchState::Paused;
+        m.paused_ledger = Some(env.ledger().sequence());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Paused);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("paused")),
+            match_id,
+        );
+
+        Ok(())
+    }
+
+    /// Resume a paused match — either player can resume.
+    /// Sets match state back to Active and accumulates pause duration.
+    pub fn resume_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        caller.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::Paused {
+            return Err(Error::InvalidState);
+        }
+
+        let is_p1 = caller == m.player1;
+        let is_p2 = caller == m.player2;
+
+        if !is_p1 && !is_p2 {
+            return Err(Error::Unauthorized);
+        }
+
+        let current_ledger = env.ledger().sequence();
+        if let Some(paused_at) = m.paused_ledger {
+            let pause_duration = current_ledger.saturating_sub(paused_at);
+            m.total_pause_duration = m.total_pause_duration.saturating_add(pause_duration);
+        }
+
+        m.state = MatchState::Active;
+        m.paused_ledger = None;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Resumed);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("resumed")),
+            match_id,
+        );
+
+        Ok(())
+    }
+
     /// Expire a pending match that has not been fully funded within MATCH_TIMEOUT_LEDGERS.
     /// Anyone can call this; funds are returned to whoever deposited.
+    /// Pause duration is excluded from the timeout calculation.
     pub fn expire_match(env: Env, match_id: u64) -> Result<(), Error> {
         extend_instance_ttl(&env);
         let mut m: Match = env
@@ -952,10 +1047,12 @@ impl EscrowContract {
             return Err(Error::InvalidState);
         }
 
-        let elapsed = env.ledger().sequence().saturating_sub(m.created_ledger);
+        let current_ledger = env.ledger().sequence();
+        let total_elapsed = current_ledger.saturating_sub(m.created_ledger);
+        let effective_elapsed = total_elapsed.saturating_sub(m.total_pause_duration);
         let timeout = Self::current_match_timeout(&env);
 
-        if elapsed < timeout {
+        if effective_elapsed < timeout {
             return Err(Error::MatchNotExpired);
         }
 
