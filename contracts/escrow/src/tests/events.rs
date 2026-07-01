@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, Ledger as _};
 
 #[test]
 fn test_initialize_emits_event() {
@@ -453,6 +453,11 @@ fn test_remove_allowed_token_emits_event() {
 fn test_expire_match_emits_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Use the minimum timeout and create the match at a known ledger so the
+    // advance below is guaranteed to clear the expiration threshold.
+    client.set_match_timeout(&17_280);
+    env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
         &player1,
