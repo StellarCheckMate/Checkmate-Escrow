@@ -10,6 +10,7 @@ use event_indexer::{
     rpc::SorobanRpcClient,
 };
 use rusqlite::Connection;
+use serde_json;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
@@ -164,4 +165,37 @@ async fn test_get_match_info_404_returns_error_body() {
 
     assert!(!parsed.success);
     assert_eq!(parsed.error.as_deref(), Some("Match 9999 not found"));
+}
+
+#[tokio::test]
+async fn test_unknown_status_returns_400() {
+    for uri in ["/events?status=bogus", "/matches?status=bogus"] {
+        let app = test_app();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "expected 400 for {uri}"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let parsed: ApiResponse<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+
+        assert!(!parsed.success, "success must be false for {uri}");
+        assert!(
+            parsed.error.as_deref().unwrap_or("").contains("Invalid query parameter"),
+            "expected 'Invalid query parameter' in error for {uri}, got: {:?}",
+            parsed.error
+        );
+    }
 }
