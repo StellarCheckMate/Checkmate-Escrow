@@ -112,3 +112,32 @@ pub struct BalanceSnapshot {
     pub player1_deposited: bool,
     pub player2_deposited: bool,
 }
+
+/// A point-in-time record of a player's aggregate escrow balance across all
+/// of that player's deposit-eligible positions.
+///
+/// Recorded on every deposit, payout, refund (cancel_match), and timeout
+/// (expire_match) so callers can ask "what was this player's escrow balance
+/// at ledger X?". The balance field sums `stake_amount` over every non-
+/// terminal match in which the player is `player1` (with `player1_deposited`)
+/// or `player2` (with `player2_deposited`), i.e. the player's current
+/// attributable escrow position.
+///
+/// Stored in a fixed-size ring buffer per player keyed by
+/// `DataKey::PlayerBalanceSnapshot(player, slot)` where `slot = index %
+/// MAX_PLAYER_SNAPSHOTS` (see lib.rs). Older entries are silently
+/// overwritten once the buffer fills, so `index` (monotonic) lets callers
+/// detect gaps caused by pruning.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayerBalanceSnapshot {
+    pub player: Address,
+    /// Monotonically increasing position in the player's snapshot history.
+    pub index: u64,
+    /// Ledger sequence number at the time of the snapshot. Stored as `u64`
+    /// so callers can pass arbitrary ledger sequences to
+    /// `get_balance_at_timestamp` (the spec'd type).
+    pub ledger: u64,
+    /// Aggregate escrow balance captured at this point in time.
+    pub balance: i128,
+}
