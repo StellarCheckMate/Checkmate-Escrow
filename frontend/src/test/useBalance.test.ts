@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { renderHook, act, waitFor } from '@testing-library/react';
 import { useBalance } from '../hooks/useBalance';
 
 const mockLoadAccount = vi.fn();
@@ -10,7 +10,9 @@ vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
     ...actual,
     Horizon: {
       ...actual.Horizon,
-      Server: vi.fn().mockImplementation(() => ({ loadAccount: mockLoadAccount })),
+      Server: vi.fn().mockImplementation(function (this: any) {
+        this.loadAccount = mockLoadAccount;
+      }),
     },
   };
 });
@@ -30,12 +32,16 @@ describe('useBalance', () => {
     vi.useFakeTimers();
 
     const { unmount } = renderHook(() => useBalance('GABC123'));
+    
+    // Let React run effects and resolve the mock loadAccount
+    await act(async () => {});
 
-    // Wait for the initial fetch
-    await waitFor(() => expect(mockLoadAccount).toHaveBeenCalledTimes(1));
+    expect(mockLoadAccount).toHaveBeenCalledTimes(1);
 
     // Advance time by 10 seconds to trigger the interval
-    await vi.advanceTimersByTimeAsync(10_000);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
 
     expect(mockLoadAccount).toHaveBeenCalledTimes(2);
 

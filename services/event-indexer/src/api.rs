@@ -1,6 +1,7 @@
 use axum::{
-    extract::{Query, Path, State},
-    http::StatusCode,
+    async_trait,
+    extract::{rejection::QueryRejection, FromRequestParts, Path, Query, State},
+    http::{request::Parts, StatusCode},
     routing::get,
     Json, Router,
 };
@@ -13,7 +14,7 @@ use tracing::info;
 use crate::{
     cache::EventCache,
     db::Database,
-    models::{IndexedEvent, MatchInfo, QueryFilters, MatchStatus},
+    models::{IndexedEvent, MatchInfo, MatchStatus, QueryFilters},
     rpc::SorobanRpcClient,
 };
 
@@ -31,17 +32,46 @@ pub struct ApiResponse<T> {
     pub error: Option<String>,
 }
 
+/// A custom `Query` extractor that returns a `400 ApiResponse` on deserialization failure
+/// instead of axum's default 422 with a plain-text body.
+pub struct TypedQuery<T>(pub T);
+
+#[async_trait]
+impl<T, S> FromRequestParts<S> for TypedQuery<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, Json<ApiResponse<()>>);
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        axum::extract::Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|axum::extract::Query(inner)| TypedQuery(inner))
+            .map_err(|e: QueryRejection| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        error: Some(format!("Invalid query parameter: {}", e.body_text())),
+                    }),
+                )
+            })
+    }
+}
+
 #[derive(Deserialize)]
 pub struct EventQuery {
     pub player_address: Option<String>,
-    pub status: Option<String>,
+    pub status: Option<MatchStatus>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
 
 #[derive(Deserialize)]
 pub struct MatchQuery {
-    pub status: Option<String>,
+    pub status: Option<MatchStatus>,
 }
 
 #[derive(Deserialize)]
@@ -93,18 +123,11 @@ async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> 
 
 async fn get_events(
     State(state): State<AppState>,
-    Query(query): Query<EventQuery>,
+    TypedQuery(query): TypedQuery<EventQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<IndexedEvent>>>) {
     let filters = QueryFilters {
         player_address: query.player_address,
-        status: query.status.as_ref().map(|s| match s.as_str() {
-            "pending" => MatchStatus::Pending,
-            "active" => MatchStatus::Active,
-            "completed" => MatchStatus::Completed,
-            "cancelled" => MatchStatus::Cancelled,
-            "expired" => MatchStatus::Expired,
-            _ => MatchStatus::Pending,
-        }),
+        status: query.status,
         start_date: None,
         end_date: None,
         limit: query.limit.or(Some(100)),
@@ -205,16 +228,9 @@ async fn get_match_events(
 
 async fn get_matches(
     State(state): State<AppState>,
-    Query(query): Query<MatchQuery>,
+    TypedQuery(query): TypedQuery<MatchQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
-    let status = query.status.as_ref().map(|s| match s.as_str() {
-        "pending" => MatchStatus::Pending,
-        "active" => MatchStatus::Active,
-        "completed" => MatchStatus::Completed,
-        "cancelled" => MatchStatus::Cancelled,
-        "expired" => MatchStatus::Expired,
-        _ => MatchStatus::Pending,
-    });
+    let status = query.status;
 
     match state.db.get_matches_by_status(status.as_ref()) {
         Ok(matches) => (

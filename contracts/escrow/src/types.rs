@@ -26,6 +26,12 @@ pub enum Winner {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolConfig {
+    pub vesting_duration_seconds: u64,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Match {
     pub id: u64,
@@ -42,6 +48,10 @@ pub struct Match {
     pub created_ledger: u32,
     /// Ledger sequence number when match reached terminal state (Completed or Cancelled).
     pub completed_ledger: Option<u32>,
+    pub winner: Option<Winner>,
+    pub vested_at: Option<u64>,
+    pub player1_claimed: bool,
+    pub player2_claimed: bool,
 }
 
 #[contracttype]
@@ -66,20 +76,7 @@ pub enum DataKey {
     Snapshot(u64, u32),
     /// Total number of snapshots ever recorded for a match (monotonic, never reset).
     SnapshotCount(u64),
-    /// Dispute period in ledgers. 0 means no dispute period (immediate payout).
-    DisputePeriod,
-    /// Dispute by ID.
-    Dispute(u64),
-    /// Mapping from match_id to dispute_id (separate from Dispute to avoid key collisions).
-    MatchDispute(u64),
-    /// Monotonically increasing dispute counter.
-    DisputeCount,
-    /// Whether a voter has already voted on a dispute.
-    DisputeVote(u64, Address),
-    /// Pending winner for a match in PendingResult state.
-    PendingWinner(u64),
-    /// Ledger sequence by which a dispute must be raised for the match.
-    ResultDeadline(u64),
+    ProtocolConfig,
 }
 
 /// The lifecycle event that triggered a balance snapshot.
@@ -119,28 +116,31 @@ pub struct BalanceSnapshot {
     pub player2_deposited: bool,
 }
 
-/// State of a dispute against an oracle result.
-#[contracttype]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DisputeState {
-    Active,
-    ResolvedUpheld,
-    ResolvedOverturned,
-}
-
-/// A community dispute raised against an oracle-submitted match result.
+/// A point-in-time record of a player's aggregate escrow balance across all
+/// of that player's deposit-eligible positions.
+///
+/// Recorded on every deposit, payout, refund (cancel_match), and timeout
+/// (expire_match) so callers can ask "what was this player's escrow balance
+/// at ledger X?". The balance field sums `stake_amount` over every non-
+/// terminal match in which the player is `player1` (with `player1_deposited`)
+/// or `player2` (with `player2_deposited`), i.e. the player's current
+/// attributable escrow position.
+///
+/// Stored in a fixed-size ring buffer per player keyed by
+/// `DataKey::PlayerBalanceSnapshot(player, slot)` where `slot = index %
+/// MAX_PLAYER_SNAPSHOTS` (see lib.rs). Older entries are silently
+/// overwritten once the buffer fills, so `index` (monotonic) lets callers
+/// detect gaps caused by pruning.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
-pub struct Dispute {
-    pub id: u64,
-    pub match_id: u64,
-    pub disputer: Address,
-    pub evidence_hash: String,
-    /// Total "yes" votes (overturn the oracle result).
-    pub yes_votes: i128,
-    /// Total "no" votes (uphold the oracle result).
-    pub no_votes: i128,
-    /// Ledger sequence by which voting must conclude.
-    pub voting_deadline: u32,
-    pub state: DisputeState,
+pub struct PlayerBalanceSnapshot {
+    pub player: Address,
+    /// Monotonically increasing position in the player's snapshot history.
+    pub index: u64,
+    /// Ledger sequence number at the time of the snapshot. Stored as `u64`
+    /// so callers can pass arbitrary ledger sequences to
+    /// `get_balance_at_timestamp` (the spec'd type).
+    pub ledger: u64,
+    /// Aggregate escrow balance captured at this point in time.
+    pub balance: i128,
 }
