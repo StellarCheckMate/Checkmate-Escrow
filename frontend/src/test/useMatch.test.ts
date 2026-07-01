@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { useMatch } from '../hooks/useMatch';
 
 describe('useMatch', () => {
@@ -33,15 +33,18 @@ describe('useMatch', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const { result } = renderHook(() => useMatch(1));
-
-    await waitFor(() => expect(result.current.match).toEqual(matchResponse.data));
+ 
+    await act(async () => {});
+    expect(result.current.match).toEqual(matchResponse.data);
     expect(result.current.loading).toBe(false);
     expect(result.current.error).toBeNull();
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8080/match/1');
-
-    vi.advanceTimersByTime(10_000);
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+ 
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+ 
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('sets error when matchId is null', () => {
