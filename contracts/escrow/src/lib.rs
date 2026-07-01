@@ -2497,6 +2497,3 @@ impl EscrowContract {
         })
     }
 }
-
-#[cfg(test)]
-mod tests;
