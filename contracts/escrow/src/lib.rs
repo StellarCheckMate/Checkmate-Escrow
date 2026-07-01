@@ -16,6 +16,12 @@ const MATCH_TTL_LEDGERS: u32 = 518_400;
 /// for matches that somehow generate more transitions.
 const MAX_SNAPSHOTS_PER_MATCH: u32 = 8;
 
+/// Fixed-size ring buffer capacity for player-level balance snapshots.
+/// Player history spans many matches, so this is larger than the per-match
+/// cap. Older entries are silently overwritten once the buffer fills; the
+/// monotonic `index`/`PlayerBalanceSnapshotCount` lets callers detect gaps.
+const MAX_PLAYER_SNAPSHOTS: u32 = 32;
+
 /// Default match expiration timeout used when no explicit timeout is configured.
 pub const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = MATCH_TTL_LEDGERS;
 
@@ -511,6 +517,7 @@ impl EscrowContract {
         );
 
         Self::record_snapshot(&env, &m, SnapshotReason::Deposit);
+        Self::record_player_snapshot(&env, &player);
 
         Ok(())
     }
@@ -568,6 +575,8 @@ impl EscrowContract {
         );
 
         Self::record_snapshot(&env, &m, SnapshotReason::Completed);
+        Self::record_player_snapshot(&env, &m.player1);
+        Self::record_player_snapshot(&env, &m.player2);
 
         let topics = (Symbol::new(&env, "match"), symbol_short!("completed"));
         env.events().publish(topics, (match_id, winner));
@@ -656,6 +665,14 @@ impl EscrowContract {
         );
 
         Self::record_snapshot(&env, &m, SnapshotReason::Cancelled);
+        // Player-level snapshots are recorded only for refunded parties —
+        // non-depositors' escrow balance is already 0 and would not change.
+        if m.player1_deposited {
+            Self::record_player_snapshot(&env, &m.player1);
+        }
+        if m.player2_deposited {
+            Self::record_player_snapshot(&env, &m.player2);
+        }
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("cancelled")),
@@ -707,6 +724,14 @@ impl EscrowContract {
         );
 
         Self::record_snapshot(&env, &m, SnapshotReason::Cancelled);
+        // Player-level snapshots are recorded only for refunded parties —
+        // non-depositors' escrow balance is already 0 and would not change.
+        if m.player1_deposited {
+            Self::record_player_snapshot(&env, &m.player1);
+        }
+        if m.player2_deposited {
+            Self::record_player_snapshot(&env, &m.player2);
+        }
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("expired")),
@@ -1191,6 +1216,153 @@ impl EscrowContract {
         } else {
             Self::redact_snapshot(snapshot)
         })
+    }
+
+    // ── Player-level balance history ────────────────────────────────────────
+
+    /// Compute `player`'s aggregate escrow balance right now: the sum of
+    /// `stake_amount` across every non-terminal match the player is part of
+    /// and has actually deposited in (the depositing side is identified by
+    /// `player1_deposited` / `player2_deposited`).
+    ///
+    /// Used by `record_player_snapshot` and (transitively) by
+    /// `get_balance_at_timestamp`. Arithmetic uses `saturating_add` and
+    /// matches the existing `escrow_balance_of` routine — callers are
+    /// expected to operate in realistic stake ranges where overflow is not
+    /// a concern.
+    fn player_escrow_balance(env: &Env, player: &Address) -> i128 {
+        let key = DataKey::PlayerMatches(player.clone());
+        let player_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| soroban_sdk::vec![env]);
+
+        let mut total: i128 = 0;
+        for m_id in player_matches.iter() {
+            if let Some(m) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(m_id))
+            {
+                let deposited = (m.player1 == *player && m.player1_deposited)
+                    || (m.player2 == *player && m.player2_deposited);
+                if !deposited {
+                    continue;
+                }
+                if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
+                    continue;
+                }
+                total = total.saturating_add(m.stake_amount);
+            }
+        }
+        total
+    }
+
+    /// Record a player-level balance snapshot for `player` at the current
+    /// ledger. Called on every balance-changing event: deposit, payout,
+    /// cancel refund, and expire refund.
+    ///
+    /// Uses the same fixed-size ring buffer pattern as the per-match snapshots:
+    /// `slot = index % MAX_PLAYER_SNAPSHOTS` and once
+    /// `PlayerBalanceSnapshotCount` exceeds the cap, older entries are
+    /// silently overwritten.
+    fn record_player_snapshot(env: &Env, player: &Address) {
+        let balance = Self::player_escrow_balance(env, player);
+        let index: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerBalanceSnapshotCount(player.clone()))
+            .unwrap_or(0u64);
+        let slot: u64 = index % MAX_PLAYER_SNAPSHOTS as u64;
+
+        let snapshot = PlayerBalanceSnapshot {
+            player: player.clone(),
+            index,
+            ledger: env.ledger().sequence() as u64,
+            balance,
+        };
+
+        let snapshot_key = DataKey::PlayerBalanceSnapshot(player.clone(), slot);
+        env.storage().persistent().set(&snapshot_key, &snapshot);
+        env.storage()
+            .persistent()
+            .extend_ttl(&snapshot_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        let count_key = DataKey::PlayerBalanceSnapshotCount(player.clone());
+        let next_index = index.saturating_add(1);
+        env.storage().persistent().set(&count_key, &next_index);
+        env.storage()
+            .persistent()
+            .extend_ttl(&count_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        env.events().publish(
+            (Symbol::new(env, "player"), symbol_short!("snapshot")),
+            (player.clone(), index, balance),
+        );
+    }
+
+    /// Return `player`'s aggregate escrow balance at or before `timestamp`
+    /// (a ledger sequence number passed as `u64`). Returns `0` when no
+    /// recorded snapshot exists at or before the timestamp — including the
+    /// cases where the player has never recorded a snapshot and where the
+    /// ring buffer has pruned away everything older than `timestamp`.
+    ///
+    /// Walks the player's snapshot ring buffer newest-first to find the
+    /// first entry whose `ledger` is `<= timestamp` and returns that
+    /// snapshot's `balance`. If none qualify, returns `0`.
+    ///
+    /// Read-only and unauthenticated: the player's aggregate escrow
+    /// balance is public information (no per-match stake amounts exposed).
+    pub fn get_balance_at_timestamp(
+        env: Env,
+        player: Address,
+        timestamp: u64,
+    ) -> i128 {
+        let count: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerBalanceSnapshotCount(player.clone()))
+            .unwrap_or(0u64);
+
+        if count == 0 {
+            return 0;
+        }
+
+        let cap = MAX_PLAYER_SNAPSHOTS as u64;
+        let available = count.min(cap);
+        let start = count.saturating_sub(available);
+
+        // Walk newest-first; first snapshot whose ledger <= timestamp wins.
+        let mut cursor = count;
+        while cursor > start {
+            cursor = cursor.saturating_sub(1);
+            let snapshot_index = cursor;
+            let slot = snapshot_index % cap;
+            if let Some(snap) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, PlayerBalanceSnapshot>(&DataKey::PlayerBalanceSnapshot(
+                    player.clone(),
+                    slot,
+                ))
+            {
+                // The ring buffer may contain stale entries at slots that
+                // have been overwritten by newer snapshots. Verify this slot
+                // actually corresponds to the snapshot at `snapshot_index`
+                // before trusting its `ledger` field. The slot is keyed by
+                // `player` already, so the entry is guaranteed to belong to
+                // that player — no separate player check needed.
+                if snap.index != snapshot_index {
+                    continue;
+                }
+                if snap.ledger <= timestamp {
+                    return snap.balance;
+                }
+            }
+        }
+
+        0
     }
 
     fn collect_matches_by_state(
