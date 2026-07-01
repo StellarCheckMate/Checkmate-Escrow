@@ -41,10 +41,20 @@ pub struct BatchResultEntry {
 }
 
 #[contracttype]
+#[derive(Clone, Debug)]
+pub struct OracleRegistration {
+    pub oracle_address: Address,
+    pub oracle_stake: i128,
+    pub token: Address,
+}
+
+#[contracttype]
 pub enum DataKey {
     Admin,
     Result(u64), // keyed by match_id
     Paused,      // emergency pause state
+    /// Registered oracle staking information.
+    OracleRegistration(Address),
     /// Per-oracle override of the default hourly/daily submission limits.
     OracleRateLimit(Address),
     /// Sliding window submission counters for the hourly limit, keyed by oracle address.
