@@ -758,3 +758,166 @@ fn test_full_dispute_lifecycle_overturned() {
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.state, DisputeState::ResolvedOverturned);
 }
+
+// ── dispute_and_rollback_match ────────────────────────────────────────────────
+
+#[test]
+fn test_dispute_and_rollback_match_within_window() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(100);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "rollback_ok");
+
+    // Oracle submits result (immediate payout since dispute_period > 0 but we're testing rollback)
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1);
+
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Completed);
+    assert_eq!(token_client.balance(&player1), 1100);
+    assert_eq!(token_client.balance(&player2), 900);
+
+    // Player2 disputes within 24-hour window (17,280 ledgers)
+    env.ledger().set_sequence_number(1001);
+    client.dispute_and_rollback_match(
+        &match_id,
+        &player2,
+        &String::from_str(&env, "opponent disconnected"),
+    );
+
+    // Match should be cancelled and both players refunded
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Cancelled);
+    assert_eq!(m.winner, None);
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(client.get_escrow_balance(&match_id), 0);
+}
+
+#[test]
+fn test_dispute_and_rollback_match_after_window_fails() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(100);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "rollback_late");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1);
+
+    assert_eq!(token_client.balance(&player1), 1100);
+
+    // Try to dispute after 24-hour window (17,281 ledgers later)
+    env.ledger().set_sequence_number(1000 + 17_281);
+    let result = client.try_dispute_and_rollback_match(
+        &match_id,
+        &player2,
+        &String::from_str(&env, "too late"),
+    );
+    assert_eq!(result, Err(Ok(Error::DisputeWindowElapsed)));
+
+    // Funds should not be refunded
+    assert_eq!(token_client.balance(&player1), 1100);
+    assert_eq!(token_client.balance(&player2), 900);
+}
+
+#[test]
+fn test_dispute_and_rollback_match_rejects_non_player() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(100);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "rollback_unauth");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1);
+
+    let stranger = Address::generate(&env);
+    let result = client.try_dispute_and_rollback_match(
+        &match_id,
+        &stranger,
+        &String::from_str(&env, "not a player"),
+    );
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_dispute_and_rollback_match_rejects_non_completed() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(100);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "rollback_badstate");
+
+    // Try to rollback an Active match (not Completed)
+    let result = client.try_dispute_and_rollback_match(
+        &match_id,
+        &player1,
+        &String::from_str(&env, "not completed"),
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidState)));
+}
+
+#[test]
+fn test_dispute_and_rollback_match_emits_event() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(100);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "rollback_evt");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1);
+
+    env.ledger().set_sequence_number(1001);
+    client.dispute_and_rollback_match(
+        &match_id,
+        &player2,
+        &String::from_str(&env, "disconnected"),
+    );
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        Symbol::new(&env, "rollback").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match/rollback event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_match_id, ev_disputer, ev_reason): (u64, Address, String) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_match_id, match_id);
+    assert_eq!(ev_disputer, player2);
+    assert_eq!(ev_reason, String::from_str(&env, "disconnected"));
+}
+
+#[test]
+fn test_dispute_and_rollback_match_both_players_can_dispute() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(100);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "rollback_p1");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player2);
+
+    // Player1 disputes
+    env.ledger().set_sequence_number(1001);
+    client.dispute_and_rollback_match(
+        &match_id,
+        &player1,
+        &String::from_str(&env, "opponent disconnected"),
+    );
+
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&player2), 1000);
+}

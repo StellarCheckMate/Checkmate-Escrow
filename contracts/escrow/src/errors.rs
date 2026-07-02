@@ -41,4 +41,5 @@ pub enum Error {
     NotInitialized = 36,
     InvalidPauseState = 37,
     InvalidConversionRate = 38,
+    DisputeWindowElapsed = 39,
 }

@@ -412,6 +412,7 @@ impl EscrowContract {
             token_b: None,
             paused_ledger: None,
             total_pause_duration: 0,
+            last_heartbeat: env.ledger().sequence() as u64,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -577,6 +578,7 @@ impl EscrowContract {
             token_b: Some(token_b),
             paused_ledger: None,
             total_pause_duration: 0,
+            last_heartbeat: env.ledger().sequence() as u64,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -2451,6 +2453,106 @@ impl EscrowContract {
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("claim")),
             (match_id, player, amount_claimed, m.token.clone()),
+        );
+
+        Ok(())
+    }
+
+    /// Dispute and rollback a completed match within the 24-hour window.
+    ///
+    /// Either player can dispute a completed match if they believe the result
+    /// was incorrect (e.g., due to opponent disconnection). The dispute must be
+    /// raised within 24 hours (17,280 ledgers at 5s/ledger) of match completion.
+    ///
+    /// Upon successful dispute, both players receive their stakes back and the
+    /// match is set to Cancelled state.
+    ///
+    /// # Parameters
+    /// - `match_id`: The ID of the completed match to dispute
+    /// - `disputer`: The address of the player raising the dispute
+    /// - `reason`: A description of why the match is being disputed
+    ///
+    /// # Errors
+    /// - `Error::MatchNotFound` — no match exists for `match_id`
+    /// - `Error::InvalidState` — match is not in Completed state
+    /// - `Error::Unauthorized` — caller is not one of the match players
+    /// `Error::DisputeWindowElapsed` — more than 24 hours have passed since completion
+    pub fn dispute_and_rollback_match(
+        env: Env,
+        match_id: u64,
+        disputer: Address,
+        reason: String,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        disputer.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        // Match must be in Completed state
+        if m.state != MatchState::Completed {
+            return Err(Error::InvalidState);
+        }
+
+        // Only match participants may dispute
+        let is_p1 = disputer == m.player1;
+        let is_p2 = disputer == m.player2;
+
+        if !is_p1 && !is_p2 {
+            return Err(Error::Unauthorized);
+        }
+
+        // Check if within 24-hour dispute window (17,280 ledgers at 5s/ledger)
+        let completed_ledger = m.completed_ledger.ok_or(Error::InvalidState)?;
+        let current_ledger = env.ledger().sequence();
+        let dispute_window: u32 = 17_280; // 24 hours in ledgers
+
+        if current_ledger.saturating_sub(completed_ledger) > dispute_window {
+            return Err(Error::DisputeWindowElapsed);
+        }
+
+        // Refund both players
+        let client = token::Client::new(&env, &m.token);
+        
+        if m.player1_deposited {
+            client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+        }
+        if m.player2_deposited {
+            client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+        }
+
+        // Update match state to Cancelled
+        m.state = MatchState::Cancelled;
+        m.winner = None;
+        m.vested_at = None;
+        m.player1_claimed = false;
+        m.player2_claimed = false;
+        
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        // Record snapshots for audit trail
+        Self::record_snapshot(&env, &m, SnapshotReason::Cancelled);
+        if m.player1_deposited {
+            Self::record_player_snapshot(&env, &m.player1);
+        }
+        if m.player2_deposited {
+            Self::record_player_snapshot(&env, &m.player2);
+        }
+
+        // Emit rollback event
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("rollback")),
+            (match_id, disputer, reason),
         );
 
         Ok(())

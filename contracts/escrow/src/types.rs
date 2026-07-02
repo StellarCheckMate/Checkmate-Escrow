@@ -72,6 +72,9 @@ pub struct Match {
     pub paused_ledger: Option<u32>,
     /// Total pause duration in ledgers.
     pub total_pause_duration: u32,
+    /// Last activity timestamp (ledger sequence) for tracking player disconnection.
+    /// Updated on match actions to enable rollback for disconnection disputes.
+    pub last_heartbeat: u64,
 }
 
 #[contracttype]
