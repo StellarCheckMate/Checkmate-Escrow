@@ -30,6 +30,8 @@
 /// INV-20: Contract Pause Blocks Mutations
 
 use crate::types::{Match, MatchState, Winner, Platform};
+
+#[cfg(test)]
 use std::collections::{HashMap, HashSet};
 
 /// Violation severity levels for formal verification reports
@@ -138,6 +140,7 @@ pub struct StateTransitionTrace {
 }
 
 /// Formal verification context tracking state and transitions
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct FormalVerificationContext {
     pub current_state: MatchState,
@@ -153,6 +156,7 @@ pub struct FormalVerificationContext {
     pub is_paused: bool,
 }
 
+#[cfg(test)]
 impl FormalVerificationContext {
     pub fn new(match_id: u64) -> Self {
         let mut visited = HashSet::new();
@@ -206,8 +210,10 @@ impl FormalVerificationContext {
 }
 
 /// Invariant validator for all 20 safety/liveness properties
+#[cfg(test)]
 pub struct InvariantValidator;
 
+#[cfg(test)]
 impl InvariantValidator {
     /// INV-1: No Double Payout - once Completed, payout must occur exactly once
     pub fn check_no_double_payout(
@@ -501,12 +507,14 @@ impl VulnerabilityProbe {
 }
 
 /// Exhaustive state-space explorer
+#[cfg(test)]
 pub struct StateSpaceExplorer {
     pub explored_states: HashSet<String>,
     pub valid_transitions: Vec<(String, String)>,
     pub invalid_transitions: Vec<(String, String, String)>,
 }
 
+#[cfg(test)]
 impl StateSpaceExplorer {
     pub fn new() -> Self {
         Self {
