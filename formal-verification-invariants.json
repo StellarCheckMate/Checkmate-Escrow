@@ -1,0 +1,293 @@
+{
+  "invariants": [
+    {
+      "id": "INV-1",
+      "name": "No Double Payout",
+      "description": "Once a match reaches Completed state, payout must occur exactly once",
+      "type": "Safety",
+      "assertion": "For all Match m in Completed state: execute_payout called exactly once AND (winner is set AND vested_at is set)",
+      "validation": [
+        "submit_result or finalize_match or resolve_dispute_by_vote sets state=Completed AND executes payout atomically",
+        "claim_vested_payout cannot trigger another payout (only sets claim flag)",
+        "No re-entry possible: Completed is terminal state"
+      ],
+      "potential_violation": "If execute_payout could be called multiple times for same match",
+      "mitigation": "State transition to Completed is atomic with payout; no separate payout call possible"
+    },
+    {
+      "id": "INV-2",
+      "name": "No Fund Loss",
+      "description": "Total escrowed tokens <= contract balance at all times",
+      "type": "Safety",
+      "assertion": "SUM(escrow_balance_of(m) for all m in DB) <= token.balanceOf(contract)",
+      "validation": [
+        "deposit: tokens transferred from player to contract (increases escrow)",
+        "execute_payout: tokens transferred from contract to winner(s) (decreases escrow)",
+        "cancel_match / expire_match: tokens refunded to depositors (decreases escrow to 0)",
+        "All state transitions preserve escrow_balance_of(m) until terminal state"
+      ],
+      "potential_violation": "Arithmetic overflow in stake calculations; missing refunds in cancel/expire",
+      "mitigation": "Uses checked_mul/checked_add; all refund paths covered"
+    },
+    {
+      "id": "INV-3",
+      "name": "No Unreachable-But-Fundable States",
+      "description": "No match can be stuck with non-zero escrow in a non-terminal state with no legal transition",
+      "type": "Safety",
+      "assertion": "For all Match m: if escrow_balance_of(m) > 0 then (m.state in [Active, PendingResult, Paused] AND valid_transition_exists)",
+      "validation": [
+        "Pending: can transition to Active (deposit) or Cancelled (cancel/expire) - ALWAYS REACHABLE",
+        "Active: can transition to PendingResult (submit_result), Completed (submit_result w/ dispute=0), or Paused (pause_match)",
+        "PendingResult: can transition to Completed (finalize_match or resolve_dispute) - ALWAYS REACHABLE",
+        "Paused: can transition back to Active (resume_match) - ALWAYS REACHABLE",
+        "Completed/Cancelled: terminal, funds disbursed"
+      ],
+      "potential_violation": "If oracle unavailable or dispute voting blocked indefinitely",
+      "mitigation": "PendingResult has deadline for finalization; dispute period can be set to 0 for immediate payout"
+    },
+    {
+      "id": "INV-4",
+      "name": "Monotonic State Progression",
+      "description": "Matches progress monotonically toward terminal states (no backwards transitions except Paused<->Active)",
+      "type": "Liveness",
+      "assertion": "For all Match m: (Pending -> Active -> PendingResult -> Completed) OR (Pending -> Cancelled) OR (Active -> Paused <-> Active -> PendingResult -> Completed)",
+      "validation": [
+        "Pending can only go to Active or Cancelled",
+        "Active can go to PendingResult, Completed (if dispute=0), or Paused",
+        "Paused can only return to Active",
+        "Once PendingResult, must go to Completed (terminal)"
+      ],
+      "potential_violation": "Match stuck in non-terminal state indefinitely",
+      "mitigation": "Dispute period deadline; timeout for pending matches; admin can adjust settings"
+    },
+    {
+      "id": "INV-5",
+      "name": "Deposit Idempotency",
+      "description": "A player cannot deposit twice for the same match",
+      "type": "Safety",
+      "assertion": "For all Match m: if player1_deposited then deposit(player1) fails with AlreadyFunded",
+      "validation": [
+        "deposit checks: is_p1 && m.player1_deposited -> Err(AlreadyFunded)",
+        "deposit checks: is_p2 && m.player2_deposited -> Err(AlreadyFunded)"
+      ],
+      "potential_violation": "Duplicate deposits could inflate escrow balance or allow replay",
+      "mitigation": "Deposit flags prevent re-entry; token transfer is atomic"
+    },
+    {
+      "id": "INV-6",
+      "name": "Authorization Boundaries",
+      "description": "Only authorized parties can trigger state transitions or modify admin settings",
+      "type": "Safety",
+      "assertions": [
+        "create_match requires player1.require_auth()",
+        "deposit requires player.require_auth()",
+        "submit_result requires oracle.require_auth()",
+        "pause_match / resume_match require caller.require_auth() where caller is player",
+        "Admin functions require admin.require_auth()"
+      ],
+      "validation": [
+        "Soroban SDK's require_auth() enforces caller signature",
+        "No public entry point transitions state without proper auth"
+      ],
+      "potential_violation": "Unauthorized state transitions; oracle impersonation",
+      "mitigation": "require_auth() gates all sensitive operations"
+    },
+    {
+      "id": "INV-7",
+      "name": "Winner Uniqueness in Payout",
+      "description": "Payout distributes funds based on exactly one winner (Player1, Player2, or Draw)",
+      "type": "Safety",
+      "assertion": "execute_payout matches exactly one Winner variant and transfers correct amount",
+      "validation": [
+        "Winner::Player1 -> transfer full pot to player1",
+        "Winner::Player2 -> transfer full pot to player2",
+        "Winner::Draw -> transfer stake_amount to each player (total = 2x stake)"
+      ],
+      "potential_violation": "Ambiguous winner; incorrect payout amount",
+      "mitigation": "Winner is enum (exhaustive match); amount calculated deterministically"
+    },
+    {
+      "id": "INV-8",
+      "name": "Escrow Balance Conservation",
+      "description": "Total payout to winners equals total escrowed balance before payout",
+      "type": "Safety",
+      "assertion": "For Winner w and Match m: payout_amount(w, m.stake_amount) == 2 * m.stake_amount (always full pot)",
+      "validation": [
+        "Player1 wins: transfer 2*stake -> winner gets full pot",
+        "Player2 wins: transfer 2*stake -> winner gets full pot",
+        "Draw: transfer stake + stake -> both players get stake (total 2x)"
+      ],
+      "potential_violation": "Partial payouts; funds retained in contract",
+      "mitigation": "Payout calculation is deterministic; all funds must leave contract"
+    },
+    {
+      "id": "INV-9",
+      "name": "Oracle Result Integrity",
+      "description": "Oracle-submitted results cannot be modified after PendingResult state entered",
+      "type": "Safety",
+      "assertion": "Once submit_result sets Match.winner and Match.vested_at, these values are immutable until dispute resolution",
+      "validation": [
+        "PendingWinner stored separately; Match.winner set atomically with state transition",
+        "dispute_oracle_result cannot change winner (only raises dispute for voting)",
+        "resolve_dispute_by_vote either upholds original winner or overturns to Draw"
+      ],
+      "potential_violation": "Winner changed mid-dispute; tampered results",
+      "mitigation": "Immutable storage; all winner changes occur within resolved disputes"
+    },
+    {
+      "id": "INV-10",
+      "name": "Dispute Period Enforcement",
+      "description": "Results in PendingResult state cannot be finalized before dispute deadline",
+      "type": "Safety",
+      "assertion": "finalize_match(m) only succeeds if current_ledger >= ResultDeadline(m.id)",
+      "validation": [
+        "submit_result stores ResultDeadline = current_ledger + dispute_period",
+        "finalize_match checks: current_ledger >= deadline else DisputePeriodNotElapsed",
+        "vote_on_dispute checks: current_ledger < voting_deadline else VotingPeriodElapsed"
+      ],
+      "potential_violation": "Premature finalization; players locked out of disputes",
+      "mitigation": "Ledger check blocks early finalization"
+    },
+    {
+      "id": "INV-11",
+      "name": "Single Vote Per Voter Per Dispute",
+      "description": "Each address can vote at most once per dispute",
+      "type": "Safety",
+      "assertion": "For Dispute d and Address voter: vote_on_dispute(d, voter, _) called > 1 times fails with AlreadyVoted",
+      "validation": [
+        "vote_on_dispute stores DisputeVote(dispute_id, voter)",
+        "Check: has(&DisputeVote(...)) ? Err(AlreadyVoted) : store_vote"
+      ],
+      "potential_violation": "Vote splitting; voter weight inflation",
+      "mitigation": "Vote key includes both dispute_id and voter; prevents duplicates"
+    },
+    {
+      "id": "INV-12",
+      "name": "Tier-Based Stake Bounds",
+      "description": "Players can only create/join matches within their current tier's stake range",
+      "type": "Safety",
+      "assertions": [
+        "Bronze (0 matches): 1 <= stake <= 100",
+        "Silver (3+ matches): 101 <= stake <= 500",
+        "Gold (6+ matches): 501 <= stake <= 1000",
+        "Platinum (10+ matches): 1001 <= stake <= i128::MAX"
+      ],
+      "validation": [
+        "create_match calls require_player_tier_for_stake(player1, stake) and require_player_tier_for_stake(player2, stake)",
+        "deposit calls require_player_tier_for_stake(player, m.stake_amount)"
+      ],
+      "potential_violation": "Players bypass tier restrictions; high-risk matches for low-tier players",
+      "mitigation": "Tier validation on creation and deposit"
+    },
+    {
+      "id": "INV-13",
+      "name": "Token Allowlist Enforcement",
+      "description": "If allowlist is enforced (AllowlistEnforced=true), only allowlisted tokens can be used in new matches",
+      "type": "Safety",
+      "assertion": "If AllowlistEnforced then (create_match(token) only succeeds if is_token_allowed(token))",
+      "validation": [
+        "create_match checks: if allowlist_enforced && !is_token_allowed(token) -> Err(TokenNotAllowed)",
+        "Allowlist enforced automatically when first token is added (AllowlistEnforced flips to true)"
+      ],
+      "potential_violation": "Unvetted tokens used in matches; fake tokens accepted",
+      "mitigation": "Admin controls allowlist; enabled by first token addition"
+    },
+    {
+      "id": "INV-14",
+      "name": "Match ID Uniqueness",
+      "description": "Each match receives unique auto-incrementing ID; no two matches share ID",
+      "type": "Safety",
+      "assertion": "For all Match m, m': m.id == m'.id => m == m'",
+      "validation": [
+        "MatchCount auto-increments: checked_add(MatchCount, 1)",
+        "Each Match assigned current MatchCount before increment",
+        "Overflow check prevents ID collision"
+      ],
+      "potential_violation": "Duplicate match IDs; state collisions",
+      "mitigation": "checked_add prevents wraparound"
+    },
+    {
+      "id": "INV-15",
+      "name": "Game ID Uniqueness",
+      "description": "Each on-chain game ID is linked to at most one match",
+      "type": "Safety",
+      "assertion": "For all game_id g: (persistent.has(GameId(g)) && persistent.get(Match(m)).game_id == g) => unique m",
+      "validation": [
+        "create_match checks: has(&DataKey::GameId(game_id)) ? Err(DuplicateGameId) : create",
+        "GameId stored as persistent key to prevent re-use"
+      ],
+      "potential_violation": "Same game ID links to multiple matches; ambiguous oracle results",
+      "mitigation": "GameId uniqueness check on creation"
+    },
+    {
+      "id": "INV-16",
+      "name": "Player Identity Separation",
+      "description": "player1 and player2 must be distinct addresses (no self-matches)",
+      "type": "Safety",
+      "assertion": "create_match(player1, player2, ...) only succeeds if player1 != player2 && player2 != contract",
+      "validation": [
+        "create_match checks: player1 == player2 ? Err(InvalidPlayers) : continue",
+        "create_match checks: player2 == contract_address ? Err(InvalidPlayers) : continue"
+      ],
+      "potential_violation": "Self-match; player matches contract; fund trapping",
+      "mitigation": "Identity checks on creation"
+    },
+    {
+      "id": "INV-17",
+      "name": "Positive Stake Amount",
+      "description": "Stake amounts must be positive (> 0)",
+      "type": "Safety",
+      "assertion": "For all Match m: m.stake_amount > 0",
+      "validation": [
+        "create_match checks: stake_amount <= 0 ? Err(InvalidAmount) : continue",
+        "Tier validation only accepts values in valid ranges (all > 0)"
+      ],
+      "potential_violation": "Zero or negative stakes; infinite pot vulnerability",
+      "mitigation": "Positive amount validation on creation"
+    },
+    {
+      "id": "INV-18",
+      "name": "Valid Match State Enum",
+      "description": "Match.state is always one of exactly 6 variants (Pending, Active, PendingResult, Completed, Cancelled, Paused)",
+      "type": "Safety",
+      "assertion": "For all Match m: m.state in {Pending, Active, PendingResult, Completed, Cancelled, Paused}",
+      "validation": [
+        "MatchState is Rust enum with exhaustive match required",
+        "Compiler enforces only valid variants"
+      ],
+      "potential_violation": "Invalid state value; undefined behavior",
+      "mitigation": "Type system prevents invalid states"
+    },
+    {
+      "id": "INV-19",
+      "name": "Timeout Bounds",
+      "description": "Match timeout is within valid range [17280, 1555200] ledgers",
+      "type": "Safety",
+      "assertion": "MIN_MATCH_TIMEOUT_LEDGERS <= MatchTimeout <= MAX_MATCH_TIMEOUT_LEDGERS",
+      "validation": [
+        "set_match_timeout checks: timeout < MIN || timeout > MAX ? Err(InvalidTimeout) : set",
+        "expire_match uses current_match_timeout() which defaults to DEFAULT_MATCH_TIMEOUT_LEDGERS if not set"
+      ],
+      "potential_violation": "Excessive/insufficient timeout; funds trapped/prematurely expired",
+      "mitigation": "Bounded range validation; admin can adjust"
+    },
+    {
+      "id": "INV-20",
+      "name": "Contract Pause Blocks Mutations",
+      "description": "When Paused=true, create_match, deposit, and submit_result are blocked",
+      "type": "Safety",
+      "assertions": [
+        "create_match checks: Paused ? Err(ContractPaused) : continue",
+        "deposit checks: Paused ? Err(ContractPaused) : continue",
+        "submit_result checks: Paused ? Err(ContractPaused) : continue"
+      ],
+      "validation": [
+        "Reading Paused flag on every sensitive operation",
+        "pause/unpause are admin-only and extend instance TTL"
+      ],
+      "potential_violation": "New matches or deposits accepted while paused",
+      "mitigation": "Explicit pause checks on all mutation entry points"
+    }
+  ],
+  "note": "20 critical safety and liveness invariants for formal verification"
+}
