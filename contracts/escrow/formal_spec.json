@@ -1,0 +1,442 @@
+{
+  "contract": "EscrowContract",
+  "version": "1.0",
+  "description": "Formal state-transition specification for Checkmate-Escrow escrow contract",
+  "match_states": [
+    {
+      "state": "Pending",
+      "description": "Match created; awaiting deposits from both players",
+      "reachable_from": ["*"],
+      "terminal": false
+    },
+    {
+      "state": "Active",
+      "description": "Both players have deposited; game is in progress",
+      "reachable_from": ["Pending"],
+      "terminal": false
+    },
+    {
+      "state": "PendingResult",
+      "description": "Oracle submitted result; awaiting dispute resolution or finalization",
+      "reachable_from": ["Active"],
+      "terminal": false
+    },
+    {
+      "state": "Completed",
+      "description": "Payout executed; match settled",
+      "reachable_from": ["Active", "PendingResult"],
+      "terminal": true
+    },
+    {
+      "state": "Cancelled",
+      "description": "Cancelled before activation or expired; stakes refunded",
+      "reachable_from": ["Pending"],
+      "terminal": true
+    },
+    {
+      "state": "Paused",
+      "description": "Match paused by player (vesting paused)",
+      "reachable_from": ["Active", "PendingResult"],
+      "terminal": false
+    }
+  ],
+  "entry_points": [
+    {
+      "name": "initialize",
+      "authorization": "none (idempotent check)",
+      "preconditions": ["contract not already initialized"],
+      "state_transition": "none (contract-level init)",
+      "mutations": [
+        "DataKey::Oracle set to oracle address",
+        "DataKey::Admin set to admin address",
+        "DataKey::MatchCount initialized to 0",
+        "DataKey::Paused set to false",
+        "DataKey::AllowlistEnforced set to false",
+        "DataKey::AllowedTokenCount set to 0"
+      ],
+      "errors": ["AlreadyInitialized", "InvalidAddress"]
+    },
+    {
+      "name": "pause",
+      "authorization": "admin",
+      "preconditions": ["admin exists"],
+      "state_transition": "contract-level (not match-specific)",
+      "mutations": ["DataKey::Paused set to true"],
+      "errors": ["Unauthorized"]
+    },
+    {
+      "name": "unpause",
+      "authorization": "admin",
+      "preconditions": ["admin exists"],
+      "state_transition": "contract-level",
+      "mutations": ["DataKey::Paused set to false"],
+      "errors": ["Unauthorized"]
+    },
+    {
+      "name": "create_match",
+      "authorization": "player1",
+      "preconditions": [
+        "contract not paused",
+        "stake_amount > 0",
+        "game_id non-empty and <= 64 chars",
+        "game_id unique (not already used)",
+        "player1 != player2",
+        "player2 != contract",
+        "token on allowlist (if enforced)",
+        "both players satisfy tier requirements for stake_amount"
+      ],
+      "state_transition": "N/A → Pending (new match)",
+      "mutations": [
+        "Match(id) created with state=Pending, player1_deposited=false, player2_deposited=false",
+        "MatchCount incremented",
+        "GameId(game_id) marked as used",
+        "PlayerMatches(player1) appended with new match ID",
+        "PlayerMatches(player2) appended with new match ID",
+        "BalanceSnapshot recorded with reason=Created"
+      ],
+      "errors": [
+        "ContractPaused", "InvalidAmount", "DuplicateGameId", "InvalidGameId",
+        "InvalidPlayers", "TokenNotAllowed", "Overflow", "AlreadyExists"
+      ]
+    },
+    {
+      "name": "create_match_with_conversion",
+      "authorization": "player1",
+      "preconditions": [
+        "same as create_match",
+        "token_b != token",
+        "conversion_rate > 0"
+      ],
+      "state_transition": "N/A → Pending (new match)",
+      "mutations": [
+        "Match(id) created with state=Pending, conversion_rate, token_b set",
+        "all mutations as create_match"
+      ],
+      "errors": ["same as create_match + InvalidConversionRate"]
+    },
+    {
+      "name": "deposit",
+      "authorization": "player1 or player2",
+      "preconditions": [
+        "contract not paused",
+        "match exists",
+        "match.state == Pending",
+        "caller is player1 or player2",
+        "caller has not already deposited",
+        "caller has sufficient token balance and allowance"
+      ],
+      "state_transition": "Pending → Pending (first deposit) OR Pending → Active (second deposit)",
+      "mutations": [
+        "if caller == player1: player1_deposited = true",
+        "if caller == player2: player2_deposited = true",
+        "if both now deposited: state = Active",
+        "token transfer executed (stake_amount from caller to contract)",
+        "BalanceSnapshot recorded with reason=Deposit",
+        "PlayerBalanceSnapshot recorded for caller"
+      ],
+      "errors": [
+        "ContractPaused", "MatchNotFound", "InvalidState", "Unauthorized",
+        "AlreadyFunded", "TierStakeNotAllowed"
+      ]
+    },
+    {
+      "name": "submit_result",
+      "authorization": "oracle",
+      "preconditions": [
+        "contract not paused",
+        "match exists",
+        "match.state == Active",
+        "match.player1_deposited && match.player2_deposited",
+        "oracle auth required"
+      ],
+      "state_transition": "Active → Completed (if dispute_period == 0) OR Active → PendingResult (if dispute_period > 0)",
+      "mutations": [
+        "if dispute_period == 0: execute_payout (winner or draw refund), state = Completed, completed_ledger set, vested_at set",
+        "if dispute_period > 0: state = PendingResult, PendingWinner stored, ResultDeadline set, BalanceSnapshot recorded with reason=ResultSubmitted",
+        "winner field set to provided winner",
+        "match removed from ActiveMatches index"
+      ],
+      "errors": [
+        "ContractPaused", "Unauthorized", "MatchNotFound", "InvalidState", "NotFunded"
+      ]
+    },
+    {
+      "name": "submit_result_with_oracle_record",
+      "authorization": "oracle",
+      "preconditions": [
+        "same as submit_result",
+        "game_id valid and recorded"
+      ],
+      "state_transition": "same as submit_result",
+      "mutations": [
+        "all mutations as submit_result",
+        "OracleRecord(match_id) stores verified game_id"
+      ],
+      "errors": ["same as submit_result"]
+    },
+    {
+      "name": "cancel_match",
+      "authorization": "player1 or player2",
+      "preconditions": [
+        "match exists",
+        "match.state == Pending",
+        "caller is player1 or player2"
+      ],
+      "state_transition": "Pending → Cancelled",
+      "mutations": [
+        "state = Cancelled",
+        "completed_ledger set to current ledger",
+        "refund any deposited stakes to respective players",
+        "BalanceSnapshot recorded with reason=Cancelled",
+        "PlayerBalanceSnapshot recorded for both players"
+      ],
+      "errors": ["MatchNotFound", "MatchAlreadyActive", "Unauthorized"]
+    },
+    {
+      "name": "expire_match",
+      "authorization": "anyone",
+      "preconditions": [
+        "match exists",
+        "match.state == Pending",
+        "current_ledger - match.created_ledger >= match_timeout"
+      ],
+      "state_transition": "Pending → Cancelled",
+      "mutations": [
+        "state = Cancelled",
+        "completed_ledger set",
+        "refund any deposited stakes",
+        "BalanceSnapshot recorded with reason=Cancelled",
+        "PlayerBalanceSnapshot recorded for both players"
+      ],
+      "errors": ["MatchNotFound", "InvalidState", "MatchNotExpired"]
+    },
+    {
+      "name": "pause_match",
+      "authorization": "player1 or player2",
+      "preconditions": [
+        "match exists",
+        "match.state in [Active, PendingResult]",
+        "caller is player1 or player2",
+        "paused_ledger == None"
+      ],
+      "state_transition": "Active/PendingResult → Paused",
+      "mutations": [
+        "state = Paused",
+        "paused_ledger set to current ledger"
+      ],
+      "errors": ["MatchNotFound", "InvalidState", "Unauthorized", "InvalidPauseState"]
+    },
+    {
+      "name": "resume_match",
+      "authorization": "player1 or player2",
+      "preconditions": [
+        "match exists",
+        "match.state == Paused",
+        "caller is player1 or player2"
+      ],
+      "state_transition": "Paused → Active (or PendingResult if result was pending before pause)",
+      "mutations": [
+        "total_pause_duration incremented by (current_ledger - paused_ledger)",
+        "paused_ledger reset to None",
+        "state restored to prior state",
+        "BalanceSnapshot recorded with reason=Resumed"
+      ],
+      "errors": ["MatchNotFound", "InvalidState", "Unauthorized"]
+    },
+    {
+      "name": "finalize_match",
+      "authorization": "anyone",
+      "preconditions": [
+        "match exists",
+        "match.state == PendingResult",
+        "current_ledger >= ResultDeadline (dispute period elapsed)"
+      ],
+      "state_transition": "PendingResult → Completed",
+      "mutations": [
+        "execute_payout with stored PendingWinner",
+        "state = Completed",
+        "completed_ledger set",
+        "vested_at set",
+        "PendingWinner and ResultDeadline entries cleaned up",
+        "BalanceSnapshot recorded with reason=Finalized"
+      ],
+      "errors": ["MatchNotFound", "MatchNotInPendingResult", "DisputePeriodNotElapsed"]
+    },
+    {
+      "name": "dispute_oracle_result",
+      "authorization": "player1 or player2",
+      "preconditions": [
+        "match exists",
+        "match.state == PendingResult",
+        "current_ledger < ResultDeadline",
+        "caller is player1 or player2",
+        "no dispute already raised for this match",
+        "evidence_hash non-empty"
+      ],
+      "state_transition": "PendingResult stays PendingResult (dispute record created)",
+      "mutations": [
+        "Dispute(dispute_id) created with state=Active, uphold_votes=0, overturn_votes=0",
+        "MatchDispute(match_id) set to dispute_id",
+        "DisputeCount incremented"
+      ],
+      "errors": [
+        "MatchNotFound", "MatchNotInPendingResult", "Unauthorized",
+        "VotingPeriodElapsed", "DisputeAlreadyRaised", "InvalidEvidenceHash"
+      ]
+    },
+    {
+      "name": "vote_on_dispute",
+      "authorization": "any address",
+      "preconditions": [
+        "dispute exists",
+        "dispute.state == Active",
+        "current_ledger < dispute.voting_deadline",
+        "caller has not already voted on this dispute"
+      ],
+      "state_transition": "none (voting accumulation)",
+      "mutations": [
+        "DisputeVote(dispute_id, caller) set to vote value",
+        "if vote == Uphold: uphold_votes incremented",
+        "if vote == Overturn: overturn_votes incremented"
+      ],
+      "errors": ["DisputeNotFound", "VotingPeriodElapsed", "AlreadyVoted"]
+    },
+    {
+      "name": "resolve_dispute_by_vote",
+      "authorization": "anyone",
+      "preconditions": [
+        "dispute exists",
+        "dispute.state == Active",
+        "current_ledger >= dispute.voting_deadline"
+      ],
+      "state_transition": "PendingResult → Completed (if result upheld) or PendingResult → Cancelled (if overturned)",
+      "mutations": [
+        "dispute.state = ResolvedUpheld (if uphold_votes > overturn_votes) or ResolvedOverturned (if overturn_votes > uphold_votes)",
+        "if upheld: execute_payout with stored PendingWinner, match.state = Completed",
+        "if overturned: refund both players, match.state = Cancelled",
+        "BalanceSnapshot recorded with reason=Finalized"
+      ],
+      "errors": ["DisputeNotFound", "VotingPeriodNotElapsed", "DisputeAlreadyResolved"]
+    },
+    {
+      "name": "claim_vested_payout",
+      "authorization": "player1 or player2",
+      "preconditions": [
+        "match exists",
+        "match.state == Completed",
+        "caller is player1 or player2",
+        "vested_at + vesting_duration <= current_timestamp",
+        "caller has not already claimed"
+      ],
+      "state_transition": "none (Completed stays Completed)",
+      "mutations": [
+        "if caller == player1: player1_claimed = true",
+        "if caller == player2: player2_claimed = true",
+        "token transfer executed (payout amount to caller)"
+      ],
+      "errors": [
+        "MatchNotFound", "InvalidState", "Unauthorized",
+        "VestingNotExpired", "AlreadyClaimed"
+      ]
+    },
+    {
+      "name": "get_match",
+      "authorization": "none (read-only)",
+      "preconditions": ["match exists"],
+      "state_transition": "none",
+      "mutations": [],
+      "errors": ["MatchNotFound"]
+    },
+    {
+      "name": "is_funded",
+      "authorization": "none (read-only)",
+      "preconditions": ["match exists"],
+      "state_transition": "none",
+      "mutations": [],
+      "errors": ["MatchNotFound"]
+    },
+    {
+      "name": "get_escrow_balance",
+      "authorization": "none (read-only)",
+      "preconditions": ["match exists"],
+      "state_transition": "none",
+      "mutations": [],
+      "errors": ["MatchNotFound"]
+    }
+  ],
+  "field_mutations_by_entry_point": {
+    "create_match": ["id", "player1", "player2", "stake_amount", "token", "game_id", "platform", "state", "created_ledger"],
+    "deposit": ["player1_deposited", "player2_deposited", "state"],
+    "submit_result": ["state", "winner", "completed_ledger", "vested_at"],
+    "cancel_match": ["state", "completed_ledger"],
+    "expire_match": ["state", "completed_ledger"],
+    "pause_match": ["state", "paused_ledger"],
+    "resume_match": ["state", "paused_ledger", "total_pause_duration"],
+    "claim_vested_payout": ["player1_claimed", "player2_claimed"],
+    "finalize_match": ["state", "completed_ledger"],
+    "dispute_oracle_result": ["state (persisted as PendingResult)"],
+    "resolve_dispute_by_vote": ["state (either Completed or Cancelled)"]
+  },
+  "critical_invariants": [
+    {
+      "id": "INV_NO_DOUBLE_PAYOUT",
+      "description": "No player receives payout more than once per match",
+      "formalization": "for all matches m: (m.player1_claimed && m.player2_claimed) implies exactly one of (winner=Player1 and player2_claimed=false, winner=Player2 and player1_claimed=false, winner=Draw)",
+      "enforcement": "execute_payout checks winner field; claim_vested_payout guards with player1_claimed/player2_claimed flags"
+    },
+    {
+      "id": "INV_NO_FUND_LOSS",
+      "description": "Total escrowed funds never exceed (stakes deposited), funds are either in escrow or paid out",
+      "formalization": "sum of escrow_balances(all matches) == sum of stakes (active matches with both deposits) + sum of refunded/paid-out amounts",
+      "enforcement": "execute_payout atomically transfers all escrowed funds; cancel_match refunds; snapshots audit"
+    },
+    {
+      "id": "INV_STATE_PROGRESSION",
+      "description": "Match state only progresses forward or resets under specific conditions; no backward transitions except Paused",
+      "formalization": "Pending→Active→Completed; Pending→Cancelled; Paused can transition to Active/PendingResult/Completed and back",
+      "enforcement": "explicit state checks in every entry point; state enum guards"
+    },
+    {
+      "id": "INV_BOTH_DEPOSITS_REQUIRED",
+      "description": "Transition to Active requires both players to have deposited",
+      "formalization": "if state==Active then player1_deposited && player2_deposited",
+      "enforcement": "deposit() only sets state=Active when both flags are true"
+    },
+    {
+      "id": "INV_ORACLE_AUTH_REQUIRED",
+      "description": "Only the configured oracle can submit results",
+      "formalization": "submit_result caller must equal stored Oracle address",
+      "enforcement": "oracle.require_auth() in submit_result"
+    },
+    {
+      "id": "INV_COMPLETED_OR_CANCELLED_TERMINAL",
+      "description": "Completed and Cancelled states are terminal",
+      "formalization": "if state in [Completed, Cancelled] then no further state changes",
+      "enforcement": "all state-mutating entry points check state != Completed && state != Cancelled"
+    },
+    {
+      "id": "INV_MATCH_ID_UNIQUE",
+      "description": "Every match has a unique ID; no ID reuse",
+      "formalization": "MatchCount is monotonically increasing; new match always gets MatchCount as ID",
+      "enforcement": "create_match uses MatchCount and increments it atomically"
+    },
+    {
+      "id": "INV_GAME_ID_UNIQUE",
+      "description": "No two matches can reference the same external game_id",
+      "formalization": "GameId(game_id) can only be set once",
+      "enforcement": "create_match checks if GameId exists, rejects if already set"
+    },
+    {
+      "id": "INV_PENDING_RESULT_RESOLVES",
+      "description": "A match in PendingResult state will eventually reach Completed or Cancelled after dispute period or vote resolution",
+      "formalization": "if state==PendingResult then finalize_match or resolve_dispute_by_vote will transition to terminal state",
+      "enforcement": "finalize_match and resolve_dispute_by_vote enforce deadline/vote logic"
+    },
+    {
+      "id": "INV_ESCROW_BALANCE_CONSISTENCY",
+      "description": "escrow_balance snapshots match actual token balances held by contract",
+      "formalization": "for all snapshots s: s.escrow_balance == sum of stakes for non-terminal matches + sum of staged payouts",
+      "enforcement": "execute_payout transfers all funds; snapshots record at each transition"
+    }
+  ]
+}

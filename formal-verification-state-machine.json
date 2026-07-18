@@ -1,0 +1,166 @@
+{
+  "state_machine": {
+    "states": [
+      {
+        "name": "Pending",
+        "description": "Match created, awaiting deposits from both players",
+        "terminal": false,
+        "fund_escrow": false,
+        "escrow_balance": "0 or 1x or 2x stake_amount"
+      },
+      {
+        "name": "Active",
+        "description": "Both players have deposited, game in progress",
+        "terminal": false,
+        "fund_escrow": true,
+        "escrow_balance": "2x stake_amount"
+      },
+      {
+        "name": "PendingResult",
+        "description": "Oracle submitted result, awaiting dispute window or finalization",
+        "terminal": false,
+        "fund_escrow": true,
+        "escrow_balance": "2x stake_amount"
+      },
+      {
+        "name": "Completed",
+        "description": "Payout executed or claim processed",
+        "terminal": true,
+        "fund_escrow": false,
+        "escrow_balance": "0"
+      },
+      {
+        "name": "Cancelled",
+        "description": "Cancelled before activation or expired after timeout",
+        "terminal": true,
+        "fund_escrow": false,
+        "escrow_balance": "0"
+      },
+      {
+        "name": "Paused",
+        "description": "Match paused by player (only for Active matches)",
+        "terminal": false,
+        "fund_escrow": true,
+        "escrow_balance": "2x stake_amount"
+      }
+    ],
+    "transitions": [
+      {
+        "from": "Pending",
+        "to": "Active",
+        "triggered_by": ["deposit (second player)"],
+        "allowed": true,
+        "preconditions": ["player1_deposited=true", "player2_deposited=true"],
+        "mutations": ["state=Active"]
+      },
+      {
+        "from": "Pending",
+        "to": "Cancelled",
+        "triggered_by": ["cancel_match", "expire_match"],
+        "allowed": true,
+        "preconditions": ["caller is player1 or player2 (cancel_match) OR anyone (expire_match)", "timeout elapsed for expire_match"],
+        "mutations": ["state=Cancelled", "refund deposits"]
+      },
+      {
+        "from": "Active",
+        "to": "PendingResult",
+        "triggered_by": ["submit_result (with dispute_period > 0)"],
+        "allowed": true,
+        "preconditions": ["oracle authorization", "dispute_period > 0"],
+        "mutations": ["state=PendingResult", "winner set", "vested_at set"]
+      },
+      {
+        "from": "Active",
+        "to": "Completed",
+        "triggered_by": ["submit_result (with dispute_period = 0)"],
+        "allowed": true,
+        "preconditions": ["oracle authorization", "dispute_period = 0"],
+        "mutations": ["state=Completed", "winner set", "execute_payout"]
+      },
+      {
+        "from": "Active",
+        "to": "Paused",
+        "triggered_by": ["pause_match"],
+        "allowed": true,
+        "preconditions": ["caller is player1 or player2"],
+        "mutations": ["state=Paused", "paused_ledger set"]
+      },
+      {
+        "from": "Paused",
+        "to": "Active",
+        "triggered_by": ["resume_match"],
+        "allowed": true,
+        "preconditions": ["caller is player1 or player2"],
+        "mutations": ["state=Active", "paused_ledger cleared", "total_pause_duration updated"]
+      },
+      {
+        "from": "PendingResult",
+        "to": "Completed",
+        "triggered_by": ["finalize_match", "resolve_dispute_by_vote"],
+        "allowed": true,
+        "preconditions": ["no active dispute (finalize_match) OR dispute voting period elapsed (resolve_dispute_by_vote)", "current_ledger >= deadline"],
+        "mutations": ["state=Completed", "execute_payout"]
+      },
+      {
+        "from": "Completed",
+        "to": "Completed",
+        "triggered_by": ["claim_vested_payout"],
+        "allowed": true,
+        "preconditions": ["vesting period elapsed", "caller hasn't already claimed"],
+        "mutations": ["playerX_claimed=true"]
+      }
+    ],
+    "invalid_transitions": [
+      {
+        "from": "Pending",
+        "to": ["PendingResult", "Completed", "Paused"],
+        "reason": "Must transition through Active first (except to Cancelled)"
+      },
+      {
+        "from": "Active",
+        "to": ["Pending", "Cancelled"],
+        "reason": "Active matches can only go to PendingResult, Completed, or Paused"
+      },
+      {
+        "from": "PendingResult",
+        "to": ["Pending", "Active", "Paused", "Cancelled"],
+        "reason": "Can only go to Completed (terminal)"
+      },
+      {
+        "from": "Cancelled",
+        "to": ["Pending", "Active", "PendingResult", "Completed", "Paused"],
+        "reason": "Terminal state - no transitions out"
+      },
+      {
+        "from": "Completed",
+        "to": ["Pending", "Active", "PendingResult", "Cancelled", "Paused"],
+        "reason": "Terminal state - no transitions out (except claim)"
+      },
+      {
+        "from": "Paused",
+        "to": ["Pending", "Cancelled", "Completed", "PendingResult"],
+        "reason": "Paused can only return to Active or timeout (which transitions to Cancelled via expire_match)"
+      }
+    ],
+    "state_transition_matrix": {
+      "description": "6x6 matrix showing all possible transitions. 1=allowed, 0=invalid, *=self-loop allowed",
+      "states_order": ["Pending", "Active", "PendingResult", "Completed", "Cancelled", "Paused"],
+      "matrix": [
+        [0, 1, 0, 0, 1, 0],
+        [0, 0, 1, 1, 0, 1],
+        [0, 0, 0, 1, 0, 0],
+        [0, 0, 0, "*", 0, 0],
+        [0, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0]
+      ],
+      "legend": {
+        "0": "Transition not allowed",
+        "1": "Transition allowed",
+        "*": "Self-loop allowed (claim)",
+        "row": "from_state",
+        "column": "to_state"
+      }
+    }
+  },
+  "note": "Complete state machine specification with all 6 states and valid transitions"
+}

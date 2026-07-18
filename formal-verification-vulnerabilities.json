@@ -1,0 +1,356 @@
+{
+  "known_vulnerabilities": [
+    {
+      "id": "VULN-1",
+      "name": "Double-Payout Vulnerability",
+      "severity": "CRITICAL",
+      "status": "MITIGATED",
+      "description": "In a naive implementation, if submit_result and finalize_match were separate calls, an oracle could call submit_result (storing a result), and then any user could call finalize_match to execute payout. This creates a window where the payout could theoretically happen twice if the same result is stored and executed in two separate transactions.",
+      "attack_scenario": "1. Oracle calls submit_result(match_id, winner) storing result and setting state=PendingResult; 2. Oracle or any actor calls submit_result again (or similar); 3. Payout executes multiple times",
+      "root_cause": "Payout logic separated from result storage",
+      "mitigation_implemented": [
+        "Payout execution is ATOMIC with state transitions",
+        "submit_result with dispute_period=0 immediately executes payout AND sets state=Completed",
+        "finalize_match can only execute when state=PendingResult AND dispute deadline passed",
+        "Once Completed (terminal), no further transitions trigger payouts",
+        "claim_vested_payout only sets a flag; cannot re-trigger payout"
+      ],
+      "residual_risk": "LOW - Atomic execution eliminates re-entry",
+      "verification": "INV-1 (No Double Payout), INV-8 (Escrow Balance Conservation)"
+    },
+    {
+      "id": "VULN-2",
+      "name": "Missing Refund in Cancellation",
+      "severity": "HIGH",
+      "status": "MITIGATED",
+      "description": "If cancel_match or expire_match fail to refund deposits, funds become trapped in the contract forever.",
+      "attack_scenario": "1. Both players deposit stakes; 2. Match is cancelled; 3. Refund logic fails silently; 4. Funds remain in contract",
+      "root_cause": "Incomplete refund paths in cancel/expire logic",
+      "mitigation_implemented": [
+        "cancel_match: if player1_deposited, transfer stake to player1; if player2_deposited, transfer stake to player2",
+        "expire_match: identical refund logic",
+        "Both paths use token::Client::transfer which will panic if transfer fails",
+        "All refund paths cover both player1_deposited and player2_deposited flags"
+      ],
+      "residual_risk": "LOW - Comprehensive refund coverage",
+      "verification": "INV-2 (No Fund Loss), INV-8 (Escrow Balance Conservation)"
+    },
+    {
+      "id": "VULN-3",
+      "name": "Unreachable Funds (Dead States)",
+      "severity": "HIGH",
+      "status": "MITIGATED",
+      "description": "If a match gets stuck in a non-terminal state with escrowed funds and no legal transition out, those funds become inaccessible.",
+      "attack_scenario": "1. Match in Active state with full escrow; 2. Oracle becomes unavailable; 3. submit_result never called; 4. No timeout mechanism for Active state; 5. Funds trapped indefinitely",
+      "root_cause": "Incomplete state transition paths; missing escape hatches",
+      "mitigation_implemented": [
+        "Pending state: can timeout via expire_match after MatchTimeout ledgers",
+        "Active state: can submit_result (immediate or delayed payout)",
+        "PendingResult state: has ResultDeadline for finalize_match",
+        "Paused state: can resume_match or timeout as Pending",
+        "Admin can set dispute_period=0 for immediate payouts (no PendingResult delay)",
+        "All non-terminal states have at least one legal transition"
+      ],
+      "residual_risk": "MEDIUM - Active state lacks direct timeout; relies on oracle",
+      "remediation": "Consider adding timeout for Active state transitions (optional future enhancement)",
+      "verification": "INV-3 (No Unreachable States), INV-4 (Monotonic Progression)"
+    },
+    {
+      "id": "VULN-4",
+      "name": "Replay Attack on Payout",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If submit_result could be called multiple times without state changes, an oracle could replay payout multiple times.",
+      "attack_scenario": "1. Oracle calls submit_result(match_id, winner); 2. State changes to PendingResult or Completed; 3. Oracle calls submit_result again with same params; 4. State guards prevent re-execution",
+      "root_cause": "Lack of idempotency checks",
+      "mitigation_implemented": [
+        "submit_result requires Match.state == Active",
+        "After first call, state becomes PendingResult or Completed",
+        "Second call with same match_id fails: InvalidState (not Active anymore)",
+        "Prevents replay within same block or across blocks"
+      ],
+      "residual_risk": "LOW - State guards are sufficient",
+      "verification": "INV-1 (No Double Payout)"
+    },
+    {
+      "id": "VULN-5",
+      "name": "Duplicate Deposit",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "A player could attempt to deposit twice, inflating their escrow or creating accounting mismatches.",
+      "attack_scenario": "1. player1 calls deposit(match_id); 2. Match transitions to Active; 3. player1 calls deposit again; 4. Duplicate funds transferred?",
+      "root_cause": "Missing idempotency guard",
+      "mitigation_implemented": [
+        "deposit checks: is_p1 && m.player1_deposited ? Err(AlreadyFunded) : continue",
+        "deposit checks: is_p2 && m.player2_deposited ? Err(AlreadyFunded) : continue",
+        "Flags prevent any re-deposit after first deposit"
+      ],
+      "residual_risk": "LOW - Idempotency guard blocks re-entry",
+      "verification": "INV-5 (Deposit Idempotency)"
+    },
+    {
+      "id": "VULN-6",
+      "name": "Unauthorized State Mutation",
+      "severity": "CRITICAL",
+      "status": "MITIGATED",
+      "description": "If authorization checks were missing, any address could create matches, submit results, or transfer admin.",
+      "attack_scenario": "1. Attacker calls create_match without authorization; 2. Attacker calls submit_result as fake oracle; 3. Attacker transfers admin to themselves",
+      "root_cause": "Missing require_auth() calls",
+      "mitigation_implemented": [
+        "create_match requires player1.require_auth()",
+        "deposit requires player.require_auth()",
+        "submit_result requires oracle.require_auth()",
+        "pause_match / resume_match require caller.require_auth()",
+        "All admin functions require admin.require_auth()",
+        "Soroban SDK enforces signature verification for each require_auth()"
+      ],
+      "residual_risk": "LOW - Comprehensive auth coverage",
+      "verification": "INV-6 (Authorization Boundaries)"
+    },
+    {
+      "id": "VULN-7",
+      "name": "Ambiguous Winner Logic",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If winner determination logic is ambiguous, incorrect payouts could occur (wrong winner receiving funds).",
+      "attack_scenario": "1. Oracle submits winner=Player1; 2. Payout logic incorrectly transfers to Player2; 3. Wrong player enriched",
+      "root_cause": "Complex or fragile winner matching",
+      "mitigation_implemented": [
+        "Winner is exhaustive Rust enum: Player1, Player2, Draw",
+        "execute_payout uses match expression (compiler enforces exhaustiveness)",
+        "Player1 -> transfer full pot to player1",
+        "Player2 -> transfer full pot to player2",
+        "Draw -> transfer stake to player1 AND stake to player2",
+        "No ambiguity; no missing cases"
+      ],
+      "residual_risk": "LOW - Type system enforces exhaustiveness",
+      "verification": "INV-7 (Winner Uniqueness in Payout)"
+    },
+    {
+      "id": "VULN-8",
+      "name": "Partial Payout (Fund Leakage)",
+      "severity": "HIGH",
+      "status": "MITIGATED",
+      "description": "If payout logic transfers less than the full escrowed amount, remaining funds leak into contract reserves.",
+      "attack_scenario": "1. Pot = 2x stake; 2. Payout logic transfers 1.5x stake to winner; 3. 0.5x stake orphaned in contract",
+      "root_cause": "Incorrect payout amount calculation",
+      "mitigation_implemented": [
+        "All paths calculate: 2 * stake_amount for non-draw winners",
+        "Draw refunds stake to each player (total 2x)",
+        "No rounding or partial transfers",
+        "execute_payout is deterministic based on stake_amount and Winner variant"
+      ],
+      "residual_risk": "LOW - Deterministic calculation",
+      "verification": "INV-8 (Escrow Balance Conservation)"
+    },
+    {
+      "id": "VULN-9",
+      "name": "Oracle Result Tampering Post-Dispute",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If dispute voting could change the original oracle result mid-vote, integrity is compromised.",
+      "attack_scenario": "1. Oracle submits winner=Player1; 2. Dispute raised; 3. During voting, result changes to winner=Player2; 4. Vote on outdated result",
+      "root_cause": "Mutable winner field",
+      "mitigation_implemented": [
+        "Match.winner is immutable once set by submit_result",
+        "PendingWinner stored separately as dispute record",
+        "resolve_dispute_by_vote reads PendingWinner (original result)",
+        "Dispute can only uphold or overturn (=Draw); cannot change to different winner",
+        "All winner changes are deterministic and audit-able"
+      ],
+      "residual_risk": "LOW - Separate storage prevents tampering",
+      "verification": "INV-9 (Oracle Result Integrity)"
+    },
+    {
+      "id": "VULN-10",
+      "name": "Premature Dispute Finalization",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If dispute deadline enforcement is weak, match could be finalized before all players have a chance to dispute.",
+      "attack_scenario": "1. Oracle submits result (dispute_period = 100 ledgers); 2. finalize_match called at ledger 50; 3. Result finalized before deadline; 4. Players unable to dispute",
+      "root_cause": "Missing deadline check",
+      "mitigation_implemented": [
+        "submit_result sets ResultDeadline = current_ledger + dispute_period",
+        "finalize_match checks: current_ledger >= deadline ? ok : Err(DisputePeriodNotElapsed)",
+        "Explicit ledger comparison blocks early finalization",
+        "Deadline stored persistently; cannot be altered post-submission"
+      ],
+      "residual_risk": "LOW - Deadline enforcement is strict",
+      "verification": "INV-10 (Dispute Period Enforcement)"
+    },
+    {
+      "id": "VULN-11",
+      "name": "Vote Splitting / Double Voting",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If vote tracking is weak, a voter could vote multiple times, skewing dispute outcomes.",
+      "attack_scenario": "1. Voter A calls vote_on_dispute(dispute_id, true); 2. Voter A calls vote_on_dispute(dispute_id, false); 3. Vote recorded twice with opposite intent",
+      "root_cause": "Missing single-vote-per-voter guard",
+      "mitigation_implemented": [
+        "vote_on_dispute stores DisputeVote(dispute_id, voter) = vote_value",
+        "Check: has(&DisputeVote(dispute_id, voter)) ? Err(AlreadyVoted) : continue",
+        "Composite key includes both dispute_id and voter address",
+        "Prevents any duplicate voting on same dispute"
+      ],
+      "residual_risk": "LOW - Composite key prevents re-voting",
+      "verification": "INV-11 (Single Vote Per Voter)"
+    },
+    {
+      "id": "VULN-12",
+      "name": "Tier Bypass / Stake Limit Evasion",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If tier validation is incomplete, low-tier players could create/join high-stake matches, increasing exposure.",
+      "attack_scenario": "1. Bronze player (1-100 range) calls create_match(stake=500); 2. Tier check missed; 3. Player exposed to unsustainable risk",
+      "root_cause": "Missing tier validation on creation or deposit",
+      "mitigation_implemented": [
+        "create_match calls: require_player_tier_for_stake(player1, stake_amount)",
+        "create_match calls: require_player_tier_for_stake(player2, stake_amount)",
+        "deposit calls: require_player_tier_for_stake(player, m.stake_amount)",
+        "Tier determined by completed_match_count with thresholds: Bronze 0, Silver 3, Gold 6, Platinum 10"
+      ],
+      "residual_risk": "LOW - Tier validated on creation and deposit",
+      "verification": "INV-12 (Tier-Based Stake Bounds)"
+    },
+    {
+      "id": "VULN-13",
+      "name": "Unvetted Token Acceptance",
+      "severity": "HIGH",
+      "status": "MITIGATED",
+      "description": "If token allowlist is not enforced, malicious or fake tokens could be used in matches, leading to failed transfers or rug-pulls.",
+      "attack_scenario": "1. Allowlist disabled or not checked; 2. Attacker creates match with fake token; 3. Player deposits fake tokens; 4. Token transfer fails silently or contract drained",
+      "root_cause": "Missing allowlist enforcement",
+      "mitigation_implemented": [
+        "create_match checks: if allowlist_enforced && !is_token_allowed(token) -> Err(TokenNotAllowed)",
+        "AllowlistEnforced is true once first token is added via add_allowed_token",
+        "Admin can manage allowlist before allowing matches",
+        "Deposit fails if token isn't callable (token::Client::transfer panics on invalid token)"
+      ],
+      "residual_risk": "LOW - Allowlist enforced once populated",
+      "verification": "INV-13 (Token Allowlist Enforcement)"
+    },
+    {
+      "id": "VULN-14",
+      "name": "Match ID Collision / Overflow",
+      "severity": "HIGH",
+      "status": "MITIGATED",
+      "description": "If match ID counter overflows (u64 wrap), IDs could collide, leading to state overwrite or fund theft.",
+      "attack_scenario": "1. MatchCount increments for 2^64 matches; 2. Overflow causes wrap to 0; 3. New match overwrites original match state; 4. Funds stolen or payout replayed",
+      "root_cause": "Unchecked u64 arithmetic",
+      "mitigation_implemented": [
+        "create_match uses: let next_id = id.checked_add(1).ok_or(Error::Overflow)?",
+        "checked_add returns None on overflow, triggering Error::Overflow",
+        "Contract panics rather than silently wrapping",
+        "In practice, u64 space is so large (2^64) that reaching this limit is infeasible"
+      ],
+      "residual_risk": "NEGLIGIBLE - Checked arithmetic + infinite address space",
+      "verification": "INV-14 (Match ID Uniqueness)"
+    },
+    {
+      "id": "VULN-15",
+      "name": "Duplicate Game ID Registration",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If game ID uniqueness is not enforced, two matches could claim the same on-chain game, leading to ambiguous oracle results.",
+      "attack_scenario": "1. Player A creates match with game_id='abc123'; 2. Player B creates match with game_id='abc123'; 3. Oracle submits result for 'abc123'; 4. Both matches claim victory?",
+      "root_cause": "Missing game ID uniqueness check",
+      "mitigation_implemented": [
+        "create_match checks: has(&DataKey::GameId(game_id)) ? Err(DuplicateGameId) : continue",
+        "GameId persistent key stored to flag used IDs",
+        "Oracle submits to specific match_id (not game_id), so result goes to correct match"
+      ],
+      "residual_risk": "LOW - Game ID uniqueness enforced",
+      "verification": "INV-15 (Game ID Uniqueness)"
+    },
+    {
+      "id": "VULN-16",
+      "name": "Self-Match / Contract Self-Play",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If player identity is not validated, a single player could create a match against themselves or the contract, leading to guaranteed wins or fund trapping.",
+      "attack_scenario": "1. Player A creates match(player1=A, player2=A); 2. Player A deposits; 3. Player A wins payout to themselves; 4. Artificial balance inflation",
+      "root_cause": "Missing identity separation check",
+      "mitigation_implemented": [
+        "create_match checks: player1 == player2 ? Err(InvalidPlayers) : continue",
+        "create_match checks: player2 == contract_address ? Err(InvalidPlayers) : continue",
+        "Two distinct non-contract addresses required"
+      ],
+      "residual_risk": "LOW - Identity checks enforce separation",
+      "verification": "INV-16 (Player Identity Separation)"
+    },
+    {
+      "id": "VULN-17",
+      "name": "Zero or Negative Stake",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If stake validation is missing, zero or negative stakes could be accepted, leading to escrow accounting errors.",
+      "attack_scenario": "1. Attacker creates match(stake=-100); 2. Escrow balance becomes negative; 3. Payout tries to transfer -200 (error); 4. Fund trapping",
+      "root_cause": "Missing stake amount validation",
+      "mitigation_implemented": [
+        "create_match checks: stake_amount <= 0 ? Err(InvalidAmount) : continue",
+        "Tier validation also ensures amount > 0 (min stake for each tier > 0)",
+        "Only positive stakes accepted"
+      ],
+      "residual_risk": "LOW - Positive amount validation enforced",
+      "verification": "INV-17 (Positive Stake Amount)"
+    },
+    {
+      "id": "VULN-18",
+      "name": "Invalid State Enum Value",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If state could take arbitrary values (not enum-constrained), contract behavior becomes undefined.",
+      "attack_scenario": "1. Attacker somehow injects Match.state=999 (invalid); 2. State machine logic fails; 3. Undefined behavior",
+      "root_cause": "Type system enforcement failure",
+      "mitigation_implemented": [
+        "MatchState is Rust enum with exactly 6 variants: Pending, Active, PendingResult, Completed, Cancelled, Paused",
+        "Compiler enforces exhaustive pattern matching",
+        "Impossible to have invalid state value at type level"
+      ],
+      "residual_risk": "NEGLIGIBLE - Type system prevents invalid states",
+      "verification": "INV-18 (Valid Match State Enum)"
+    },
+    {
+      "id": "VULN-19",
+      "name": "Timeout Bounds Violation",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If timeout values are not bounded, admin could set excessively short or long timeouts, trapping funds or enabling instant expiration.",
+      "attack_scenario": "1. Admin sets timeout=1 ledger; 2. Pending matches expire instantly; 3. Players unable to deposit; 4. Fund trapping",
+      "root_cause": "Missing bounds check on timeout",
+      "mitigation_implemented": [
+        "set_match_timeout checks: timeout < MIN_MATCH_TIMEOUT_LEDGERS || timeout > MAX_MATCH_TIMEOUT_LEDGERS ? Err(InvalidTimeout) : set",
+        "MIN = 17,280 (~1 day), MAX = 1,555,200 (~90 days)",
+        "Bounded range prevents extreme values"
+      ],
+      "residual_risk": "LOW - Timeout bounds enforced",
+      "verification": "INV-19 (Timeout Bounds)"
+    },
+    {
+      "id": "VULN-20",
+      "name": "Pause Bypass",
+      "severity": "MEDIUM",
+      "status": "MITIGATED",
+      "description": "If pause mechanism has gaps, critical operations could proceed while contract is paused, violating admin governance.",
+      "attack_scenario": "1. Admin calls pause(); 2. Attacker calls create_match (should be blocked); 3. Match created during pause period",
+      "root_cause": "Missing pause checks on sensitive operations",
+      "mitigation_implemented": [
+        "create_match checks: Paused ? Err(ContractPaused) : continue",
+        "deposit checks: Paused ? Err(ContractPaused) : continue",
+        "submit_result checks: Paused ? Err(ContractPaused) : continue",
+        "All mutation operations check pause flag"
+      ],
+      "residual_risk": "LOW - Pause checks cover critical paths",
+      "verification": "INV-20 (Contract Pause Blocks Mutations)"
+    }
+  ],
+  "vulnerability_summary": {
+    "total_vulnerabilities": 20,
+    "critical": 2,
+    "high": 5,
+    "medium": 13,
+    "mitigated": 20,
+    "residual_risk": "VERY LOW - All identified vulnerabilities have active mitigations"
+  },
+  "note": "Comprehensive vulnerability analysis with all 20 identified risks and their mitigations"
+}

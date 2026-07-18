@@ -1,0 +1,179 @@
+{
+  "specification_version": "1.0",
+  "contract": "Checkmate-Escrow",
+  "description": "Formal verification specification for Soroban smart contract",
+  "entry_points": [
+    {
+      "name": "initialize",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["Oracle", "Admin", "MatchCount=0", "Paused=false", "AllowlistEnforced=false"],
+      "auth_required": ["None"],
+      "conditions": ["Can only be called once", "oracle != contract_address"],
+      "events": ["(escrow, init)"]
+    },
+    {
+      "name": "pause",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["Paused=true"],
+      "auth_required": ["Admin"],
+      "conditions": ["Admin authorization required"],
+      "events": ["(admin, paused)"]
+    },
+    {
+      "name": "unpause",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["Paused=false"],
+      "auth_required": ["Admin"],
+      "conditions": ["Admin authorization required"],
+      "events": ["(admin, unpaused)"]
+    },
+    {
+      "name": "set_protocol_config",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["ProtocolConfig"],
+      "auth_required": ["Admin"],
+      "conditions": ["Admin authorization required"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_protocol_config",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only"],
+      "events": ["None"]
+    },
+    {
+      "name": "add_allowed_token",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["AllowedToken", "AllowedTokenCount", "AllowlistEnforced", "AllowedTokens"],
+      "auth_required": ["Admin"],
+      "conditions": ["Admin authorization required"],
+      "events": ["(admin, token_add)"]
+    },
+    {
+      "name": "remove_allowed_token",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["AllowedToken", "AllowedTokenCount", "AllowlistEnforced", "AllowedTokens"],
+      "auth_required": ["Admin"],
+      "conditions": ["Admin authorization required"],
+      "events": ["(admin, tok_rm)"]
+    },
+    {
+      "name": "is_token_allowed",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only"],
+      "events": ["None"]
+    },
+    {
+      "name": "is_allowlist_enforced",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_allowed_tokens",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only"],
+      "events": ["None"]
+    },
+    {
+      "name": "create_match",
+      "state_from": ["N/A"],
+      "state_to": "Match:Pending",
+      "mutations": ["Match(id)", "MatchCount++", "GameId", "PlayerMatches(player1)++", "PlayerMatches(player2)++", "Snapshot"],
+      "auth_required": ["player1"],
+      "conditions": ["Contract not paused", "Token allowlist enforced check", "stake_amount > 0", "player1 != player2", "player2 != contract", "game_id unique", "player tier validation"],
+      "events": ["(match, created)"]
+    },
+    {
+      "name": "create_match_with_conversion",
+      "state_from": ["N/A"],
+      "state_to": "Match:Pending",
+      "mutations": ["Match(id)", "MatchCount++", "GameId", "PlayerMatches(player1)++", "PlayerMatches(player2)++", "Snapshot"],
+      "auth_required": ["player1"],
+      "conditions": ["Contract not paused", "Both tokens allowlist check", "stake_amount > 0", "rate > 0", "player1 != player2", "player2 != contract", "game_id unique", "player tier validation"],
+      "events": ["(match, created)"]
+    },
+    {
+      "name": "deposit",
+      "state_from": ["Pending"],
+      "state_to": ["Pending (if 1 depositor)", "Active (if 2 depositors)"],
+      "mutations": ["Match.playerX_deposited=true", "Match.state to Active (conditional)", "PlayerBalanceSnapshot"],
+      "auth_required": ["player (depositing party)"],
+      "conditions": ["Contract not paused", "Match in Pending state", "Caller is player1 or player2", "Player hasn't already deposited", "Token transfer succeeds", "Player tier validation"],
+      "events": ["(match, deposit)", "(match, activated) (conditional)"]
+    },
+    {
+      "name": "submit_result",
+      "state_from": ["Active"],
+      "state_to": ["Completed (if dispute_period=0)", "PendingResult (if dispute_period>0)"],
+      "mutations": ["Match.state", "Match.completed_ledger", "Match.winner", "Match.vested_at", "PendingWinner", "ResultDeadline", "Snapshot"],
+      "auth_required": ["Oracle"],
+      "conditions": ["Contract not paused", "Oracle authorization required", "Match in Active state", "Both players deposited"],
+      "events": ["(match, completed) or (match, pending_result)"]
+    },
+    {
+      "name": "submit_result_with_oracle_record",
+      "state_from": ["Active"],
+      "state_to": ["Completed (if dispute_period=0)", "PendingResult (if dispute_period>0)"],
+      "mutations": ["Match.state", "OracleRecord(match_id)", "Match.completed_ledger", "Match.winner", "Match.vested_at"],
+      "auth_required": ["Oracle"],
+      "conditions": ["Calls submit_result internally", "Stores oracle record"],
+      "events": ["Same as submit_result"]
+    },
+    {
+      "name": "cancel_match",
+      "state_from": ["Pending"],
+      "state_to": ["Cancelled"],
+      "mutations": ["Match.state=Cancelled", "Match.completed_ledger", "Refunds to depositors", "PlayerBalanceSnapshot"],
+      "auth_required": ["player1 or player2"],
+      "conditions": ["Match in Pending state", "Caller is player1 or player2", "Refunds tokens to depositors"],
+      "events": ["(match, cancelled)"]
+    },
+    {
+      "name": "pause_match",
+      "state_from": ["Active"],
+      "state_to": ["Paused"],
+      "mutations": ["Match.state=Paused", "Match.paused_ledger", "Snapshot"],
+      "auth_required": ["player1 or player2"],
+      "conditions": ["Match in Active state", "Caller is player1 or player2"],
+      "events": ["(match, paused)"]
+    },
+    {
+      "name": "resume_match",
+      "state_from": ["Paused"],
+      "state_to": ["Active"],
+      "mutations": ["Match.state=Active", "Match.paused_ledger=None", "Match.total_pause_duration", "Snapshot"],
+      "auth_required": ["player1 or player2"],
+      "conditions": ["Match in Paused state", "Caller is player1 or player2"],
+      "events": ["(match, resumed)"]
+    },
+    {
+      "name": "expire_match",
+      "state_from": ["Pending"],
+      "state_to": ["Cancelled"],
+      "mutations": ["Match.state=Cancelled", "Match.completed_ledger", "Refunds to depositors", "PlayerBalanceSnapshot"],
+      "auth_required": ["None (anyone can call)"],
+      "conditions": ["Match in Pending state", "effective_elapsed >= timeout (excludes pause duration)", "Refunds tokens to depositors"],
+      "events": ["(match, expired)"]
+    }
+  ],
+  "note": "Part 1/3 - Entry points 1-20 of 55"
+}
