@@ -243,7 +243,7 @@ The oracle will **never** submit a result on-chain until a verified terminal `en
 |---------------------------|----------------------------------------------------|-------------------------------------------------------|
 | Authentication            | `X-Chess-Com-API-Key` header (optional today)      | `Authorization: Bearer <LICHESS_API_TOKEN>` (required) |
 | Rate limit                | 30 req/min (≈ 1 req / 2 s), enforced client-side  | No documented hard limit; same 2 s spacing applied    |
-| Client-side spacing       | ≥ 2 seconds between requests (mutex-based)         | ≥ 2 seconds between requests (same implementation)   |
+| Client-side spacing       | Shared token bucket with configurable burst/rate   | Shared token bucket with configurable burst/rate     |
 | Per-request timeout       | 30 seconds                                         | 30 seconds                                            |
 | Response format           | JSON; result in `end.result`                       | JSON; result in top-level `winner` field              |
 | Draw representation       | `"draw"` in `end.result`                           | `winner` field absent from JSON object                |
@@ -252,6 +252,29 @@ The oracle will **never** submit a result on-chain until a verified terminal `en
 | Export path               | `/pub/game/{game_id}`                              | `/game/export/{game_id}`                              |
 
 Key difference to highlight for contributors: Lichess signals a **draw** by omitting the `winner` key entirely, while Chess.com signals a draw with the explicit value `"draw"` in `end.result`. Make sure any result-parsing code handles both conventions correctly.
+
+### Oracle rate-limiter and failover design
+
+The oracle service now uses a shared, clone-safe token bucket for each provider instead of a single global spacing gate. The effective knobs are:
+
+- `capacity`: how many burst requests may be dispatched immediately before the sustained rate starts to throttle
+- `refill_rate`: sustained token generation rate in requests/second
+- `max_concurrent`: per-provider in-flight request ceiling, distinct from the token-bucket ceiling
+
+Both values are configured in the provider client config (`ChessComClientConfig` / `LichessClientConfig`) and are shared across all concurrent verification tasks for that provider.
+
+The provider registry enforces precedence and failover rules:
+
+1. The first provider in the registry order is the primary source.
+2. If the primary returns `ProviderError::Unavailable` or `ProviderError::RateLimited`, the registry tries the next provider immediately.
+3. If the provider returns a terminal logical error such as `GameNotFound` or `InvalidGameId`, the registry stops and returns that error without consulting the secondary provider.
+4. If every provider is unavailable or rate-limited, the registry returns `ProviderError::AllProvidersFailed` with the per-provider error list preserved in precedence order.
+
+This preserves the distinction the automated oracle pipeline needs:
+
+- `ProviderError::RateLimited` means the provider is healthy but backed off; retry later with the recommended `retry_after` delay.
+- `ProviderError::Unavailable` means the provider is down or returning a transient server-side failure; fail over to the next provider immediately.
+- `ProviderError::ConcurrencyLimitReached` means the per-provider request queue is saturated; back off or retry later rather than flagging a logical failure.
 
 ---
 

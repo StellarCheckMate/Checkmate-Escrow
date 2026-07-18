@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -10,6 +12,12 @@ pub enum ChessComError {
 
     #[error("request timed out")]
     Timeout,
+
+    #[error("rate limited by chess.com; retry after {retry_after:?}")]
+    RateLimited { retry_after: Duration },
+
+    #[error("concurrency limit reached for chess.com")]
+    ConcurrencyLimitReached,
 
     #[error("chess.com returned non-success status: {status}")]
     HttpStatus { status: reqwest::StatusCode },
@@ -34,6 +42,12 @@ pub enum LichessError {
 
     #[error("request timed out")]
     Timeout,
+
+    #[error("rate limited by lichess; retry after {retry_after:?}")]
+    RateLimited { retry_after: Duration },
+
+    #[error("concurrency limit reached for lichess")]
+    ConcurrencyLimitReached,
 
     #[error("lichess returned non-success status: {status}")]
     HttpStatus { status: reqwest::StatusCode },

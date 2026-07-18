@@ -45,32 +45,75 @@ sequenceDiagram
 
 ## Match Lifecycle
 
+### State Machine Diagram
+
 ```mermaid
 stateDiagram-v2
     [*] --> Pending : create_match
     Pending --> Pending : deposit (single player)
     Pending --> Active : deposit (second player)
-    Pending --> Cancelled : cancel_match
-    Pending --> Cancelled : expire_match
-    Active --> Completed : submit_result
+    Pending --> Cancelled : cancel_match / expire_match
+    Active --> PendingResult : submit_result<br/>(dispute_period > 0)
+    Active --> Completed : submit_result<br/>(dispute_period = 0)
+    Active --> Paused : pause_match
+    Paused --> Active : resume_match
+    Paused --> PendingResult : (state preserved during pause)
+    PendingResult --> Completed : finalize_match /<br/>resolve_dispute_by_vote
     Completed --> [*]
     Cancelled --> [*]
 ```
 
-### Transition Reference
+### Comprehensive Transition Reference
 
-| From | To | Triggering Function | Authorized Caller | Conditions | Key Errors |
-|---|---|---|---|---|---|
-| `*` | `Pending` | `create_match` | `player1` | Contract not paused; `stake_amount > 0`; `game_id` non-empty and unique; token on allowlist (if enforced). | `ContractPaused`, `InvalidAmount`, `AlreadyExists`, `InvalidGameId`, `InvalidToken` |
-| `Pending` | `Pending` | `deposit` | `player1` or `player2` | Match exists; contract not paused; caller has not already deposited; transfers `stake_amount` to escrow. | `ContractPaused`, `MatchNotFound`, `InvalidState`, `Unauthorized`, `AlreadyFunded` |
-| `Pending` | `Active` | `deposit` | `player1` or `player2` | Same as above, **and** this deposit completes funding (both `player1_deposited` and `player2_deposited` are now `true`). | (same as single deposit) |
-| `Pending` | `Cancelled` | `cancel_match` | `player1` or `player2` | Match is in `Pending` state; refunds any deposited stakes. | `MatchNotFound`, `MatchAlreadyActive`, `Unauthorized` |
-| `Pending` | `Cancelled` | `expire_match` | Anyone | Match is in `Pending` state; ledger timeout (`MatchTimeout`, default ~24h) has elapsed since `created_ledger`; refunds any deposited stakes. | `MatchNotFound`, `InvalidState`, `MatchNotExpired` |
-| `Active` | `Completed` | `submit_result` | Oracle address stored at initialization | Match is in `Active` state; contract not paused; both players have deposited; oracle auth required. **Payout is executed inline** (winner receives `2 * stake_amount`, or each player receives `stake_amount` on draw). | `Unauthorized`, `ContractPaused`, `MatchNotFound`, `NotFunded`, `InvalidState` |
-| `Completed` | — | — | — | Terminal state. No further transitions. | — |
-| `Cancelled` | — | — | — | Terminal state. No further transitions. | — |
+**Generated from formal specification: `/contracts/escrow/formal_spec.json`**
 
-> **Note:** `execute_payout` is not a separate external function in the current implementation. The escrow contract pays out atomically inside `submit_result`.
+| From | To | Entry Point | Authorized Caller | Preconditions | Field Mutations | Key Errors |
+|---|---|---|---|---|---|---|
+| N/A | `Pending` | `create_match` | `player1` | Contract ¬paused; stake > 0; game_id unique; token allowed (if enforced); player1 ≠ player2; both players tier-compatible | id, player1, player2, stake_amount, token, game_id, platform, state=Pending, created_ledger | `ContractPaused`, `InvalidAmount`, `DuplicateGameId`, `InvalidGameId`, `InvalidPlayers`, `TokenNotAllowed` |
+| `Pending` | `Pending` | `deposit` | player1 or player2 | Contract ¬paused; match exists; caller ¬deposited; tier-compatible | player1_deposited OR player2_deposited (one set true) | `ContractPaused`, `InvalidState`, `Unauthorized`, `AlreadyFunded` |
+| `Pending` | `Active` | `deposit` | player1 or player2 | Same as Pending→Pending + both deposits now true | player1_deposited=true, player2_deposited=true, state=Active | (same as single deposit) |
+| `Pending` | `Cancelled` | `cancel_match` | player1 or player2 | state == Pending | state=Cancelled, completed_ledger set | `InvalidState`, `Unauthorized` |
+| `Pending` | `Cancelled` | `expire_match` | anyone | state == Pending; timeout elapsed since created_ledger | state=Cancelled, completed_ledger set | `InvalidState`, `MatchNotExpired` |
+| `Active` | `PendingResult` | `submit_result` | oracle | state == Active; both deposited; dispute_period > 0 | state=PendingResult, PendingWinner stored, ResultDeadline set | `Unauthorized`, `InvalidState`, `NotFunded` |
+| `Active` | `Completed` | `submit_result` | oracle | state == Active; both deposited; dispute_period == 0 | state=Completed, completed_ledger set, winner set, payout executed | `Unauthorized`, `InvalidState`, `NotFunded` |
+| `Active` | `Paused` | `pause_match` | player1 or player2 | state == Active; ¬paused_ledger | state=Paused, paused_ledger set | `InvalidState`, `Unauthorized` |
+| `Paused` | `Active` | `resume_match` | player1 or player2 | state == Paused | state=Active (restored), total_pause_duration += (current - paused_ledger), paused_ledger cleared | `InvalidState`, `Unauthorized` |
+| `PendingResult` | `Completed` | `finalize_match` | anyone | state == PendingResult; dispute deadline elapsed; no active dispute | state=Completed, payout executed, PendingWinner cleared | `InvalidState`, `DisputePeriodNotElapsed` |
+| `PendingResult` | `Completed` | `resolve_dispute_by_vote` | anyone | dispute.state == Active; voting deadline elapsed; tally votes | state=Completed, dispute resolved, payout/refund executed based on vote | `DisputeNotFound`, `VotingPeriodNotElapsed` |
+| `PendingResult` | `PendingResult` | `dispute_oracle_result` | player1 or player2 | state == PendingResult; dispute deadline ¬elapsed; ¬dispute exists | Dispute record created, voting period set | `MatchNotInPendingResult`, `DisputeAlreadyRaised` |
+| `Completed` | `Completed` | (none) | — | Terminal state | (no mutations) | (N/A) |
+| `Cancelled` | `Cancelled` | (none) | — | Terminal state | (no mutations) | (N/A) |
+
+### 6 Match States (Formal Specification)
+
+| State | Reachable From | Terminal | Description |
+|-------|---|---|---|
+| `Pending` | N/A (initial) | No | Match created; awaiting both deposits |
+| `Active` | Pending | No | Both players deposited; game in progress; awaiting result |
+| `PendingResult` | Active | No | Oracle submitted result; awaiting dispute resolution or finalization deadline |
+| `Completed` | Active, PendingResult | **Yes** | Payout executed; match settled |
+| `Cancelled` | Pending | **Yes** | Cancelled before activation or expired; stakes refunded |
+| `Paused` | Active, PendingResult | No | Match paused by player (vesting/timing paused) |
+
+### Valid State Transitions (8 Total)
+
+1. **Pending → Active** via `deposit()` when second player deposits
+2. **Pending → Cancelled** via `cancel_match()` or `expire_match()`
+3. **Active → PendingResult** via `submit_result()` with dispute_period > 0
+4. **Active → Completed** via `submit_result()` with dispute_period = 0
+5. **Active → Paused** via `pause_match()`
+6. **Paused ↔ Active** via `resume_match()` (can pause/resume multiple times)
+7. **PendingResult → Completed** via `finalize_match()` or `resolve_dispute_by_vote()`
+8. **Completed → Completed** (self-loop for atomicity guarantees)
+
+### Invalid Transitions (Properly Rejected)
+
+The contract enforces state validation at every entry point. Invalid transitions include:
+- Backward transitions (e.g., Completed → Active, Cancelled → Pending)
+- Transitions from terminal states (except self-loops)
+- Cross-tree jumps (e.g., Pending → Completed)
+
+All invalid attempts return `InvalidState` error.
 
 ## Stable Public API
 
@@ -98,12 +141,20 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 
 ### `MatchState` Enum
 
-| Variant     | Meaning |
-|-------------|---------|
-| `Pending`   | Match created; awaiting both deposits. |
-| `Active`    | Both players deposited; game in progress. |
-| `Completed` | Result submitted and payout executed. |
-| `Cancelled` | Cancelled before activation; stakes refunded. |
+The contract uses a 6-state machine (formally verified at `/contracts/escrow/formal_spec.json`):
+
+| Variant | Meaning | Terminal | Reachable From |
+|---------|---------|----------|---|
+| `Pending` | Match created; awaiting both deposits. | No | N/A (initial) |
+| `Active` | Both players deposited; game in progress. | No | Pending |
+| `PendingResult` | Oracle submitted result; awaiting dispute or finalization. | No | Active |
+| `Completed` | Result verified and payout executed. | **Yes** | Active, PendingResult |
+| `Cancelled` | Cancelled before activation or expired. | **Yes** | Pending |
+| `Paused` | Match paused (vesting paused); can resume. | No | Active, PendingResult |
+
+**Terminal State Guarantee:** Once a match reaches `Completed` or `Cancelled`, no further state changes are possible. These states are immutable and represent final settlement.
+
+**Dispute/Voting Flow:** When `dispute_period > 0`, the `PendingResult` state allows players to dispute the oracle's result via voting before finalization. Vote tally determines whether result is upheld (→ `Completed`) or overturned (→ `Cancelled` as refund).
 
 ### `Winner` Enum
 
