@@ -61,3 +61,32 @@ pub enum LichessError {
     #[error("game is missing result fields or is in an unknown state")]
     InvalidResponse,
 }
+
+/// Top-level oracle service error, encompassing config, transport, XDR
+/// construction, simulation, and transaction submission failures.
+#[derive(Debug, Error)]
+pub enum OracleServiceError {
+    #[error("configuration error: {0}")]
+    Config(String),
+
+    #[error("transport error: {0}")]
+    Transport(String),
+
+    #[error("RPC error: {0}")]
+    RpcError(String),
+
+    #[error("simulate transaction error: {0}")]
+    SimulateError(String),
+
+    #[error("send transaction error: {0}")]
+    SendError(String),
+
+    #[error("transaction failed on-chain: {0}")]
+    TxFailed(String),
+
+    #[error("XDR encoding/decoding error: {0}")]
+    XdrError(String),
+
+    #[error("queue I/O error: {0}")]
+    QueueIo(String),
+}

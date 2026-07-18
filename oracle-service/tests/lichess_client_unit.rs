@@ -1,4 +1,4 @@
-use oracle_service::oracle::{ChessComError, LichessClient, LichessGameResult};
+use oracle_service::oracle::{LichessClient, LichessError, LichessGameResult};
 
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -109,7 +109,7 @@ async fn fetch_result_404_maps_to_game_not_found() {
     .unwrap();
 
     let err = client.fetch_result("notfound").await.unwrap_err();
-    assert!(matches!(err, ChessComError::GameNotFound));
+    assert!(matches!(err, LichessError::GameNotFound));
 }
 
 #[tokio::test]
@@ -131,5 +131,25 @@ async fn fetch_result_unknown_winner_errors() {
     .unwrap();
 
     let err = client.fetch_result("unk12345").await.unwrap_err();
-    assert!(matches!(err, ChessComError::InvalidResponse));
+    assert!(matches!(err, LichessError::InvalidResponse));
+}
+
+#[tokio::test]
+async fn fetch_result_non_2xx_maps_to_http_status() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/game/export/err12345"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let client = LichessClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+
+    let err = client.fetch_result("err12345").await.unwrap_err();
+    assert!(matches!(err, LichessError::HttpStatus { .. }));
 }

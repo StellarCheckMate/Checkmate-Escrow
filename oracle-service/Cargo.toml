@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[[bin]]
+name = "oracle-service"
+path = "src/main.rs"
+
+[[bin]]
+name = "oracle-replay"
+path = "src/bin/replay.rs"
+
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
@@ -11,14 +19,31 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 thiserror = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "fs", "sync"] }
 axum = "0.7"
 chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Secure key zeroization
+zeroize = { version = "1.7", features = ["derive"] }
+# Ed25519 signing for Stellar transactions
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+# Hex encode/decode for key material
+hex = "0.4"
+# Stellar XDR for transaction construction
+stellar-xdr = { version = "27.0.0", features = ["std", "base64"] }
+# Stellar strkey for G-address / C-address encoding
+stellar-strkey = "0.0.18"
+# Random number generator for sequence numbers / nonces
+rand = "0.8"
+# Base64 for XDR encoding over the wire
+base64 = "0.22"
+# SHA-256 hashing for Stellar transaction signing
+sha2 = "0.10"
 
-# Optional: used only if/when you wire to Soroban for submissions.
-soroban-sdk = { version = "21.7.5", default-features = false, features = [] }
 contracts-oracle = { package = "oracle", path = "../contracts/oracle" }
 
 [dev-dependencies]
 wiremock = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tempfile = "3"
