@@ -6,7 +6,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use super::errors::ChessComError;
+use super::errors::LichessError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LichessGameResult {
@@ -17,6 +17,7 @@ pub struct LichessGameResult {
 ///
 /// - Validates Lichess game IDs (exactly 8 alphanumeric characters).
 /// - Applies a per-request timeout (30s).
+/// - Enforces 2-second spacing between requests to stay within rate limits.
 #[derive(Clone)]
 pub struct LichessClient {
     http: Client,
@@ -32,7 +33,7 @@ impl Default for LichessClient {
 }
 
 impl LichessClient {
-    pub fn new() -> Result<Self, ChessComError> {
+    pub fn new() -> Result<Self, LichessError> {
         Self::new_with_base_and_timeout(
             "https://lichess.org".to_string(),
             Duration::from_secs(30),
@@ -42,11 +43,11 @@ impl LichessClient {
     pub fn new_with_base_and_timeout(
         api_base: String,
         request_timeout: Duration,
-    ) -> Result<Self, ChessComError> {
+    ) -> Result<Self, LichessError> {
         let http = Client::builder()
             .timeout(request_timeout)
             .build()
-            .map_err(ChessComError::Http)?;
+            .map_err(LichessError::Http)?;
 
         let min_spacing = Duration::from_secs(2);
 
@@ -59,14 +60,14 @@ impl LichessClient {
     }
 
     /// Validates that a Lichess game ID is exactly 8 alphanumeric characters.
-    pub fn validate_game_id(game_id: &str) -> Result<(), ChessComError> {
+    pub fn validate_game_id(game_id: &str) -> Result<(), LichessError> {
         if game_id.len() != 8 || !game_id.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return Err(ChessComError::InvalidGameId);
+            return Err(LichessError::InvalidGameId);
         }
         Ok(())
     }
 
-    async fn enforce_rate_limit(&self) -> Result<(), ChessComError> {
+    async fn enforce_rate_limit(&self) -> Result<(), LichessError> {
         let mut last = self.last_request.lock().await;
         let elapsed = Instant::now().saturating_duration_since(*last);
         if elapsed < self.min_spacing {
@@ -76,7 +77,7 @@ impl LichessClient {
         Ok(())
     }
 
-    pub async fn fetch_result(&self, game_id: &str) -> Result<LichessGameResult, ChessComError> {
+    pub async fn fetch_result(&self, game_id: &str) -> Result<LichessGameResult, LichessError> {
         Self::validate_game_id(game_id)?;
 
         self.enforce_rate_limit().await?;
@@ -95,28 +96,28 @@ impl LichessClient {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
-                    ChessComError::Timeout
+                    LichessError::Timeout
                 } else {
-                    ChessComError::Http(e)
+                    LichessError::Http(e)
                 }
             })?;
 
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
-            return Err(ChessComError::GameNotFound);
+            return Err(LichessError::GameNotFound);
         }
         if !status.is_success() {
-            return Err(ChessComError::HttpStatus { status });
+            return Err(LichessError::HttpStatus { status });
         }
 
-        let body: LichessGame = resp.json().await.map_err(ChessComError::Http)?;
+        let body: LichessGame = resp.json().await.map_err(LichessError::Http)?;
 
         // Lichess: "winner" field is "white", "black", or absent (draw).
         let winner = match body.winner.as_deref() {
             Some("white") => Winner::Player1,
             Some("black") => Winner::Player2,
             None => Winner::Draw,
-            _ => return Err(ChessComError::InvalidResponse),
+            _ => return Err(LichessError::InvalidResponse),
         };
 
         Ok(LichessGameResult { winner })
