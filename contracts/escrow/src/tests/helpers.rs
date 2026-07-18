@@ -98,6 +98,9 @@ pub fn run_full_match(
             client.claim_vested_payout(&id, player1);
             client.claim_vested_payout(&id, player2);
         }
+        Winner::None => {
+            panic!("Cannot complete_match_flow with Winner::None");
+        }
     }
     id
 }
