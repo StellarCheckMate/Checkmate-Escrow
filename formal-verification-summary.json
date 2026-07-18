@@ -1,0 +1,392 @@
+{
+  "formal_verification_specification": {
+    "title": "Checkmate-Escrow Smart Contract - Formal Verification Specification",
+    "version": "1.0",
+    "date": "2026-07-17",
+    "contract_name": "EscrowContract",
+    "contract_path": "contracts/escrow/src/lib.rs",
+    "contract_language": "Rust (Soroban)",
+    "specification_scope": "Complete formal verification specification for code generation, documentation, and security analysis",
+    
+    "executive_summary": {
+      "contract_purpose": "Trustless chess betting on Stellar - escrows player stakes and automatically distributes payouts via oracle-verified match results with optional dispute resolution via community voting.",
+      "entry_points_count": 55,
+      "state_machine_states": 6,
+      "critical_invariants": 20,
+      "known_vulnerabilities": 20,
+      "mitigation_status": "All identified vulnerabilities are mitigated",
+      "overall_risk_assessment": "VERY LOW"
+    },
+
+    "specification_files": [
+      {
+        "filename": "formal-verification-spec-part1.json",
+        "description": "Entry points 1-20: initialization, pausing, token allowlist, and core match lifecycle (create, deposit, submit_result, cancel, pause, resume, expire)"
+      },
+      {
+        "filename": "formal-verification-spec-part2.json",
+        "description": "Entry points 21-40: query functions, admin management, snapshot access, dispute lifecycle, and match collection endpoints"
+      },
+      {
+        "filename": "formal-verification-spec-part3.json",
+        "description": "Entry points 41-55: remaining query functions, balance snapshots, match collections, oracle management, and vesting payouts"
+      },
+      {
+        "filename": "formal-verification-state-machine.json",
+        "description": "Complete state machine specification: 6 states (Pending, Active, PendingResult, Completed, Cancelled, Paused), all valid transitions, 6x6 transition matrix"
+      },
+      {
+        "filename": "formal-verification-invariants.json",
+        "description": "20 critical safety and liveness invariants: no double-payout, no fund loss, no unreachable states, tier validation, authorization boundaries, etc."
+      },
+      {
+        "filename": "formal-verification-vulnerabilities.json",
+        "description": "20 identified vulnerabilities with severity levels, attack scenarios, root causes, and active mitigations"
+      },
+      {
+        "filename": "formal-verification-summary.json",
+        "description": "This file - comprehensive overview, specification structure, and key findings"
+      }
+    ],
+
+    "match_state_machine": {
+      "states": ["Pending", "Active", "PendingResult", "Completed", "Cancelled", "Paused"],
+      "initial_state": "Pending",
+      "terminal_states": ["Completed", "Cancelled"],
+      "valid_paths": [
+        "Pending -> Active -> PendingResult -> Completed (with dispute period)",
+        "Pending -> Active -> Completed (immediate payout, dispute_period=0)",
+        "Pending -> Active -> Paused -> Active -> PendingResult -> Completed (pause/resume cycle)",
+        "Pending -> Cancelled (cancel before deposit or timeout)",
+        "Active -> PendingResult/Completed -> (terminal)"
+      ]
+    },
+
+    "entry_points_overview": {
+      "total_count": 55,
+      "categories": {
+        "initialization_and_admin": [
+          "initialize",
+          "pause",
+          "unpause",
+          "propose_admin",
+          "accept_admin",
+          "transfer_admin",
+          "update_oracle",
+          "set_protocol_config",
+          "set_match_timeout",
+          "set_dispute_period"
+        ],
+        "token_allowlist_management": [
+          "add_allowed_token",
+          "remove_allowed_token",
+          "is_token_allowed",
+          "is_allowlist_enforced",
+          "get_allowed_tokens"
+        ],
+        "match_lifecycle": [
+          "create_match",
+          "create_match_with_conversion",
+          "deposit",
+          "cancel_match",
+          "expire_match",
+          "pause_match",
+          "resume_match"
+        ],
+        "oracle_and_results": [
+          "submit_result",
+          "submit_result_with_oracle_record",
+          "finalize_match"
+        ],
+        "dispute_and_voting": [
+          "dispute_oracle_result",
+          "vote_on_dispute",
+          "resolve_dispute_by_vote",
+          "get_dispute",
+          "get_match_dispute_id"
+        ],
+        "query_and_view_functions": [
+          "get_match",
+          "is_funded",
+          "get_depositor_count",
+          "get_escrow_balance",
+          "get_admin",
+          "get_oracle",
+          "get_protocol_config",
+          "get_match_timeout",
+          "get_dispute_period",
+          "tier_from_match_count",
+          "min_tier_stake",
+          "max_tier_stake",
+          "get_match_count",
+          "get_player_matches",
+          "get_player_matches_paginated",
+          "get_pending_matches",
+          "get_pending_matches_paginated",
+          "get_active_matches",
+          "get_active_matches_paginated",
+          "get_live_matches",
+          "get_live_matches_paginated"
+        ],
+        "balance_snapshots": [
+          "get_balance_snapshots",
+          "get_latest_snapshot",
+          "get_balance_at_timestamp"
+        ],
+        "vesting_and_claims": [
+          "claim_vested_payout"
+        ]
+      }
+    },
+
+    "critical_invariants": {
+      "total": 20,
+      "categories": {
+        "fund_safety": [
+          "INV-1: No Double Payout",
+          "INV-2: No Fund Loss",
+          "INV-8: Escrow Balance Conservation",
+          "INV-3: No Unreachable-But-Fundable States"
+        ],
+        "state_machine": [
+          "INV-4: Monotonic State Progression",
+          "INV-18: Valid Match State Enum",
+          "INV-19: Timeout Bounds"
+        ],
+        "authorization": [
+          "INV-6: Authorization Boundaries"
+        ],
+        "idempotency": [
+          "INV-5: Deposit Idempotency"
+        ],
+        "winner_and_payout": [
+          "INV-7: Winner Uniqueness in Payout"
+        ],
+        "dispute_integrity": [
+          "INV-9: Oracle Result Integrity",
+          "INV-10: Dispute Period Enforcement",
+          "INV-11: Single Vote Per Voter Per Dispute"
+        ],
+        "player_constraints": [
+          "INV-12: Tier-Based Stake Bounds",
+          "INV-16: Player Identity Separation",
+          "INV-17: Positive Stake Amount"
+        ],
+        "token_management": [
+          "INV-13: Token Allowlist Enforcement",
+          "INV-15: Game ID Uniqueness",
+          "INV-14: Match ID Uniqueness"
+        ],
+        "governance": [
+          "INV-20: Contract Pause Blocks Mutations"
+        ]
+      },
+      "verification_status": "All 20 invariants have code-level mitigations",
+      "formal_verification_ready": true
+    },
+
+    "double_payout_vulnerability_analysis": {
+      "name": "VULN-1: Double-Payout Vulnerability",
+      "severity": "CRITICAL (if not mitigated)",
+      "description": "The primary vulnerability identified in the task description - potential for payouts to execute multiple times on the same match result.",
+      "attack_vector": "If payout logic were separate from result submission, an oracle or malicious actor could trigger payout multiple times.",
+      "code_patterns_vulnerable_to_this": [
+        "Separate result storage and payout execution in different functions",
+        "No state transition guarding payouts",
+        "Re-entrant payout logic"
+      ],
+      "mitigations_in_place": [
+        "Atomic execution: submit_result (dispute_period=0) BOTH sets state=Completed AND executes payout in single transaction",
+        "State guards: finalize_match can only execute when state=PendingResult (post-dispute); once Completed, no further payouts possible",
+        "Terminal state: Completed is terminal; no transitions out except claim (which only sets flag, no payout)",
+        "execute_payout is private helper, not exposed as public entry point",
+        "claim_vested_payout for delayed vesting only sets flag; cannot re-trigger payout"
+      ],
+      "residual_risk": "NEGLIGIBLE - Atomic execution and state machine design eliminate this vulnerability",
+      "code_locations": [
+        "lib.rs:550-620 (submit_result implementation)",
+        "lib.rs:620-710 (finalize_match implementation)",
+        "lib.rs:900-950 (execute_payout private helper)",
+        "lib.rs:1250-1350 (claim_vested_payout implementation)"
+      ]
+    },
+
+    "field_mutation_rules": {
+      "match_struct_fields": [
+        {
+          "field": "state",
+          "mutated_by": ["deposit (Pending->Active)", "submit_result (Active->PendingResult/Completed)", "finalize_match (PendingResult->Completed)", "resolve_dispute_by_vote (PendingResult->Completed)", "cancel_match (Pending->Cancelled)", "expire_match (Pending->Cancelled)", "pause_match (Active->Paused)", "resume_match (Paused->Active)"],
+          "immutable_after": "Completed or Cancelled"
+        },
+        {
+          "field": "player1_deposited",
+          "mutated_by": ["deposit (player1 deposits)"],
+          "immutable_after": "Set to true"
+        },
+        {
+          "field": "player2_deposited",
+          "mutated_by": ["deposit (player2 deposits)"],
+          "immutable_after": "Set to true"
+        },
+        {
+          "field": "winner",
+          "mutated_by": ["submit_result (oracle sets winner)"],
+          "immutable_after": "Set by oracle (can be overturned by dispute vote)"
+        },
+        {
+          "field": "completed_ledger",
+          "mutated_by": ["submit_result", "finalize_match", "resolve_dispute_by_vote", "cancel_match", "expire_match"],
+          "immutable_after": "Set once (terminal state)"
+        },
+        {
+          "field": "vested_at",
+          "mutated_by": ["submit_result (oracle sets vesting timestamp)"],
+          "immutable_after": "Set once"
+        },
+        {
+          "field": "player1_claimed",
+          "mutated_by": ["claim_vested_payout (player1 claims)"],
+          "immutable_after": "Set to true (one-time claim)"
+        },
+        {
+          "field": "player2_claimed",
+          "mutated_by": ["claim_vested_payout (player2 claims)"],
+          "immutable_after": "Set to true (one-time claim)"
+        },
+        {
+          "field": "paused_ledger",
+          "mutated_by": ["pause_match (set to current ledger)", "resume_match (cleared)"],
+          "immutable_after": "Only relevant during Paused state"
+        },
+        {
+          "field": "total_pause_duration",
+          "mutated_by": ["resume_match (accumulated)"],
+          "immutable_after": "Monotonically increasing"
+        }
+      ]
+    },
+
+    "authorization_model": {
+      "patterns": [
+        {
+          "function": "initialize",
+          "auth": "None (first-time setup only)",
+          "guard": "AlreadyInitialized check"
+        },
+        {
+          "function": "Admin-only operations",
+          "auth": "admin.require_auth()",
+          "functions": ["pause", "unpause", "set_protocol_config", "add_allowed_token", "remove_allowed_token", "set_match_timeout", "update_oracle", "propose_admin", "transfer_admin", "set_dispute_period"]
+        },
+        {
+          "function": "Player authorization",
+          "auth": "player.require_auth()",
+          "functions": ["create_match (player1)", "deposit (depositing player)", "cancel_match (either player)", "pause_match (either player)", "resume_match (either player)", "dispute_oracle_result (either player)", "vote_on_dispute (voter)", "claim_vested_payout (claiming player)"]
+        },
+        {
+          "function": "Oracle authorization",
+          "auth": "oracle.require_auth()",
+          "functions": ["submit_result", "submit_result_with_oracle_record"]
+        },
+        {
+          "function": "Pending admin authorization",
+          "auth": "pending_admin.require_auth()",
+          "functions": ["accept_admin"]
+        },
+        {
+          "function": "No auth required",
+          "auth": "None",
+          "functions": ["All query/read-only functions", "expire_match (anyone can call)", "finalize_match (anyone can call)", "resolve_dispute_by_vote (anyone can call)"]
+        }
+      ]
+    },
+
+    "field_mutation_tracking": {
+      "descriptor": "For code generation and documentation - which fields change in each entry point",
+      "example": {
+        "deposit": [
+          "Match.player1_deposited (if player=player1)",
+          "Match.player2_deposited (if player=player2)",
+          "Match.state (to Active if both deposited)",
+          "PlayerBalanceSnapshot (recorded)"
+        ]
+      },
+      "note": "See formal-verification-spec-part1.json, part2.json, part3.json for complete field mutation lists per entry point"
+    },
+
+    "state_transition_summary": {
+      "total_valid_transitions": 8,
+      "total_invalid_transition_paths": 15,
+      "reachability": "All non-terminal states have at least one legal transition path to a terminal state",
+      "deadlock_risk": "NONE - no states with zero legal outgoing transitions"
+    },
+
+    "recommendations_for_code_generation": [
+      "Use state_transition_matrix as truth source for transition validation",
+      "Generate state machine guards: each entry point should verify current state is in allowed_states array",
+      "Generate field mutation trackers: log which fields are mutated by each operation",
+      "Generate authorization checks: ensure require_auth() is called before state mutations",
+      "Generate invariant checks: validate no double-payout, conservation of funds, etc.",
+      "Generate test matrix: create test cases for each valid and invalid transition"
+    ],
+
+    "recommendations_for_documentation": [
+      "Use entry_points list to generate API documentation with state preconditions",
+      "Use state_machine to generate state machine diagrams and flowcharts",
+      "Use invariants to generate security guarantees document",
+      "Use vulnerabilities to generate threat model and mitigation document",
+      "Cross-reference each entry point to affected invariants and potential vulnerabilities"
+    ],
+
+    "recommendations_for_security": [
+      "All 20 identified vulnerabilities are mitigated; no additional patches needed",
+      "Monitor for oracle availability (Active state timeout risk)",
+      "Consider adding Active->Cancelled timeout path for oracle unavailability (optional enhancement)",
+      "Maintain admin controls for emergency pause and dispute period adjustments",
+      "Audit token allowlist before enabling enforcement",
+      "Regular snapshots and balance audits using balance snapshot functions"
+    ],
+
+    "machine_readable_summary": {
+      "contract_stats": {
+        "total_entry_points": 55,
+        "state_machine_states": 6,
+        "terminal_states": 2,
+        "valid_transitions": 8,
+        "invariants": 20,
+        "vulnerabilities_identified": 20,
+        "vulnerabilities_mitigated": 20,
+        "vulnerabilities_unmitigated": 0
+      },
+      "state_distribution": {
+        "Pending": "initial state",
+        "Active": "primary game state",
+        "PendingResult": "post-result awaiting finalization",
+        "Completed": "terminal (payout executed)",
+        "Cancelled": "terminal (funds refunded)",
+        "Paused": "pause-active state (only from Active)"
+      },
+      "invariant_categories": {
+        "fund_safety": 4,
+        "state_machine": 3,
+        "authorization": 1,
+        "idempotency": 1,
+        "winner_and_payout": 1,
+        "dispute_integrity": 3,
+        "player_constraints": 3,
+        "token_management": 3,
+        "governance": 1
+      },
+      "vulnerability_severity_distribution": {
+        "critical": 2,
+        "high": 5,
+        "medium": 13,
+        "total": 20
+      }
+    }
+  },
+  "specification_complete": true,
+  "ready_for_code_generation": true,
+  "ready_for_formal_verification": true,
+  "ready_for_documentation": true
+}

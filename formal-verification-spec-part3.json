@@ -1,0 +1,150 @@
+{
+  "specification_version": "1.0",
+  "entry_points_final": [
+    {
+      "name": "get_match_dispute_id",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_balance_snapshots",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["caller (match player or admin)"],
+      "conditions": ["Caller must be admin (full access) or player1/player2 (redacted)", "Returns full snapshot history"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_latest_snapshot",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["caller (match player or admin)"],
+      "conditions": ["Caller must be admin (full access) or player1/player2 (redacted)", "Returns most recent snapshot"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_balance_at_timestamp",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "Public player aggregate escrow balance", "Returns balance at or before ledger timestamp"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_pending_matches",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "Returns all matches in Pending state"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_pending_matches_paginated",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "Paginated query with offset/limit"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_active_matches",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "Returns all matches in Active state"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_live_matches",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "Alias for get_active_matches"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_active_matches_paginated",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "Paginated query"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_live_matches_paginated",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "Alias for get_active_matches_paginated"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_match_count",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "Total matches created"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_player_matches",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "All match IDs for player (deprecated)"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_player_matches_paginated",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "Paginated player matches"],
+      "events": ["None"]
+    },
+    {
+      "name": "update_oracle",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["Oracle"],
+      "auth_required": ["Admin"],
+      "conditions": ["Admin authorization", "new_oracle != contract_address"],
+      "events": ["(admin, oracle_up)"]
+    },
+    {
+      "name": "transfer_admin",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["Admin"],
+      "auth_required": ["Admin"],
+      "conditions": ["Current admin authorization", "Direct single-step transfer"],
+      "events": ["(admin, xfer)"]
+    },
+    {
+      "name": "claim_vested_payout",
+      "state_from": ["Completed"],
+      "state_to": ["Completed (with claim flag)"],
+      "mutations": ["Match.playerX_claimed=true"],
+      "auth_required": ["player"],
+      "conditions": ["Match in Completed state", "Caller is player1 or player2", "Vesting period elapsed", "Hasn't already claimed", "Winner matches caller"],
+      "events": ["(match, claim)"]
+    }
+  ],
+  "note": "Part 3/3 - Entry points 41-55 of 55. Total: 55 public entry points"
+}

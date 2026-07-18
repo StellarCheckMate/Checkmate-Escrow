@@ -2,6 +2,13 @@
 
 pub mod errors;
 pub mod types;
+pub mod formal_verification;
+
+#[cfg(test)]
+mod formal_verification_tests;
+
+#[cfg(test)]
+mod kani_harness;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
