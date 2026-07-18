@@ -404,7 +404,7 @@ impl EscrowContract {
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
             completed_ledger: None,
-            winner: None,
+            winner: Winner::None,
             vested_at: None,
             player1_claimed: false,
             player2_claimed: false,
@@ -569,7 +569,7 @@ impl EscrowContract {
             player2_deposited: false,
             created_ledger: env.ledger().sequence(),
             completed_ledger: None,
-            winner: None,
+            winner: Winner::None,
             vested_at: None,
             player1_claimed: false,
             player2_claimed: false,
@@ -757,7 +757,7 @@ impl EscrowContract {
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
-        m.winner = Some(winner.clone());
+        m.winner = winner.clone();
         m.vested_at = Some(env.ledger().timestamp());
 
         env.storage()
@@ -1424,6 +1424,9 @@ impl EscrowContract {
             Winner::Draw => {
                 client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
                 client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+            }
+            Winner::None => {
+                return Err(Error::InvalidState);
             }
         }
         Ok(())
@@ -2393,7 +2396,10 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        let winner = m.winner.as_ref().ok_or(Error::InvalidState)?;
+        let winner = &m.winner;
+        if *winner == Winner::None {
+            return Err(Error::InvalidState);
+        }
         let client = token::Client::new(&env, &m.token);
         let amount_claimed;
 
@@ -2415,6 +2421,9 @@ impl EscrowContract {
                 Winner::Player2 => {
                     return Err(Error::Unauthorized);
                 }
+                Winner::None => {
+                    return Err(Error::InvalidState);
+                }
             }
             m.player1_claimed = true;
         } else {
@@ -2434,6 +2443,9 @@ impl EscrowContract {
                 }
                 Winner::Player1 => {
                     return Err(Error::Unauthorized);
+                }
+                Winner::None => {
+                    return Err(Error::InvalidState);
                 }
             }
             m.player2_claimed = true;
