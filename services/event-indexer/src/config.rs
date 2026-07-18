@@ -72,60 +72,71 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
 
-    fn base_env() {
-        env::set_var("CONTRACT_ESCROW", "CABD7H7QWXSTDZ6YPMPZRJ2FLGDWP5AYWLF5PYQRB5PQV6PDBGFPMTD");
-    }
+    // Tests that mutate env vars must be serialized to avoid races when cargo
+    // runs them in parallel on the same process.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    fn valid_contract_address() -> &'static str {
-        "CABD7H7QWXSTDZ6YPMPZRJ2FLGDWP5AYWLF5PYQRB5PQV6PDBGFPMTD"
+    const VALID_ADDR: &str = "CABD7H7QWXSTDZ6YPMPZRJ2FLGDWP5AYWLF5PYQRB5PQV6PDBGFPMTDX";
+
+    fn set_base_env() {
+        env::set_var("CONTRACT_ESCROW", VALID_ADDR);
+        env::set_var("EVENT_INDEXER_POLL_INTERVAL", "5");
     }
 
     #[test]
     fn valid_56_char_contract_address_is_accepted() {
-        env::set_var("CONTRACT_ESCROW", valid_contract_address());
+        let _lock = ENV_LOCK.lock().unwrap();
+        env::set_var("CONTRACT_ESCROW", VALID_ADDR);
         env::set_var("EVENT_INDEXER_POLL_INTERVAL", "5");
         assert!(Config::from_env().is_ok());
     }
 
     #[test]
     fn short_contract_address_is_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
         env::set_var("CONTRACT_ESCROW", "CSHORT");
-        env::set_var("EVENT_INDEXER_POLL_INTERVAL", "5");
         assert!(Config::from_env().is_err());
     }
 
     #[test]
     fn empty_contract_address_is_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
         env::set_var("CONTRACT_ESCROW", "");
-        env::set_var("EVENT_INDEXER_POLL_INTERVAL", "5");
         assert!(Config::from_env().is_err());
     }
 
     #[test]
     fn poll_interval_zero_is_rejected() {
-        base_env();
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
         env::set_var("EVENT_INDEXER_POLL_INTERVAL", "0");
         assert!(Config::from_env().is_err());
     }
 
     #[test]
     fn poll_interval_61_is_rejected() {
-        base_env();
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
         env::set_var("EVENT_INDEXER_POLL_INTERVAL", "61");
         assert!(Config::from_env().is_err());
     }
 
     #[test]
     fn poll_interval_1_is_accepted() {
-        base_env();
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
         env::set_var("EVENT_INDEXER_POLL_INTERVAL", "1");
         assert!(Config::from_env().is_ok());
     }
 
     #[test]
     fn poll_interval_60_is_accepted() {
-        base_env();
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
         env::set_var("EVENT_INDEXER_POLL_INTERVAL", "60");
         assert!(Config::from_env().is_ok());
     }
