@@ -1,6 +1,9 @@
 pub mod chess_com_client;
 pub mod errors;
 pub mod lichess_client;
+pub mod provider;
+pub mod provider_error;
+pub mod rate_limiter;
 
 pub use chess_com_client::{ChessComClient, ChessComGameResult};
 pub use errors::{ChessComError, LichessError, OracleServiceError};
