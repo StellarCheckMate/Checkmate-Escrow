@@ -1,23 +1,119 @@
+version: '3.8'
+
 services:
-  event-indexer:
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: event_indexer
+      POSTGRES_PASSWORD: event_indexer_pass
+      POSTGRES_DB: event_indexer
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U event_indexer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Event Indexer Replica #1 (leader-eligible) ───────────────────────────
+  event-indexer-1:
     build:
       context: .
       dockerfile: services/event-indexer/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8080:8080"
     environment:
+      DATABASE_URL: postgres://event_indexer:event_indexer_pass@postgres:5432/event_indexer
       STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
       CONTRACT_ESCROW: ${CONTRACT_ESCROW}
-      EVENT_INDEXER_DB_PATH: /data/events.db
+      EVENT_INDEXER_INSTANCE_ID: indexer-1
       EVENT_INDEXER_BIND_ADDR: 0.0.0.0
       EVENT_INDEXER_PORT: 8080
       EVENT_INDEXER_CACHE_SIZE: ${EVENT_INDEXER_CACHE_SIZE:-10000}
       EVENT_INDEXER_POLL_INTERVAL: ${EVENT_INDEXER_POLL_INTERVAL:-5}
       EVENT_INDEXER_LOG_LEVEL: ${EVENT_INDEXER_LOG_LEVEL:-info}
-    env_file:
-      - .env
-    volumes:
-      - event-indexer-data:/data
+      EVENT_INDEXER_LEADER_TTL_SECS: 30
+      EVENT_INDEXER_LEADER_HEARTBEAT_SECS: 10
+      EVENT_INDEXER_DB_POOL_SIZE: 5
+      EVENT_INDEXER_DB_READ_POOL_SIZE: 10
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Event Indexer Replica #2 (leader-eligible) ───────────────────────────
+  event-indexer-2:
+    build:
+      context: .
+      dockerfile: services/event-indexer/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+    environment:
+      DATABASE_URL: postgres://event_indexer:event_indexer_pass@postgres:5432/event_indexer
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
+      CONTRACT_ESCROW: ${CONTRACT_ESCROW}
+      EVENT_INDEXER_INSTANCE_ID: indexer-2
+      EVENT_INDEXER_BIND_ADDR: 0.0.0.0
+      EVENT_INDEXER_PORT: 8080
+      EVENT_INDEXER_CACHE_SIZE: ${EVENT_INDEXER_CACHE_SIZE:-10000}
+      EVENT_INDEXER_POLL_INTERVAL: ${EVENT_INDEXER_POLL_INTERVAL:-5}
+      EVENT_INDEXER_LOG_LEVEL: ${EVENT_INDEXER_LOG_LEVEL:-info}
+      EVENT_INDEXER_LEADER_TTL_SECS: 30
+      EVENT_INDEXER_LEADER_HEARTBEAT_SECS: 10
+      EVENT_INDEXER_DB_POOL_SIZE: 5
+      EVENT_INDEXER_DB_READ_POOL_SIZE: 10
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Event Indexer Replica #3 (optional, for testing 3+ instance HA) ─────
+  event-indexer-3:
+    build:
+      context: .
+      dockerfile: services/event-indexer/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+    environment:
+      DATABASE_URL: postgres://event_indexer:event_indexer_pass@postgres:5432/event_indexer
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
+      CONTRACT_ESCROW: ${CONTRACT_ESCROW}
+      EVENT_INDEXER_INSTANCE_ID: indexer-3
+      EVENT_INDEXER_BIND_ADDR: 0.0.0.0
+      EVENT_INDEXER_PORT: 8080
+      EVENT_INDEXER_CACHE_SIZE: ${EVENT_INDEXER_CACHE_SIZE:-10000}
+      EVENT_INDEXER_POLL_INTERVAL: ${EVENT_INDEXER_POLL_INTERVAL:-5}
+      EVENT_INDEXER_LOG_LEVEL: ${EVENT_INDEXER_LOG_LEVEL:-info}
+      EVENT_INDEXER_LEADER_TTL_SECS: 30
+      EVENT_INDEXER_LEADER_HEARTBEAT_SECS: 10
+      EVENT_INDEXER_DB_POOL_SIZE: 5
+      EVENT_INDEXER_DB_READ_POOL_SIZE: 10
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    profiles:
+      - testing
 
 volumes:
-  event-indexer-data:
+  postgres-data:
+    driver: local
