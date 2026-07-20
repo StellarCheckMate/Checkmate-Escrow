@@ -4,7 +4,7 @@ resolver = "2"
 license = "MIT"
 
 [workspace.dependencies]
-soroban-sdk = "21.7.5"
+soroban-sdk = "27.0.0"
 
 [profile.release]
 opt-level = "z"
