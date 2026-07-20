@@ -1,6 +1,6 @@
 [package]
 name = "event-indexer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 publish = false
 
@@ -16,12 +16,20 @@ tower = "0.4"
 tower-http = { version = "0.5", features = ["trace", "cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-rusqlite = { version = "0.31", features = ["bundled", "chrono"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 futures = "0.3"
+
+# PostgreSQL — async connection pool
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-uuid-1"] }
+deadpool-postgres = { version = "0.14", features = ["rt_tokio_1"] }
+postgres-types = { version = "0.2", features = ["derive", "with-chrono-0_4"] }
+
+# Proper LRU cache
+indexmap = "2"
 
 [dev-dependencies]
 wiremock = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 tower = { version = "0.4", features = ["util"] }
+axum = { version = "0.7", features = [] }

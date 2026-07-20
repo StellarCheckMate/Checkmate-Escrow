@@ -1,3 +1,10 @@
+//! REST API server.
+//!
+//! All query handlers use `db.query_*` methods which route through the
+//! **read pool** (`read_pool` in `Database`).  If a read-replica DSN is
+//! configured (`DATABASE_READ_URL`), read traffic is automatically spread
+//! across replicas without any code changes here.
+
 use axum::{
     async_trait,
     extract::{rejection::QueryRejection, FromRequestParts, Path, Query, State},
@@ -18,12 +25,16 @@ use crate::{
     rpc::SorobanRpcClient,
 };
 
+// ── State ─────────────────────────────────────────────────────────────────────
+
 #[derive(Clone)]
 pub struct AppState {
-    db: Arc<Database>,
-    cache: Arc<RwLock<EventCache>>,
-    rpc: Arc<SorobanRpcClient>,
+    pub db: Arc<Database>,
+    pub cache: Arc<RwLock<EventCache>>,
+    pub rpc: Arc<SorobanRpcClient>,
 }
+
+// ── Response envelope ─────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
 pub struct ApiResponse<T> {
@@ -32,8 +43,10 @@ pub struct ApiResponse<T> {
     pub error: Option<String>,
 }
 
-/// A custom `Query` extractor that returns a `400 ApiResponse` on deserialization failure
-/// instead of axum's default 422 with a plain-text body.
+// ── Custom query extractor ────────────────────────────────────────────────────
+
+/// A custom `Query` extractor that returns a `400 ApiResponse` on
+/// deserialization failure instead of axum's default 422 plain-text body.
 pub struct TypedQuery<T>(pub T);
 
 #[async_trait]
@@ -61,6 +74,8 @@ where
     }
 }
 
+// ── Query param types ─────────────────────────────────────────────────────────
+
 #[derive(Deserialize)]
 pub struct EventQuery {
     pub player_address: Option<String>,
@@ -79,6 +94,8 @@ pub struct PaginationQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
+
+// ── Router ────────────────────────────────────────────────────────────────────
 
 pub fn build_router(
     db: Arc<Database>,
@@ -105,7 +122,8 @@ pub async fn start_server(
 ) -> anyhow::Result<()> {
     let app = build_router(db, cache, rpc);
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind_addr, bind_port)).await?;
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", bind_addr, bind_port)).await?;
 
     info!("API server listening on {}:{}", bind_addr, bind_port);
 
@@ -114,13 +132,19 @@ pub async fn start_server(
     Ok(())
 }
 
+// ── Handlers ──────────────────────────────────────────────────────────────────
+
 async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> {
-    match state.db.ping() {
+    match state.db.ping().await {
         Ok(_) => Json(serde_json::json!({"db": "ok"})),
         Err(e) => Json(serde_json::json!({"db": "error", "detail": e.to_string()})),
     }
 }
 
+/// `GET /events` – query events with optional filters.
+///
+/// All filtering and sorting happens via the **read pool** so this endpoint
+/// scales horizontally when `DATABASE_READ_URL` points to a replica.
 async fn get_events(
     State(state): State<AppState>,
     TypedQuery(query): TypedQuery<EventQuery>,
@@ -134,7 +158,7 @@ async fn get_events(
         offset: query.offset,
     };
 
-    match state.db.query_events(&filters) {
+    match state.db.query_events(&filters).await {
         Ok(events) => {
             if events.is_empty() {
                 (
@@ -167,6 +191,7 @@ async fn get_events(
     }
 }
 
+/// `GET /events/:match_id` – events for a single match with cache-first lookup.
 async fn get_match_events(
     State(state): State<AppState>,
     Path(match_id): Path<u64>,
@@ -175,7 +200,7 @@ async fn get_match_events(
     let limit = pagination.limit.unwrap_or(100);
     let offset = pagination.offset.unwrap_or(0);
 
-    // Only use cache when no pagination is requested (default first page, default limit)
+    // Cache-first: only bypass cache when explicit pagination params are given.
     if pagination.limit.is_none() && pagination.offset.is_none() {
         let cache_lock = state.cache.read().await;
         let cached_events = cache_lock.get_by_match(match_id);
@@ -193,7 +218,11 @@ async fn get_match_events(
         }
     }
 
-    match state.db.get_events_by_match_paginated(match_id, limit, offset) {
+    match state
+        .db
+        .get_events_by_match_paginated(match_id, limit, offset)
+        .await
+    {
         Ok(events) => {
             if events.is_empty() {
                 (
@@ -226,13 +255,14 @@ async fn get_match_events(
     }
 }
 
+/// `GET /matches` – list matches, optionally filtered by status.
 async fn get_matches(
     State(state): State<AppState>,
     TypedQuery(query): TypedQuery<MatchQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
     let status = query.status;
 
-    match state.db.get_matches_by_status(status.as_ref()) {
+    match state.db.get_matches_by_status(status.as_ref()).await {
         Ok(matches) => (
             StatusCode::OK,
             Json(ApiResponse {
@@ -252,11 +282,12 @@ async fn get_matches(
     }
 }
 
+/// `GET /match/:match_id` – full match summary with all events.
 async fn get_match_info(
     State(state): State<AppState>,
     Path(match_id): Path<u64>,
 ) -> (StatusCode, Json<ApiResponse<MatchInfo>>) {
-    match state.db.build_match_info(match_id) {
+    match state.db.build_match_info(match_id).await {
         Ok(Some(match_info)) => (
             StatusCode::OK,
             Json(ApiResponse {
@@ -284,18 +315,21 @@ async fn get_match_info(
     }
 }
 
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
 #[derive(Serialize)]
 pub struct Stats {
     pub total_events: i64,
     pub cache_size: usize,
 }
 
+/// `GET /stats` – service-level statistics.
 async fn get_stats(State(state): State<AppState>) -> Json<ApiResponse<Stats>> {
     let cache_lock = state.cache.read().await;
     let cache_size = cache_lock.size();
     drop(cache_lock);
 
-    let total_events = state.db.total_event_count().unwrap_or(0);
+    let total_events = state.db.total_event_count().await.unwrap_or(0);
 
     Json(ApiResponse {
         success: true,
