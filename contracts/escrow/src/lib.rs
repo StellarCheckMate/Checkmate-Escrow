@@ -1,7 +1,12 @@
 #![no_std]
 
+#[cfg(test)]
+extern crate std;
+
 pub mod errors;
 pub mod types;
+
+#[cfg(test)]
 pub mod formal_verification;
 
 #[cfg(test)]
@@ -9,6 +14,9 @@ mod formal_verification_tests;
 
 #[cfg(test)]
 mod kani_harness;
+
+#[cfg(test)]
+mod tests;
 
 use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
@@ -417,6 +425,7 @@ impl EscrowContract {
             player2_claimed: false,
             conversion_rate: None,
             token_b: None,
+            conversion_rate_ledger: None,
             paused_ledger: None,
             total_pause_duration: 0,
         };
@@ -552,15 +561,22 @@ impl EscrowContract {
             .get(&DataKey::Oracle)
             .ok_or(Error::Unauthorized)?;
 
-        // Retrieve oracle rate (simplified - oracle integration needed).
-        // For now, accept the provided rate directly.
-        // Full integration would call: env.invoke_contract(&oracle_address, &Symbol::new(&env, "get_rate"), ...)
-        let oracle_rate: i128 = rate; // Simplified: trust the provided rate
+        // Fetch oracle rate from the oracle contract
+        let oracle_rate: i128 = env.invoke_contract(
+            &oracle_address,
+            &Symbol::new(&env, "get_rate"),
+            (&token_a, &token_b),
+        );
 
-        // Verify conversion rate within ±5% (simplified for now)
-        // rate * 100 >= oracle_rate * 95 && rate * 100 <= oracle_rate * 105
-        if rate <= 0 {
-            return Err(Error::InvalidConversionRate);
+        // Verify conversion rate within ±5% of oracle rate
+        // Tolerance: rate must be within [oracle_rate * 0.95, oracle_rate * 1.05]
+        // Equivalently: rate * 100 >= oracle_rate * 95 && rate * 100 <= oracle_rate * 105
+        let rate_100 = rate.checked_mul(100).ok_or(Error::Overflow)?;
+        let oracle_lower = oracle_rate.checked_mul(95).ok_or(Error::Overflow)?;
+        let oracle_upper = oracle_rate.checked_mul(105).ok_or(Error::Overflow)?;
+
+        if rate_100 < oracle_lower || rate_100 > oracle_upper {
+            return Err(Error::ConversionRateOutOfBounds);
         }
 
         let m = Match {
@@ -582,6 +598,7 @@ impl EscrowContract {
             player2_claimed: false,
             conversion_rate: Some(rate),
             token_b: Some(token_b),
+            conversion_rate_ledger: Some(env.ledger().sequence()),
             paused_ledger: None,
             total_pause_duration: 0,
         };
@@ -1417,20 +1434,63 @@ impl EscrowContract {
     // ── Payout helper ────────────────────────────────────────────────────────
 
     /// Execute the payout for a match based on the winner. Transfers tokens
-    /// from the contract to the winner(s).
+    /// from the contract to the winner(s), accounting for multi-token conversion if needed.
     fn execute_payout(env: &Env, m: &Match, winner: &Winner) -> Result<(), Error> {
-        let client = token::Client::new(env, &m.token);
-        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+        // Check if this is a multi-token match and if rate is stale
+        let is_multi_token = m.token_b.is_some() && m.conversion_rate.map_or(false, |r| r > 0);
+        if is_multi_token {
+            if let Some(rate_ledger) = m.conversion_rate_ledger {
+                let current_ledger = env.ledger().sequence();
+                let max_rate_age = 1000u32; // Rates older than 1000 ledgers are stale
+                if current_ledger.saturating_sub(rate_ledger) > max_rate_age {
+                    return Err(Error::ConversionRateStalePriceSource);
+                }
+            }
+        }
+
         match winner {
             Winner::Player1 => {
-                client.transfer(&env.current_contract_address(), &m.player1, &pot);
+                // Player1 always receives from token_a (the primary token)
+                let client_a = token::Client::new(env, &m.token);
+                let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                client_a.transfer(&env.current_contract_address(), &m.player1, &pot);
             }
             Winner::Player2 => {
-                client.transfer(&env.current_contract_address(), &m.player2, &pot);
+                // Player2 receives from token_a if single-token, or token_b if multi-token
+                if is_multi_token {
+                    let token_b = m.token_b.clone().ok_or(Error::InvalidState)?;
+                    let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                    let amount_b = pot
+                        .checked_mul(m.conversion_rate.ok_or(Error::InvalidState)?)
+                        .ok_or(Error::Overflow)?
+                        .checked_div(10_000_000)
+                        .ok_or(Error::Overflow)?;
+                    let client_b = token::Client::new(env, &token_b);
+                    client_b.transfer(&env.current_contract_address(), &m.player2, &amount_b);
+                } else {
+                    let client_a = token::Client::new(env, &m.token);
+                    let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                    client_a.transfer(&env.current_contract_address(), &m.player2, &pot);
+                }
             }
             Winner::Draw => {
-                client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
-                client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+                // In a draw, both players get their stake back
+                let client_a = token::Client::new(env, &m.token);
+                client_a.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+
+                if is_multi_token {
+                    let token_b = m.token_b.clone().ok_or(Error::InvalidState)?;
+                    let amount_b = m.stake_amount
+                        .checked_mul(m.conversion_rate.ok_or(Error::InvalidState)?)
+                        .ok_or(Error::Overflow)?
+                        .checked_div(10_000_000)
+                        .ok_or(Error::Overflow)?;
+                    let client_b = token::Client::new(env, &token_b);
+                    client_b.transfer(&env.current_contract_address(), &m.player2, &amount_b);
+                } else {
+                    let client_a = token::Client::new(env, &m.token);
+                    client_a.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+                }
             }
             Winner::None => {
                 return Err(Error::InvalidState);

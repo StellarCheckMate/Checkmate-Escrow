@@ -9,6 +9,8 @@ mod formal_verification {
     use crate::formal_verification::*;
     use crate::types::MatchState;
     use std::collections::{HashMap, HashSet};
+    use std::string::ToString;
+    use std::{println, vec};
 
     /// Test: Exhaustive state-space exploration
     /// 
