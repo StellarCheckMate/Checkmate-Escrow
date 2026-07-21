@@ -1065,22 +1065,22 @@ fn test_pause_accumulates_total_pause_duration() {
     client.deposit(&id, &player2);
 
     // First pause
-    env.ledger().set_sequence(100);
+    env.ledger().set_sequence_number(100);
     client.pause_match(&id, &player1);
 
     // Resume after 10 ledgers
-    env.ledger().set_sequence(110);
+    env.ledger().set_sequence_number(110);
     client.resume_match(&id, &player2);
 
     let m = client.get_match(&id);
     assert_eq!(m.total_pause_duration, 10);
 
     // Second pause
-    env.ledger().set_sequence(200);
+    env.ledger().set_sequence_number(200);
     client.pause_match(&id, &player2);
 
     // Resume after 15 ledgers
-    env.ledger().set_sequence(215);
+    env.ledger().set_sequence_number(215);
     client.resume_match(&id, &player1);
 
     let m = client.get_match(&id);
@@ -1305,15 +1305,15 @@ fn test_pause_resume_with_snapshots() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    let snapshots_before = client.get_balance_snapshots(&id, &_admin);
+    let snapshots_before = client.get_balance_snapshots(&_admin, &id);
     let count_before = snapshots_before.len();
 
     client.pause_match(&id, &player1);
-    let snapshots_after_pause = client.get_balance_snapshots(&id, &_admin);
+    let snapshots_after_pause = client.get_balance_snapshots(&_admin, &id);
     assert_eq!(snapshots_after_pause.len(), count_before + 1);
 
     client.resume_match(&id, &player2);
-    let snapshots_after_resume = client.get_balance_snapshots(&id, &_admin);
+    let snapshots_after_resume = client.get_balance_snapshots(&_admin, &id);
     assert_eq!(snapshots_after_resume.len(), count_before + 2);
 }
 
@@ -2133,8 +2133,10 @@ fn test_update_protocol_config() {
     let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.update_protocol_config(&ProtocolConfig {
+    client.set_protocol_config(&ProtocolConfig {
         vesting_duration_seconds: 600,
+        cancellation_fee_basis_points: 0,
+        treasury: admin.clone(),
     });
 
     let config = client.get_protocol_config();
@@ -2148,8 +2150,10 @@ fn test_vesting_enforced() {
     let token_client = TokenClient::new(&env, &token);
 
     // Set vesting duration to 1 hour (3600 seconds)
-    client.update_protocol_config(&ProtocolConfig {
+    client.set_protocol_config(&ProtocolConfig {
         vesting_duration_seconds: 3600,
+        cancellation_fee_basis_points: 0,
+        treasury: _admin.clone(),
     });
 
     let id = client.create_match(

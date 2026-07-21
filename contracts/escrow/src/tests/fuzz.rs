@@ -99,7 +99,7 @@ fn prop_payout_conserves_tokens(stake: i128, winner_is_player1: bool) -> TestRes
         return TestResult::discard();
     }
 
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let tc = TokenClient::new(&env, &token);
     let asset_client = StellarAssetClient::new(&env, &token);
@@ -126,7 +126,7 @@ fn prop_payout_conserves_tokens(stake: i128, winner_is_player1: bool) -> TestRes
     } else {
         Winner::Player2
     };
-    client.submit_result(&match_id, &winner, &oracle);
+    client.submit_result(&match_id, &winner);
 
     let after_total = tc.balance(&player1) + tc.balance(&player2);
     TestResult::from_bool(after_total == total_before)
@@ -141,7 +141,7 @@ fn prop_draw_refunds_exact_stakes(stake: i128) -> TestResult {
         return TestResult::discard();
     }
 
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let tc = TokenClient::new(&env, &token);
     let asset_client = StellarAssetClient::new(&env, &token);
@@ -161,7 +161,7 @@ fn prop_draw_refunds_exact_stakes(stake: i128) -> TestResult {
     );
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
-    client.submit_result(&match_id, &Winner::Draw, &oracle);
+    client.submit_result(&match_id, &Winner::Draw);
 
     TestResult::from_bool(
         tc.balance(&player1) == before_p1 && tc.balance(&player2) == before_p2,
@@ -188,16 +188,33 @@ fn prop_only_oracle_can_submit_result(player1_submits: bool) -> bool {
     client.deposit(&match_id, &player2);
 
     let impostor = if player1_submits { &player1 } else { &player2 };
-    // Must fail — only oracle is authorised
-    let result = client.try_submit_result(&match_id, &Winner::Player1, impostor);
 
-    // Oracle itself must succeed
-    let ok = client
-        .try_submit_result(&match_id, &Winner::Player1, &oracle)
-        .is_err(); // match already completed — but the *unauthorised* call is what we test
-    let _ = ok;
+    // Must fail — only the oracle's auth may satisfy submit_result's
+    // internal oracle.require_auth(), regardless of who nominally invoked it.
+    env.mock_auths(&[MockAuth {
+        address: impostor,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (match_id, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let impostor_result = client.try_submit_result(&match_id, &Winner::Player1);
 
-    result.is_err()
+    // Oracle itself must succeed on the same match.
+    env.mock_auths(&[MockAuth {
+        address: &oracle,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (match_id, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let oracle_result = client.try_submit_result(&match_id, &Winner::Player1);
+
+    impostor_result.is_err() && oracle_result.is_ok()
 }
 
 // ── Timeout must be within bounds ────────────────────────────────────────────
@@ -207,10 +224,10 @@ fn prop_only_oracle_can_submit_result(player1_submits: bool) -> bool {
 fn prop_timeout_bounds_enforced(timeout: u32) -> bool {
     use crate::{MAX_MATCH_TIMEOUT_LEDGERS, MIN_MATCH_TIMEOUT_LEDGERS};
 
-    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_set_match_timeout(&admin, &timeout);
+    let result = client.try_set_match_timeout(&timeout);
     let valid = timeout >= MIN_MATCH_TIMEOUT_LEDGERS && timeout <= MAX_MATCH_TIMEOUT_LEDGERS;
 
     if valid {

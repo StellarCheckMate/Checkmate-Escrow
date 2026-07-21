@@ -200,7 +200,7 @@ fn test_admin_sees_exact_amounts_in_snapshots() {
     let id = client.create_match(
         &player1,
         &player2,
-        &250,
+        &100,
         &token,
         &String::from_str(&env, "snap_admin_view"),
         &Platform::Lichess,
@@ -208,8 +208,8 @@ fn test_admin_sees_exact_amounts_in_snapshots() {
     client.deposit(&id, &player1);
 
     let latest = client.get_latest_snapshot(&admin, &id);
-    assert_eq!(latest.stake_amount, 250);
-    assert_eq!(latest.escrow_balance, 250);
+    assert_eq!(latest.stake_amount, 100);
+    assert_eq!(latest.escrow_balance, 100);
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn test_player_sees_redacted_amounts_in_snapshots() {
     let id = client.create_match(
         &player1,
         &player2,
-        &250,
+        &100,
         &token,
         &String::from_str(&env, "snap_player_view"),
         &Platform::Lichess,

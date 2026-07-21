@@ -31,11 +31,13 @@
 
 use crate::types::{Match, MatchState, Winner, Platform};
 
-use std::collections::{HashMap, HashSet};
-use std::format;
-use std::string::{String, ToString};
-use std::vec;
-use std::vec::Vec;
+use std::{
+    collections::{HashMap, HashSet},
+    format,
+    string::{String, ToString},
+    vec,
+    vec::Vec,
+};
 
 /// Violation severity levels for formal verification reports
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -594,8 +596,8 @@ impl StateSpaceExplorer {
         report.states_explored = self.explored_states.len();
         report.transitions_tested = self.valid_transitions.len() + self.invalid_transitions.len();
 
-        let mut match_ids = HashSet::new();
-        let mut game_ids = HashSet::new();
+        let mut match_ids: HashSet<u64> = HashSet::new();
+        let mut game_ids: HashSet<u64> = HashSet::new();
         let mut payout_count: HashMap<u64, u32> = HashMap::new();
 
         for context in contexts {
