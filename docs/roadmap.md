@@ -34,7 +34,30 @@ The foundation of trustless chess wagering on Stellar.
 
 ### Status
 
-✅ Complete — deployed to testnet
+✅ Complete — deployed to testnet (single-token-per-match mode)
+
+---
+
+## v1.0.1 — Multi-Token Conversion Rate Hardening (Complete)
+
+Critical bugfixes and validation improvements for the cross-token conversion feature.
+
+### Bugfixes
+
+- **execute_payout**: Now correctly settles multi-token matches, paying player2 in token_b at the conversion rate (previously always paid in token_a)
+- **Rate validation**: Implemented bounded-deviation oracle rate checking (±5% tolerance) to prevent caller-supplied economic manipulation
+- **Price staleness**: Added timestamp tracking for validated rates to prevent stale rates from being used at payout time
+- **Test suite**: Re-enabled and fixed multi_token.rs tests to exercise actual settlement paths end-to-end
+
+### Verification
+
+- Fund conservation verified: total token_a and token_b balances remain constant through match lifecycle
+- Rate manipulation rejection tests confirm ±5% tolerance enforcement
+- Gas benchmarks compare multi-token vs single-token settlement costs
+
+### Status
+
+✅ Complete — hardened and tested
 
 ---
 
