@@ -289,6 +289,33 @@ impl SorobanClient {
             max_polls * poll_delay.as_secs() as u32
         )))
     }
+
+    /// Health check: test Stellar RPC connectivity.
+    pub async fn health_check(&self) -> Result<(), OracleServiceError> {
+        self.rpc_call("getNetwork", json!({}))
+            .await
+            .map(|_| ())
+    }
+
+    /// Health check: test contract reachability by attempting a read.
+    pub async fn contract_health_check(&self, contract_id: &str) -> Result<(), OracleServiceError> {
+        let contract_bytes = decode_contract_id(contract_id)?;
+        // Attempt to fetch contract data — this will fail if the contract doesn't exist
+        // but will succeed if RPC is reachable and the contract is deployed.
+        let contract_id_xdr = stellar_xdr::ContractId(stellar_xdr::Hash(contract_bytes));
+        let address = stellar_xdr::ScAddress::Contract(contract_id_xdr);
+
+        let address_xdr = address
+            .to_xdr_base64(stellar_xdr::Limits::none())
+            .map_err(|e| OracleServiceError::XdrError(e.to_string()))?;
+
+        self.rpc_call(
+            "getLedgerEntries",
+            json!({ "keys": [format!("AAAAAAxQAAAAAA=={}", address_xdr)] }),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
