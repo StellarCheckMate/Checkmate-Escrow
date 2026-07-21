@@ -31,8 +31,10 @@
 
 use crate::types::{Match, MatchState, Winner, Platform};
 
-#[cfg(test)]
 use std::collections::{HashMap, HashSet};
+use std::format;
+use std::string::String;
+use std::vec::Vec;
 
 /// Violation severity levels for formal verification reports
 #[derive(Debug, Clone, PartialEq, Eq)]

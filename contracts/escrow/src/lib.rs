@@ -5,6 +5,8 @@ extern crate std;
 
 pub mod errors;
 pub mod types;
+
+#[cfg(test)]
 pub mod formal_verification;
 
 #[cfg(test)]
