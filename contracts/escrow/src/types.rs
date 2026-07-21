@@ -119,6 +119,12 @@ pub enum DataKey {
     PlayerBalanceSnapshot(Address, u64),
     /// Total count of player balance snapshots (monotonic).
     PlayerBalanceSnapshotCount(Address),
+    /// Active match for a player: indexed O(1) removal. Replaces the single ActiveMatches vector.
+    ActiveMatch(Address, u64),
+    /// Count of currently-active matches for a player, used to enforce per-player cap.
+    PlayerActiveMatchCount(Address),
+    /// Cached count of completed matches for a player, incremented once per completion.
+    PlayerCompletedMatchCount(Address),
 }
 
 /// The lifecycle event that triggered a balance snapshot.

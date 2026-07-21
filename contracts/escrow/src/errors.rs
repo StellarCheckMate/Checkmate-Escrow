@@ -43,4 +43,5 @@ pub enum Error {
     InvalidConversionRate = 38,
     ConversionRateOutOfBounds = 39,
     ConversionRateStalePriceSource = 40,
+    TooManyActiveMatches = 41,
 }
