@@ -140,6 +140,21 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns true if the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Returns true if the contract has been initialized.
+    pub fn is_initialized(env: Env) -> bool {
+        extend_instance_ttl(&env);
+        env.storage().instance().has(&DataKey::Oracle)
+    }
+
     /// Update the protocol configuration.
     pub fn set_protocol_config(env: Env, config: ProtocolConfig) -> Result<(), Error> {
         let admin: Address = env
@@ -154,7 +169,11 @@ impl EscrowContract {
 
     /// Get the current protocol configuration.
     pub fn get_protocol_config(env: Env) -> Result<ProtocolConfig, Error> {
-        env.storage().instance().get(&DataKey::ProtocolConfig).ok_or(Error::NotInitialized)
+        Ok(env.storage().instance().get(&DataKey::ProtocolConfig).unwrap_or(ProtocolConfig {
+            vesting_duration_seconds: 259_200,
+            cancellation_fee_basis_points: 0,
+            treasury: env.current_contract_address(),
+        }))
     }
 
     /// Add a token to the allowlist — admin only.
@@ -796,8 +815,12 @@ impl EscrowContract {
         let dispute_period = Self::get_dispute_period(&env);
 
         if dispute_period == 0 {
-            // Immediate payout
-            Self::execute_payout(&env, &m, &winner)?;
+            // Immediate payout (no dispute period, but still subject to vesting)
+            Self::record_snapshot(&env, &m, SnapshotReason::Completed);
+            env.events().publish(
+                (Symbol::new(&env, "match"), Symbol::new(&env, "completed")),
+                (match_id, winner),
+            );
             Ok(())
         } else {
             // Delayed payout: store the pending result and set dispute deadline
@@ -924,7 +947,10 @@ impl EscrowContract {
 
         if m.player1_deposited {
             let client_a = token::Client::new(&env, &m.token);
-            client_a.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+            client_a.transfer(&env.current_contract_address(), &m.player1, &refund_amount);
+            if fee_amount > 0 {
+                client_a.transfer(&env.current_contract_address(), &config.treasury, &fee_amount);
+            }
         }
         if m.player2_deposited {
             let token_b = m.token_b.clone().unwrap_or_else(|| m.token.clone());
@@ -937,8 +963,17 @@ impl EscrowContract {
             } else {
                 m.stake_amount
             };
+            let fee_amount_b = if config.cancellation_fee_basis_points > 0 {
+                amount_b.checked_mul(config.cancellation_fee_basis_points as i128).ok_or(Error::Overflow)? / 10_000
+            } else {
+                0
+            };
+            let refund_amount_b = amount_b.checked_sub(fee_amount_b).ok_or(Error::Overflow)?;
             let client_b = token::Client::new(&env, &token_b);
-            client_b.transfer(&env.current_contract_address(), &m.player2, &amount_b);
+            client_b.transfer(&env.current_contract_address(), &m.player2, &refund_amount_b);
+            if fee_amount_b > 0 {
+                client_b.transfer(&env.current_contract_address(), &config.treasury, &fee_amount_b);
+            }
         }
 
         m.state = MatchState::Cancelled;

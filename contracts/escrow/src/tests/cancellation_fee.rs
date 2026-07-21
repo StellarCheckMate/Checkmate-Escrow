@@ -10,6 +10,14 @@ fn test_cancellation_fee_deduction() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = token_client(&env, &token);
 
+    // Set up 1% cancellation fee
+    env.mock_all_auths();
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 100, // 1%
+        treasury: admin.clone(),
+    });
+
     // Initial balances
     assert_eq!(token_client.balance(&player1), 1000);
 
@@ -20,7 +28,7 @@ fn test_cancellation_fee_deduction() {
     assert_eq!(token_client.balance(&player1), 900);
     assert_eq!(token_client.balance(&contract_id), 100);
 
-    // Default fee is 1%. Stake is 100. Fee should be 1.
+    // 1% fee is 1. Stake is 100. Refund should be 99.
     // Player 1 cancels
     client.cancel_match(&match_id, &player1);
 
@@ -58,6 +66,7 @@ fn test_cancellation_fee_with_custom_config() {
     
     // Admin sets new config: 5% fee
     let config = types::ProtocolConfig {
+        vesting_duration_seconds: 0,
         cancellation_fee_basis_points: 500, // 5%
         treasury: new_treasury.clone(),
     };
