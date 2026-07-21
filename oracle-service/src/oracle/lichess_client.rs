@@ -165,6 +165,40 @@ impl LichessClient {
 
         Ok(LichessGameResult { winner })
     }
+
+    /// Health check: test connectivity to the Lichess API.
+    pub async fn health_check(&self) -> Result<(), LichessError> {
+        let _permit: OwnedSemaphorePermit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("semaphore closed");
+
+        let url = format!("{}/api/account", self.api_base.trim_end_matches('/'));
+
+        let resp = self
+            .http
+            .get(&url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LichessError::Timeout
+                } else {
+                    LichessError::Http(e)
+                }
+            })?;
+
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(LichessError::HttpStatus {
+                status: resp.status(),
+            })
+        }
+    }
 }
 
 // ── GameProvider impl ─────────────────────────────────────────────────────────
