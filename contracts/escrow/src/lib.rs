@@ -1,5 +1,8 @@
 #![no_std]
 
+#[cfg(test)]
+extern crate std;
+
 pub mod errors;
 pub mod types;
 pub mod formal_verification;
