@@ -437,3 +437,102 @@ fn test_multi_token_payout_fund_conservation() {
     assert_eq!(escrow_final_a, 0);
     assert_eq!(escrow_final_b, 0);
 }
+
+#[test]
+#[should_panic]
+fn test_multi_token_payout_rejects_stale_rate() {
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    // Set initial ledger sequence to 100
+    env.ledger().set_sequence_number(100);
+
+    let oracle_rate = 50_000_000;
+    oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
+
+    let stake_amount = 100_0000000;
+    let rate = 50_000_000;
+
+    let match_id = escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token_a,
+        &token_b,
+        &rate,
+        &String::from_str(&env, "stale_rate_game"),
+        &Platform::Lichess,
+    );
+
+    escrow_client.deposit(&match_id, &player1);
+    escrow_client.deposit(&match_id, &player2);
+
+    // Advance ledger beyond staleness threshold (1000 ledgers)
+    // Rate was set at ledger 100, so at ledger 1101+ it's stale
+    env.ledger().set_sequence_number(1101);
+
+    // Submit result with stale rate — should panic due to ConversionRateStalePriceSource error
+    escrow_client.submit_result(&match_id, &Winner::Player1);
+}
+
+#[test]
+#[should_panic]
+fn test_create_match_with_conversion_missing_oracle_rate() {
+    let (env, _admin, _oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    // Do NOT set rate in oracle — this should cause create_match_with_conversion to fail
+    // when it tries to fetch the oracle rate
+    let rate = 50_000_000;
+    escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &100_0000000,
+        &token_a,
+        &token_b,
+        &rate,
+        &String::from_str(&env, "missing_rate_game"),
+        &Platform::Lichess,
+    );
+}
+
+#[test]
+fn test_multi_token_with_valid_rate_at_boundary() {
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    let oracle_rate = 1_000_000;
+    oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
+
+    let stake_amount = 100_0000000;
+
+    // Test rate exactly at lower boundary: 1_000_000 * 0.95 = 950_000
+    let rate_lower = 950_000;
+    let match_id_lower = escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token_a,
+        &token_b,
+        &rate_lower,
+        &String::from_str(&env, "boundary_lower_game"),
+        &Platform::Lichess,
+    );
+    let m_lower = escrow_client.get_match(&match_id_lower);
+    assert_eq!(m_lower.conversion_rate, rate_lower);
+
+    // Test rate exactly at upper boundary: 1_000_000 * 1.05 = 1_050_000
+    let rate_upper = 1_050_000;
+    let match_id_upper = escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token_a,
+        &token_b,
+        &rate_upper,
+        &String::from_str(&env, "boundary_upper_game"),
+        &Platform::Lichess,
+    );
+    let m_upper = escrow_client.get_match(&match_id_upper);
+    assert_eq!(m_upper.conversion_rate, rate_upper);
+}
