@@ -19,8 +19,13 @@ mod kani_harness;
 mod tests;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
-use types::{BalanceSnapshot, DataKey, Match, MatchState, Platform, ProtocolConfig, SnapshotReason, Winner, PlayerTier, Dispute, DisputeState, PlayerBalanceSnapshot};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, token, Address, Bytes, BytesN, Env, String, Symbol, Vec,
+};
+use types::{
+    BalanceAtTimestamp, BalanceSnapshot, DataKey, Match, MatchState, Platform, ProtocolConfig,
+    SnapshotReason, Winner, PlayerTier, Dispute, DisputeState, PlayerBalanceSnapshot,
+};
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -83,6 +88,15 @@ const SILVER_MAX_STAKE: i128 = 500;
 const GOLD_MIN_STAKE: i128 = 501;
 const GOLD_MAX_STAKE: i128 = 1_000;
 const PLATINUM_MIN_STAKE: i128 = 1_001;
+
+/// Maximum number of simultaneously-active matches per player. This prevents
+/// attacker-inflated cost growth in ActiveMatch index operations.
+const MAX_ACTIVE_MATCHES_PER_PLAYER: u32 = 1_000;
+
+/// Hard cap on unbounded match scans. The deprecated get_*_matches() functions
+/// scan the full match history and are limited to this many results to cap
+/// per-call cost. Callers requiring more results should use the _paginated variants.
+const MAX_UNBOUNDED_MATCH_RESULTS: u32 = 10_000;
 
 /// Extend instance storage TTL on every invocation so Admin, Oracle, Paused, and other
 /// instance keys never expire.
@@ -758,7 +772,8 @@ impl EscrowContract {
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
             );
-            Self::append_active_match(&env, match_id);
+            Self::add_active_match(&env, &m.player1, match_id)?;
+            Self::add_active_match(&env, &m.player2, match_id)?;
         } else {
             env.events().publish(
                 (Symbol::new(&env, "match"), symbol_short!("deposit")),
@@ -817,12 +832,16 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
-        Self::remove_active_match(&env, match_id);
+        Self::remove_active_match_indexed(&env, &m.player1, match_id);
+        Self::remove_active_match_indexed(&env, &m.player2, match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
         m.winner = winner.clone();
         m.vested_at = Some(env.ledger().timestamp());
+
+        Self::record_completed_match(&env, &m.player1);
+        Self::record_completed_match(&env, &m.player2);
 
         env.storage()
             .persistent()
@@ -1217,13 +1236,12 @@ impl EscrowContract {
             .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS)
     }
 
+    /// Get the cached count of completed matches for a player (O(1) lookup).
+    /// This counter is incremented once when each match completes, avoiding
+    /// the previous O(n) history walk for every tier check.
     fn completed_match_count(env: &Env, player: &Address) -> u32 {
-        let key = DataKey::PlayerMatches(player.clone());
-        let player_matches: soroban_sdk::Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| soroban_sdk::vec![env]);
+        let key = DataKey::PlayerCompletedMatchCount(player.clone());
+        let count = env.storage().persistent().get(&key).unwrap_or(0u32);
 
         if env.storage().persistent().has(&key) {
             env.storage()
@@ -1231,19 +1249,21 @@ impl EscrowContract {
                 .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
         }
 
-        let mut completed_matches = 0u32;
-        for match_id in player_matches.iter() {
-            if let Some(m) = env
-                .storage()
-                .persistent()
-                .get::<DataKey, Match>(&DataKey::Match(match_id))
-            {
-                if m.state == MatchState::Completed {
-                    completed_matches = completed_matches.saturating_add(1);
-                }
-            }
-        }
-        completed_matches
+        count
+    }
+
+    /// Increment the completed-match counter for a player. Called once when
+    /// a match transitions to Completed state.
+    fn record_completed_match(env: &Env, player: &Address) {
+        let key = DataKey::PlayerCompletedMatchCount(player.clone());
+        let count: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+
+        env.storage()
+            .persistent()
+            .set(&key, &(count.saturating_add(1)));
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
 
     fn tier_for_completed_matches(completed_matches: u32) -> PlayerTier {
@@ -1274,50 +1294,55 @@ impl EscrowContract {
         Ok(())
     }
 
-    fn get_active_match_ids(env: &Env) -> soroban_sdk::Vec<u64> {
-        if let Some(active_matches) = env.storage().persistent().get(&DataKey::ActiveMatches) {
-            env.storage().persistent().extend_ttl(
-                &DataKey::ActiveMatches,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-            active_matches
-        } else {
-            soroban_sdk::vec![env]
-        }
+    /// Check if a match is currently active for a player (O(1) lookup).
+    fn is_match_active(env: &Env, player: &Address, match_id: u64) -> bool {
+        let key = DataKey::ActiveMatch(player.clone(), match_id);
+        env.storage().persistent().has(&key)
     }
 
-    fn set_active_match_ids(env: &Env, active_matches: &soroban_sdk::Vec<u64>) {
+    /// Add a match to a player's active set with per-player cap enforcement (O(1)).
+    /// Returns an error if the player has already reached MAX_ACTIVE_MATCHES_PER_PLAYER.
+    fn add_active_match(env: &Env, player: &Address, match_id: u64) -> Result<(), Error> {
+        let count_key = DataKey::PlayerActiveMatchCount(player.clone());
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+
+        if count >= MAX_ACTIVE_MATCHES_PER_PLAYER {
+            return Err(Error::TooManyActiveMatches);
+        }
+
+        let key = DataKey::ActiveMatch(player.clone(), match_id);
+        env.storage().persistent().set(&key, &true);
         env.storage()
             .persistent()
-            .set(&DataKey::ActiveMatches, active_matches);
-        env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
+            .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        env.storage()
+            .persistent()
+            .set(&count_key, &(count + 1));
+        env.storage()
+            .persistent()
+            .extend_ttl(&count_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        Ok(())
     }
 
-    fn append_active_match(env: &Env, match_id: u64) {
-        let mut active_matches = Self::get_active_match_ids(env);
-        active_matches.push_back(match_id);
-        Self::set_active_match_ids(env, &active_matches);
-    }
+    /// Remove a match from a player's active set (O(1)).
+    fn remove_active_match_indexed(env: &Env, player: &Address, match_id: u64) {
+        let key = DataKey::ActiveMatch(player.clone(), match_id);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
 
-    fn remove_active_match(env: &Env, match_id: u64) {
-        let active_matches = Self::get_active_match_ids(env);
-        if active_matches.is_empty() {
-            return;
-        }
-
-        let mut updated = soroban_sdk::vec![env];
-        for id in active_matches.iter() {
-            if id != match_id {
-                updated.push_back(id);
+            let count_key = DataKey::PlayerActiveMatchCount(player.clone());
+            let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+            if count > 0 {
+                env.storage()
+                    .persistent()
+                    .set(&count_key, &(count - 1));
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&count_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
             }
         }
-
-        Self::set_active_match_ids(env, &updated);
     }
 
     pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
@@ -1591,10 +1616,14 @@ impl EscrowContract {
             .get(&DataKey::PendingWinner(match_id))
             .ok_or(Error::PendingResultNotFound)?;
         Self::execute_payout(&env, &m, &winner)?;
-        Self::remove_active_match(&env, match_id);
+        Self::remove_active_match_indexed(&env, &m.player1, match_id);
+        Self::remove_active_match_indexed(&env, &m.player2, match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
+
+        Self::record_completed_match(&env, &m.player1);
+        Self::record_completed_match(&env, &m.player2);
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -1973,7 +2002,8 @@ impl EscrowContract {
         };
 
         Self::execute_payout(&env, &m, &winner)?;
-        Self::remove_active_match(&env, match_id);
+        Self::remove_active_match_indexed(&env, &m.player1, match_id);
+        Self::remove_active_match_indexed(&env, &m.player2, match_id);
 
         // Handle dispute bond
         if dispute.state == DisputeState::ResolvedOverturned {
@@ -2005,6 +2035,10 @@ impl EscrowContract {
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
+
+        Self::record_completed_match(&env, &m.player1);
+        Self::record_completed_match(&env, &m.player2);
+
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -2259,6 +2293,9 @@ impl EscrowContract {
             .unwrap_or(0);
         let slot = index % MAX_SNAPSHOTS_PER_MATCH;
 
+        let nonce: BytesN<32> = env.prng().gen();
+        let commitment = Self::compute_commitment(env, m.stake_amount, escrow_balance, &nonce);
+
         let snapshot = BalanceSnapshot {
             match_id: m.id,
             index,
@@ -2270,6 +2307,8 @@ impl EscrowContract {
             escrow_balance,
             player1_deposited: m.player1_deposited,
             player2_deposited: m.player2_deposited,
+            nonce,
+            commitment: commitment.clone(),
         };
 
         env.storage()
@@ -2291,10 +2330,30 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Soroban events are public regardless of who calls a read-only
+        // getter, so publishing `escrow_balance` here would leak the exact
+        // amount to any observer and defeat `redact_snapshot` entirely.
+        // Publish the commitment instead — see `docs/privacy-model.md`.
         env.events().publish(
             (Symbol::new(env, "match"), symbol_short!("snapshot")),
-            (m.id, index, escrow_balance),
+            (m.id, index, commitment),
         );
+    }
+
+    /// `sha256(stake_amount || escrow_balance || nonce)` — see
+    /// `docs/privacy-model.md` for the guarantees this does and doesn't
+    /// provide.
+    fn compute_commitment(
+        env: &Env,
+        stake_amount: i128,
+        escrow_balance: i128,
+        nonce: &BytesN<32>,
+    ) -> BytesN<32> {
+        let mut data = Bytes::new(env);
+        data.extend_from_array(&stake_amount.to_be_bytes());
+        data.extend_from_array(&escrow_balance.to_be_bytes());
+        data.extend_from_array(&nonce.to_array());
+        env.crypto().sha256(&data).to_bytes()
     }
 
     /// Authorize a snapshot query. Returns `Ok(true)` for the admin (full
@@ -2316,18 +2375,34 @@ impl EscrowContract {
         }
     }
 
-    /// Zero out sensitive amount fields for non-admin callers.
-    fn redact_snapshot(mut snapshot: BalanceSnapshot) -> BalanceSnapshot {
+    /// Zero out fields for non-admin callers that, together, would let an
+    /// observer correlate this snapshot against the token contract's own
+    /// public balance history and reconstruct the redacted amounts.
+    ///
+    /// `stake_amount`/`escrow_balance` are zeroed as before, but now
+    /// `player1_deposited`/`player2_deposited` are too — their exact-deposit
+    /// timing combined with `ledger` and the (still-visible) `token` was
+    /// itself a side channel. `commitment` is left untouched -- it is
+    /// the whole point of the redacted view (see `docs/privacy-model.md`)
+    /// -- but `nonce` is zeroed too, since revealing it ahead of an
+    /// intentional admin disclosure would let a non-admin brute-force
+    /// `commitment` against a guessed amount.
+    fn redact_snapshot(env: &Env, mut snapshot: BalanceSnapshot) -> BalanceSnapshot {
         snapshot.stake_amount = 0;
         snapshot.escrow_balance = 0;
+        snapshot.player1_deposited = false;
+        snapshot.player2_deposited = false;
+        snapshot.nonce = BytesN::from_array(env, &[0u8; 32]);
         snapshot
     }
 
     /// Return the full snapshot history for a match, oldest first.
     ///
     /// Only the admin sees exact `stake_amount`/`escrow_balance` values; the
-    /// match's players may also call this but receive amounts redacted to 0.
-    /// Any other caller is rejected with `Error::Unauthorized`.
+    /// match's players may also call this but receive amounts redacted to 0
+    /// (see [`Self::redact_snapshot`]) plus a `commitment` they can later
+    /// verify against an admin-disclosed value. Any other caller is
+    /// rejected with `Error::Unauthorized`. See `docs/privacy-model.md`.
     pub fn get_balance_snapshots(
         env: Env,
         caller: Address,
@@ -2359,7 +2434,7 @@ impl EscrowContract {
                 result.push_back(if full_access {
                     snapshot
                 } else {
-                    Self::redact_snapshot(snapshot)
+                    Self::redact_snapshot(&env, snapshot)
                 });
             }
         }
@@ -2369,7 +2444,8 @@ impl EscrowContract {
     /// Return the most recently recorded snapshot for a match.
     ///
     /// Same access rules as [`Self::get_balance_snapshots`]: admin sees exact
-    /// amounts, players see redacted amounts, anyone else is unauthorized.
+    /// amounts, players see redacted amounts plus a verifiable `commitment`,
+    /// anyone else is unauthorized. See `docs/privacy-model.md`.
     pub fn get_latest_snapshot(
         env: Env,
         caller: Address,
@@ -2399,7 +2475,7 @@ impl EscrowContract {
         Ok(if full_access {
             snapshot
         } else {
-            Self::redact_snapshot(snapshot)
+            Self::redact_snapshot(&env, snapshot)
         })
     }
 
@@ -2488,14 +2564,21 @@ impl EscrowContract {
     }
 
     /// Return `player`'s aggregate escrow balance at or before `timestamp`
-    /// (a ledger sequence number passed as `u64`). Returns `0` when no
-    /// recorded snapshot exists at or before the timestamp — including the
-    /// cases where the player has never recorded a snapshot and where the
-    /// ring buffer has pruned away everything older than `timestamp`.
+    /// (a ledger sequence number passed as `u64`).
     ///
     /// Walks the player's snapshot ring buffer newest-first to find the
-    /// first entry whose `ledger` is `<= timestamp` and returns that
-    /// snapshot's `balance`. If none qualify, returns `0`.
+    /// first entry whose `ledger` is `<= timestamp` and returns
+    /// `BalanceAtTimestamp::Known` with that snapshot's `balance`. When
+    /// none qualify, the two previously-indistinguishable "empty" outcomes
+    /// are now reported separately:
+    /// - `NoHistory` — no pruning has occurred; the player genuinely has no
+    ///   snapshot at or before `timestamp` (e.g. they never recorded one, or
+    ///   `timestamp` predates their earliest snapshot).
+    /// - `Pruned` — the ring buffer has overwritten every snapshot old
+    ///   enough to answer this query, so the true balance at that point is
+    ///   unknown, not zero.
+    ///
+    /// See `docs/privacy-model.md`.
     ///
     /// Read-only and unauthenticated: the player's aggregate escrow
     /// balance is public information (no per-match stake amounts exposed).
@@ -2503,7 +2586,7 @@ impl EscrowContract {
         env: Env,
         player: Address,
         timestamp: u64,
-    ) -> i128 {
+    ) -> BalanceAtTimestamp {
         let count: u64 = env
             .storage()
             .persistent()
@@ -2511,7 +2594,7 @@ impl EscrowContract {
             .unwrap_or(0u64);
 
         if count == 0 {
-            return 0;
+            return BalanceAtTimestamp::NoHistory;
         }
 
         let cap = MAX_PLAYER_SNAPSHOTS as u64;
@@ -2542,14 +2625,27 @@ impl EscrowContract {
                     continue;
                 }
                 if snap.ledger <= timestamp {
-                    return snap.balance;
+                    return BalanceAtTimestamp::Known(snap.balance);
                 }
             }
         }
 
-        0
+        // Nothing in the retained window qualified. If the buffer has
+        // wrapped (`start > 0`), an older snapshot that might have answered
+        // this query was pruned away — that's unknown, not zero. If it
+        // hasn't wrapped, every snapshot the player ever recorded was
+        // checked and none qualified, so this is a genuine absence.
+        if start > 0 {
+            BalanceAtTimestamp::Pruned
+        } else {
+            BalanceAtTimestamp::NoHistory
+        }
     }
 
+    /// Collect all matches in a given state (DEPRECATED: use paginated variants).
+    /// Returns at most MAX_UNBOUNDED_MATCH_RESULTS to cap per-call cost.
+    /// This function scans the full match history and is included for backwards
+    /// compatibility only; new code should use collect_matches_by_state_paginated.
     fn collect_matches_by_state(
         env: &Env,
         state: MatchState,
@@ -2561,7 +2657,11 @@ impl EscrowContract {
             .get(&DataKey::MatchCount)
             .unwrap_or(0);
 
+        let mut collected = 0u32;
         for match_id in 0..count {
+            if collected >= MAX_UNBOUNDED_MATCH_RESULTS {
+                break;
+            }
             if let Some(m) = env
                 .storage()
                 .persistent()
@@ -2569,6 +2669,7 @@ impl EscrowContract {
             {
                 if m.state == state {
                     matches.push_back(m);
+                    collected = collected.saturating_add(1);
                 }
             }
         }
@@ -2635,14 +2736,6 @@ impl EscrowContract {
 
     /// Return all matches that are in Active state (fully funded).
     pub fn get_active_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
-        // Extend ActiveMatches TTL if the key exists (keeps the index alive on reads)
-        if env.storage().persistent().has(&DataKey::ActiveMatches) {
-            env.storage().persistent().extend_ttl(
-                &DataKey::ActiveMatches,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-        }
         Self::collect_matches_by_state(&env, MatchState::Active)
     }
 
@@ -2680,7 +2773,8 @@ impl EscrowContract {
 
     /// Return all match IDs for a given player (past and present).
     ///
-    /// Deprecated: use `get_player_matches_paginated` to avoid unbounded return sizes.
+    /// DEPRECATED: use `get_player_matches_paginated` instead.
+    /// Returns at most MAX_UNBOUNDED_MATCH_RESULTS to cap per-call cost.
     pub fn get_player_matches(env: Env, player: Address) -> Result<soroban_sdk::Vec<u64>, Error> {
         let key = DataKey::PlayerMatches(player.clone());
         let matches: soroban_sdk::Vec<u64> = env
@@ -2693,7 +2787,15 @@ impl EscrowContract {
                 .persistent()
                 .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
         }
-        Ok(matches)
+
+        let mut result = soroban_sdk::vec![&env];
+        for (i, id) in matches.iter().enumerate() {
+            if i >= MAX_UNBOUNDED_MATCH_RESULTS as usize {
+                break;
+            }
+            result.push_back(id);
+        }
+        Ok(result)
     }
 
     /// Return a page of match IDs for a given player.

@@ -239,7 +239,19 @@ fn test_player_sees_redacted_amounts_in_snapshots() {
     );
     // Non-sensitive fields remain visible.
     assert_eq!(latest.reason, SnapshotReason::Deposit);
-    assert!(latest.player1_deposited);
+    // Deposit-timing fields are also redacted now: combined with `ledger`
+    // and `token`, they were themselves a side channel for reconstructing
+    // amounts against the token contract's public balance history.
+    assert!(
+        !latest.player1_deposited,
+        "player1_deposited must be redacted for non-admin callers"
+    );
+    assert!(
+        !latest.player2_deposited,
+        "player2_deposited must be redacted for non-admin callers"
+    );
+    // A verifiable commitment replaces the zeroed-out amounts.
+    assert_ne!(latest.commitment, BytesN::from_array(&env, &[0u8; 32]));
 
     // player2 (the other participant) also gets partial data.
     let latest_p2 = client.get_latest_snapshot(&player2, &id);

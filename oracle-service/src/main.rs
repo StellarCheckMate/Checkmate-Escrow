@@ -1,42 +1,38 @@
 //! Oracle service entry point.
 //!
-//! Starts two concurrent tasks:
+//! Starts three concurrent tasks:
 //!
-//! 1. **Health HTTP endpoint** on `0.0.0.0:8000` — exposes `/health` and
-//!    `/metrics` for liveness probes and Prometheus scraping.
+//! 1. **Health HTTP endpoint** on `0.0.0.0:8000` — exposes `/health` with
+//!    real-time dependency checks and `/metrics` for Prometheus scraping.
 //!
-//! 2. **Pipeline poller** — wakes every `ORACLE_POLL_INTERVAL_SECS` seconds,
+//! 2. **Health check poller** — runs comprehensive liveness checks every 30
+//!    seconds, updating the health status with real RPC, contract, and API
+//!    connectivity information.
+//!
+//! 3. **Pipeline poller** — wakes every `ORACLE_POLL_INTERVAL_SECS` seconds,
 //!    processes all due pending-verification entries, and submits results
 //!    on-chain via Soroban RPC.
 
 use axum::{extract::State, routing::get, Json, Router};
-use chrono::Utc;
-use serde::Serialize;
+use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use oracle_service::{config, poller::Poller};
+use oracle_service::{
+    config, health::HealthChecker, oracle::{ChessComClient, LichessClient}, poller::Poller,
+    soroban_client::SorobanClient,
+};
 
-// ── Health endpoint types ─────────────────────────────────────────────────────
-
-#[derive(Serialize, Clone)]
-struct HealthStatus {
-    status: String,
-    network: String,
-    contract_address: String,
-    oracle_address: String,
-    last_checked_at: String,
-}
+// ── Application state ─────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct AppState {
-    health: HealthStatus,
+    health_checker: Arc<HealthChecker>,
 }
 
-async fn health_check(State(state): State<AppState>) -> Json<HealthStatus> {
-    let mut h = state.health.clone();
-    h.last_checked_at = Utc::now().to_rfc3339();
-    Json(h)
+async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let status = state.health_checker.status().await;
+    Json(serde_json::to_value(&status).unwrap_or(serde_json::json!(null)))
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -68,9 +64,42 @@ async fn main() {
     };
 
     let poll_interval = cfg.poll_interval_secs;
-    let network = std::env::var("STELLAR_NETWORK").unwrap_or_else(|_| "testnet".to_string());
-    let contract_escrow = cfg.contract_escrow.clone();
-    let oracle_address = cfg.oracle_address.clone();
+
+    // ── Initialize dependencies ───────────────────────────────────────────
+    let soroban = match SorobanClient::new(
+        cfg.rpc_url.clone(),
+        cfg.network_passphrase.clone(),
+        &cfg.contract_escrow,
+    ) {
+        Ok(s) => Arc::new(s),
+        Err(e) => {
+            error!("failed to initialize Soroban client: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let chess_com = match ChessComClient::new() {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            error!("failed to initialize Chess.com client: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let lichess = match LichessClient::new() {
+        Ok(l) => Arc::new(l),
+        Err(e) => {
+            error!("failed to initialize Lichess client: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // ── Health checker ────────────────────────────────────────────────────
+    let health_checker = Arc::new(HealthChecker::new(cfg.clone(), soroban, chess_com, lichess));
+
+    // Perform initial health check
+    info!("performing initial health check");
+    health_checker.check_all().await;
 
     // ── Pipeline poller ───────────────────────────────────────────────────
     let poller = match Poller::new(&cfg) {
@@ -81,20 +110,14 @@ async fn main() {
         }
     };
 
-    // ── Health server ─────────────────────────────────────────────────────
-    let state = AppState {
-        health: HealthStatus {
-            status: "healthy".to_string(),
-            network,
-            contract_address: contract_escrow,
-            oracle_address,
-            last_checked_at: Utc::now().to_rfc3339(),
-        },
+    // ── HTTP server state ─────────────────────────────────────────────────
+    let app_state = AppState {
+        health_checker: health_checker.clone(),
     };
 
     let app = Router::new()
         .route("/health", get(health_check))
-        .with_state(state);
+        .with_state(app_state);
 
     let listener = match tokio::net::TcpListener::bind("0.0.0.0:8000").await {
         Ok(l) => l,
@@ -106,16 +129,30 @@ async fn main() {
 
     info!("oracle service listening on http://0.0.0.0:8000");
 
-    // ── Run both tasks concurrently ───────────────────────────────────────
+    // ── Run all three tasks concurrently ───────────────────────────────────
     tokio::select! {
         res = axum::serve(listener, app) => {
             if let Err(e) = res {
                 error!("HTTP server error: {}", e);
             }
         }
+        _ = run_health_check_loop(health_checker) => {
+            // health loop never returns normally
+        }
         _ = poller.run_loop(poll_interval) => {
             // run_loop never returns normally
         }
+    }
+}
+
+/// Periodically run comprehensive health checks.
+async fn run_health_check_loop(health_checker: Arc<HealthChecker>) {
+    let check_interval = std::time::Duration::from_secs(30);
+    let mut ticker = tokio::time::interval(check_interval);
+
+    loop {
+        ticker.tick().await;
+        health_checker.check_all().await;
     }
 }
 
