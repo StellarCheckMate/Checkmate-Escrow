@@ -172,6 +172,34 @@ impl ChessComClient {
 
         Ok(ChessComGameResult { winner })
     }
+
+    /// Health check: test connectivity to the Chess.com API.
+    pub async fn health_check(&self) -> Result<(), ChessComError> {
+        let _permit: OwnedSemaphorePermit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("semaphore closed");
+
+        let url = format!("{}/pub/player/profiles", self.api_base.trim_end_matches('/'));
+
+        let resp = self.http.get(&url).send().await.map_err(|e| {
+            if e.is_timeout() {
+                ChessComError::Timeout
+            } else {
+                ChessComError::Http(e)
+            }
+        })?;
+
+        if resp.status().is_success() {
+            Ok(())
+        } else {
+            Err(ChessComError::HttpStatus {
+                status: resp.status(),
+            })
+        }
+    }
 }
 
 // ── GameProvider impl ─────────────────────────────────────────────────────────
