@@ -19,8 +19,13 @@ mod kani_harness;
 mod tests;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
-use types::{BalanceSnapshot, DataKey, Match, MatchState, Platform, ProtocolConfig, SnapshotReason, Winner, PlayerTier, Dispute, DisputeState, PlayerBalanceSnapshot};
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, token, Address, Bytes, BytesN, Env, String, Symbol, Vec,
+};
+use types::{
+    BalanceAtTimestamp, BalanceSnapshot, DataKey, Match, MatchState, Platform, ProtocolConfig,
+    SnapshotReason, Winner, PlayerTier, Dispute, DisputeState, PlayerBalanceSnapshot,
+};
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
@@ -1954,6 +1959,9 @@ impl EscrowContract {
             .unwrap_or(0);
         let slot = index % MAX_SNAPSHOTS_PER_MATCH;
 
+        let nonce: BytesN<32> = env.prng().gen();
+        let commitment = Self::compute_commitment(env, m.stake_amount, escrow_balance, &nonce);
+
         let snapshot = BalanceSnapshot {
             match_id: m.id,
             index,
@@ -1965,6 +1973,8 @@ impl EscrowContract {
             escrow_balance,
             player1_deposited: m.player1_deposited,
             player2_deposited: m.player2_deposited,
+            nonce,
+            commitment: commitment.clone(),
         };
 
         env.storage()
@@ -1986,10 +1996,30 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Soroban events are public regardless of who calls a read-only
+        // getter, so publishing `escrow_balance` here would leak the exact
+        // amount to any observer and defeat `redact_snapshot` entirely.
+        // Publish the commitment instead — see `docs/privacy-model.md`.
         env.events().publish(
             (Symbol::new(env, "match"), symbol_short!("snapshot")),
-            (m.id, index, escrow_balance),
+            (m.id, index, commitment),
         );
+    }
+
+    /// `sha256(stake_amount || escrow_balance || nonce)` — see
+    /// `docs/privacy-model.md` for the guarantees this does and doesn't
+    /// provide.
+    fn compute_commitment(
+        env: &Env,
+        stake_amount: i128,
+        escrow_balance: i128,
+        nonce: &BytesN<32>,
+    ) -> BytesN<32> {
+        let mut data = Bytes::new(env);
+        data.extend_from_array(&stake_amount.to_be_bytes());
+        data.extend_from_array(&escrow_balance.to_be_bytes());
+        data.extend_from_array(&nonce.to_array());
+        env.crypto().sha256(&data).to_bytes()
     }
 
     /// Authorize a snapshot query. Returns `Ok(true)` for the admin (full
@@ -2011,18 +2041,34 @@ impl EscrowContract {
         }
     }
 
-    /// Zero out sensitive amount fields for non-admin callers.
-    fn redact_snapshot(mut snapshot: BalanceSnapshot) -> BalanceSnapshot {
+    /// Zero out fields for non-admin callers that, together, would let an
+    /// observer correlate this snapshot against the token contract's own
+    /// public balance history and reconstruct the redacted amounts.
+    ///
+    /// `stake_amount`/`escrow_balance` are zeroed as before, but now
+    /// `player1_deposited`/`player2_deposited` are too — their exact-deposit
+    /// timing combined with `ledger` and the (still-visible) `token` was
+    /// itself a side channel. `commitment` is left untouched -- it is
+    /// the whole point of the redacted view (see `docs/privacy-model.md`)
+    /// -- but `nonce` is zeroed too, since revealing it ahead of an
+    /// intentional admin disclosure would let a non-admin brute-force
+    /// `commitment` against a guessed amount.
+    fn redact_snapshot(env: &Env, mut snapshot: BalanceSnapshot) -> BalanceSnapshot {
         snapshot.stake_amount = 0;
         snapshot.escrow_balance = 0;
+        snapshot.player1_deposited = false;
+        snapshot.player2_deposited = false;
+        snapshot.nonce = BytesN::from_array(env, &[0u8; 32]);
         snapshot
     }
 
     /// Return the full snapshot history for a match, oldest first.
     ///
     /// Only the admin sees exact `stake_amount`/`escrow_balance` values; the
-    /// match's players may also call this but receive amounts redacted to 0.
-    /// Any other caller is rejected with `Error::Unauthorized`.
+    /// match's players may also call this but receive amounts redacted to 0
+    /// (see [`Self::redact_snapshot`]) plus a `commitment` they can later
+    /// verify against an admin-disclosed value. Any other caller is
+    /// rejected with `Error::Unauthorized`. See `docs/privacy-model.md`.
     pub fn get_balance_snapshots(
         env: Env,
         caller: Address,
@@ -2054,7 +2100,7 @@ impl EscrowContract {
                 result.push_back(if full_access {
                     snapshot
                 } else {
-                    Self::redact_snapshot(snapshot)
+                    Self::redact_snapshot(&env, snapshot)
                 });
             }
         }
@@ -2064,7 +2110,8 @@ impl EscrowContract {
     /// Return the most recently recorded snapshot for a match.
     ///
     /// Same access rules as [`Self::get_balance_snapshots`]: admin sees exact
-    /// amounts, players see redacted amounts, anyone else is unauthorized.
+    /// amounts, players see redacted amounts plus a verifiable `commitment`,
+    /// anyone else is unauthorized. See `docs/privacy-model.md`.
     pub fn get_latest_snapshot(
         env: Env,
         caller: Address,
@@ -2094,7 +2141,7 @@ impl EscrowContract {
         Ok(if full_access {
             snapshot
         } else {
-            Self::redact_snapshot(snapshot)
+            Self::redact_snapshot(&env, snapshot)
         })
     }
 
@@ -2183,14 +2230,21 @@ impl EscrowContract {
     }
 
     /// Return `player`'s aggregate escrow balance at or before `timestamp`
-    /// (a ledger sequence number passed as `u64`). Returns `0` when no
-    /// recorded snapshot exists at or before the timestamp — including the
-    /// cases where the player has never recorded a snapshot and where the
-    /// ring buffer has pruned away everything older than `timestamp`.
+    /// (a ledger sequence number passed as `u64`).
     ///
     /// Walks the player's snapshot ring buffer newest-first to find the
-    /// first entry whose `ledger` is `<= timestamp` and returns that
-    /// snapshot's `balance`. If none qualify, returns `0`.
+    /// first entry whose `ledger` is `<= timestamp` and returns
+    /// `BalanceAtTimestamp::Known` with that snapshot's `balance`. When
+    /// none qualify, the two previously-indistinguishable "empty" outcomes
+    /// are now reported separately:
+    /// - `NoHistory` — no pruning has occurred; the player genuinely has no
+    ///   snapshot at or before `timestamp` (e.g. they never recorded one, or
+    ///   `timestamp` predates their earliest snapshot).
+    /// - `Pruned` — the ring buffer has overwritten every snapshot old
+    ///   enough to answer this query, so the true balance at that point is
+    ///   unknown, not zero.
+    ///
+    /// See `docs/privacy-model.md`.
     ///
     /// Read-only and unauthenticated: the player's aggregate escrow
     /// balance is public information (no per-match stake amounts exposed).
@@ -2198,7 +2252,7 @@ impl EscrowContract {
         env: Env,
         player: Address,
         timestamp: u64,
-    ) -> i128 {
+    ) -> BalanceAtTimestamp {
         let count: u64 = env
             .storage()
             .persistent()
@@ -2206,7 +2260,7 @@ impl EscrowContract {
             .unwrap_or(0u64);
 
         if count == 0 {
-            return 0;
+            return BalanceAtTimestamp::NoHistory;
         }
 
         let cap = MAX_PLAYER_SNAPSHOTS as u64;
@@ -2237,12 +2291,21 @@ impl EscrowContract {
                     continue;
                 }
                 if snap.ledger <= timestamp {
-                    return snap.balance;
+                    return BalanceAtTimestamp::Known(snap.balance);
                 }
             }
         }
 
-        0
+        // Nothing in the retained window qualified. If the buffer has
+        // wrapped (`start > 0`), an older snapshot that might have answered
+        // this query was pruned away — that's unknown, not zero. If it
+        // hasn't wrapped, every snapshot the player ever recorded was
+        // checked and none qualified, so this is a genuine absence.
+        if start > 0 {
+            BalanceAtTimestamp::Pruned
+        } else {
+            BalanceAtTimestamp::NoHistory
+        }
     }
 
     fn collect_matches_by_state(
