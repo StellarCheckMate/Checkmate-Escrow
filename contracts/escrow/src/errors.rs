@@ -43,4 +43,8 @@ pub enum Error {
     InvalidConversionRate = 38,
     ConversionRateOutOfBounds = 39,
     ConversionRateStalePriceSource = 40,
+    InsufficientBond = 41,
+    QuorumNotMet = 42,
+    InsufficientHoldingDuration = 43,
+    OracleSlashFailed = 44,
 }
