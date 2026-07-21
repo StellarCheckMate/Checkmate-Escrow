@@ -18,6 +18,7 @@ mod index;
 mod integration;
 mod invariants;
 mod lifecycle;
+mod multi_token;
 mod pagination;
 mod player_balance_history;
 mod security;
