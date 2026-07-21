@@ -41,6 +41,8 @@ pub struct IndexedEvent {
     pub platform: Option<String>,
     pub timestamp: DateTime<Utc>,
     pub txn_hash: Option<String>,
+    pub event_index_in_txn: Option<u16>,
+    pub reorg_invalidated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
