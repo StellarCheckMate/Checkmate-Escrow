@@ -1,0 +1,44 @@
+name: Doc Conformance
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  conformance-check:
+    name: Check Doc-Code Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run conformance checker
+        run: bash scripts/check_doc_conformance.sh
+
+  conformance-self-test:
+    name: Conformance Checker Self-Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run positive/negative control tests
+        run: bash scripts/test_doc_conformance.sh
+
+  require-doc-update:
+    name: Require Doc Update on Contract Change
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify contract-surface changes include a doc update
+        run: |
+          bash scripts/require_doc_update.sh \
+            "origin/${{ github.event.pull_request.base.ref }}" \
+            "${{ github.sha }}"
