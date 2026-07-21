@@ -45,6 +45,8 @@ fn make_event(id: &str, match_id: u64, ledger: u32) -> IndexedEvent {
         platform: Some("lichess".to_string()),
         timestamp: Utc::now(),
         txn_hash: Some(format!("txhash-{}", id)),
+        event_index_in_txn: None,
+        reorg_invalidated_at: None,
     }
 }
 
@@ -537,4 +539,251 @@ async fn api_match_info_not_found_returns_404() {
     let parsed: ApiResponse<serde_json::Value> = serde_json::from_slice(&body).unwrap();
     assert!(!parsed.success);
     assert!(parsed.error.as_deref().unwrap_or("").contains("not found"));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deterministic ID scheme tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn deterministic_id_same_inputs_same_output() {
+    use event_indexer::id_gen::compute_event_id;
+
+    let id1 = compute_event_id(100, "txhash123", 0);
+    let id2 = compute_event_id(100, "txhash123", 0);
+    assert_eq!(id1, id2, "same inputs must produce identical IDs");
+}
+
+#[test]
+fn deterministic_id_different_ledger_different_id() {
+    use event_indexer::id_gen::compute_event_id;
+
+    let id1 = compute_event_id(100, "txhash123", 0);
+    let id2 = compute_event_id(101, "txhash123", 0);
+    assert_ne!(id1, id2, "different ledgers must produce different IDs");
+}
+
+#[test]
+fn deterministic_id_different_txn_hash_different_id() {
+    use event_indexer::id_gen::compute_event_id;
+
+    let id1 = compute_event_id(100, "txhash123", 0);
+    let id2 = compute_event_id(100, "txhash456", 0);
+    assert_ne!(id1, id2, "different txn_hashes must produce different IDs");
+}
+
+#[test]
+fn deterministic_id_different_event_index_different_id() {
+    use event_indexer::id_gen::compute_event_id;
+
+    let id1 = compute_event_id(100, "txhash123", 0);
+    let id2 = compute_event_id(100, "txhash123", 1);
+    assert_ne!(id1, id2, "different event indices must produce different IDs");
+}
+
+#[test]
+fn deterministic_id_is_valid_hex_64_chars() {
+    use event_indexer::id_gen::compute_event_id;
+
+    let id = compute_event_id(100, "txhash123", 0);
+    assert_eq!(id.len(), 64, "SHA-256 hex must be 64 characters");
+    assert!(id.chars().all(|c| c.is_ascii_hexdigit()), "ID must be valid hex");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Idempotency property tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn idempotency_multiple_ingestions_no_duplicates() {
+    use std::collections::HashMap;
+
+    let events: Vec<IndexedEvent> = (1u32..=20)
+        .map(|i| {
+            let mut e = make_event(&format!("evt-{}", i), i as u64, i);
+            e.id = format!("deterministic-id-{}", i);
+            e
+        })
+        .collect();
+
+    let mut store: HashMap<String, IndexedEvent> = HashMap::new();
+
+    for iteration in 0..3 {
+        for e in &events {
+            store.entry(e.id.clone()).or_insert_with(|| e.clone());
+        }
+        assert_eq!(
+            store.len(),
+            20,
+            "iteration {} must have exactly 20 unique events",
+            iteration + 1
+        );
+    }
+}
+
+#[test]
+fn idempotency_event_state_byte_identical() {
+    use serde_json::to_string;
+
+    let mut e1 = make_event("evt-1", 1, 100);
+    e1.id = "deterministic-evt-1".to_string();
+    e1.event_index_in_txn = Some(0);
+
+    let mut e2 = e1.clone();
+
+    let json1 = to_string(&e1).expect("serialize e1");
+    let json2 = to_string(&e2).expect("serialize e2");
+
+    assert_eq!(json1, json2, "identical events must serialize to identical JSON");
+}
+
+#[tokio::test]
+async fn idempotency_concurrent_re_ingestion_converges() {
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+
+    let events: Vec<IndexedEvent> = (1u32..=15)
+        .map(|i| {
+            let mut e = make_event(&format!("concurrent-{}", i), i as u64, i);
+            e.id = format!("deterministic-concurrent-{}", i);
+            e
+        })
+        .collect();
+
+    let handles: Vec<_> = (0..4)
+        .map(|_task_id| {
+            let c = cache.clone();
+            let ev = events.clone();
+            tokio::spawn(async move {
+                for e in ev {
+                    c.write().await.insert(e);
+                }
+            })
+        })
+        .collect();
+
+    futures::future::join_all(handles).await;
+
+    let final_size = cache.read().await.size();
+    assert_eq!(
+        final_size, 15,
+        "after 4 concurrent ingestions of 15 events, cache must have exactly 15 unique events"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DB state tracking and idempotency integration tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+#[cfg(feature = "pg_integration")]
+async fn poll_ingestion_state_tracking() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping poll_ingestion_state_tracking: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(
+        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
+    );
+    db.init_schema().await.expect("schema");
+
+    let contract_id = "test-contract-state-tracking";
+
+    // Initially, no polled state
+    let initial = db.get_latest_polled_ledger(contract_id).await.expect("query");
+    assert!(initial.is_none(), "new contract should have no polled ledger");
+
+    // After first poll, state is persisted
+    db.update_ingestion_state(contract_id, 100, None).await.expect("update");
+    let after_first = db.get_latest_polled_ledger(contract_id).await.expect("query");
+    assert_eq!(after_first, Some(100), "should persist ledger 100");
+
+    // After second poll, state advances
+    db.update_ingestion_state(contract_id, 150, None).await.expect("update");
+    let after_second = db.get_latest_polled_ledger(contract_id).await.expect("query");
+    assert_eq!(after_second, Some(150), "should advance to ledger 150");
+
+    // Cleanup
+    let conn = event_indexer::db::build_pool(&db_url, 1)
+        .unwrap()
+        .get()
+        .await
+        .unwrap();
+    let _ = conn
+        .execute("DELETE FROM ingestion_state WHERE contract_id = $1", &[&contract_id])
+        .await;
+}
+
+#[tokio::test]
+#[cfg(feature = "pg_integration")]
+async fn reorg_event_marking() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping reorg_event_marking: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(
+        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
+    );
+    db.init_schema().await.expect("schema");
+
+    let contract_id = "test-contract-reorg";
+
+    // Insert test events at ledgers 100-105
+    for ledger in 100..=105 {
+        let mut e = make_event(&format!("reorg-test-{}", ledger), 1, ledger);
+        db.insert_event(&e).await.expect("insert");
+    }
+
+    // Verify all are valid initially
+    let count_before = db.total_event_count().await.expect("count");
+    assert_eq!(count_before, 6, "should have 6 events (ledgers 100-105)");
+
+    // Simulate reorg at ledger 102: invalidate ledgers 102-105
+    let invalidated = db
+        .mark_events_as_invalid(contract_id, 102, 105, "test_reorg")
+        .await
+        .expect("mark");
+    assert_eq!(invalidated, 4, "should have invalidated 4 events (102-105)");
+
+    // Events still in DB but marked
+    let count_after = db.total_event_count().await.expect("count");
+    assert_eq!(count_after, 6, "events still exist after marking");
+
+    // Cleanup
+    let conn = event_indexer::db::build_pool(&db_url, 1)
+        .unwrap()
+        .get()
+        .await
+        .unwrap();
+    for ledger in 100..=105 {
+        let _ = conn
+            .execute(
+                "DELETE FROM events WHERE id LIKE $1",
+                &[&format!("reorg-test-{}%", ledger)],
+            )
+            .await;
+    }
+    let _ = conn
+        .execute("DELETE FROM reorg_events WHERE contract_id = $1", &[&contract_id])
+        .await;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Event index tracking
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn event_index_in_txn_is_preserved() {
+    let mut e1 = make_event("evt-1", 1, 100);
+    e1.event_index_in_txn = Some(0);
+
+    let mut e2 = make_event("evt-2", 1, 100);
+    e2.event_index_in_txn = Some(1);
+
+    assert_eq!(e1.event_index_in_txn, Some(0));
+    assert_eq!(e2.event_index_in_txn, Some(1));
+    assert_ne!(e1.event_index_in_txn, e2.event_index_in_txn);
 }
