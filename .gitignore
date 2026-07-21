@@ -1,6 +1,10 @@
 # Build artifacts
 target/
 
+# Python bytecode (scripts/doc_conformance)
+__pycache__/
+*.pyc
+
 # Environment secrets
 .env
 

@@ -184,10 +184,14 @@ Both contracts implement emergency pause functionality for rapid response to sec
 
 ## Known Limitations
 
+<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=41 sha256=0c23a067e8485bb2d30c198995a18b78f9591bc66506f988f1e1399cab01f590 -->
+<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=44 sha256=bbaa55f15d653c0614ce3d2f144a8394ca8a5b59215f0a4d279ed2e9d99e7a15 -->
+<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=47 sha256=fb036554951d87299457f6fd6dd78dd8c6e3b884d5b7785c2f8fc7834225f9a5 -->
+
 ### Smart Contract Limitations
 
-1. **No Native Token Support**: Only supports Stellar assets (XLM, USDC), not native tokens
-2. **Fixed Timeout**: Match expiration timeout is hardcoded (~24 hours)
+1. **Token Support Is Allowlist-Gated, Not "Native"**: The contract accepts any Stellar Asset Contract (SAC) token — including XLM's wrapped SAC and Soroban-native token contracts such as USDC — subject to an optional admin-managed allowlist (`add_allowed_token` / `is_token_allowed`). There is no separate "native XLM" fast-path distinct from the generic token interface; every token, including XLM, is moved via the standard `token::Client` transfer interface. A `create_match_with_conversion` path additionally supports two-token ("multi-token") matches where each player stakes a different token at an oracle-validated conversion rate — see [Roadmap v1.0.1](roadmap.md#v101--multi-token-conversion-rate-hardening-complete) for the settlement-correctness history of that feature.
+2. **Configurable Timeout, Not Fixed**: Match expiration is **not** hardcoded. `set_match_timeout` (admin-only) accepts any value in `[MIN_MATCH_TIMEOUT_LEDGERS, MAX_MATCH_TIMEOUT_LEDGERS]` = `[17,280, 1,555,200]` ledgers (approximately 1 day to 90 days at 5s/ledger). If never set, `DEFAULT_MATCH_TIMEOUT_LEDGERS` (518,400 ledgers, ~30 days) applies. See `contracts/escrow/src/lib.rs:41-47` and `set_match_timeout` (`contracts/escrow/src/lib.rs:1329`).
 3. **No Partial Withdrawals**: Players cannot withdraw partial stakes
 4. **Single Oracle**: Only one oracle address per escrow contract
 
