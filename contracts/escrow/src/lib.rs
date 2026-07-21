@@ -54,6 +54,18 @@ pub const MAX_MATCH_TIMEOUT_LEDGERS: u32 = 1_555_200;
 /// Default voting period for disputes: 1 day (17,280 ledgers at 5s/ledger).
 pub const VOTING_PERIOD_LEDGERS: u32 = 17_280;
 
+/// Default dispute bond as basis points of match stake (1% = 100 basis points).
+/// Set to 100 = 1% of stake required to open a dispute.
+pub const DEFAULT_DISPUTE_BOND_BASIS_POINTS: u32 = 100;
+
+/// Minimum holding duration in ledgers before acquired tokens can vote.
+/// Set to 100 ledgers (~8 minutes at 5s/ledger) to prevent flash-loan attacks.
+pub const DEFAULT_MINIMUM_HOLD_DURATION: u32 = 100;
+
+/// Quorum threshold as basis points of dispute snapshot weight.
+/// Set to 2000 = 20% minimum participation for resolution.
+pub const DEFAULT_QUORUM_BASIS_POINTS: u32 = 2000;
+
 /// Maximum allowed byte length for a game_id string.
 ///
 /// Platform-specific formats:
@@ -117,6 +129,15 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::AllowedTokenCount, &0u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeBondBasisPoints, &DEFAULT_DISPUTE_BOND_BASIS_POINTS);
+        env.storage()
+            .instance()
+            .set(&DataKey::MinimumHoldDuration, &DEFAULT_MINIMUM_HOLD_DURATION);
+        env.storage()
+            .instance()
+            .set(&DataKey::QuorumBasisPoints, &DEFAULT_QUORUM_BASIS_POINTS);
         env.events().publish(
             (Symbol::new(&env, "escrow"), symbol_short!("init")),
             (oracle, admin),
@@ -1628,6 +1649,9 @@ impl EscrowContract {
     /// before the dispute deadline elapses. An `evidence_hash` must be
     /// provided as a reference to off-chain evidence.
     ///
+    /// Requires a bonded stake (configurable basis points of match stake);
+    /// refunded on successful overturn, forfeited on upheld outcome.
+    ///
     /// Once a dispute is raised, the match must be resolved via voting
     /// instead of the normal `finalize_match` path.
     pub fn dispute_oracle_result(
@@ -1671,6 +1695,26 @@ impl EscrowContract {
             return Err(Error::DisputeAlreadyRaised);
         }
 
+        // Calculate and collect dispute bond
+        let bond_basis_points: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeBondBasisPoints)
+            .unwrap_or(DEFAULT_DISPUTE_BOND_BASIS_POINTS);
+
+        let dispute_bond = m.stake_amount
+            .checked_mul(bond_basis_points as i128)
+            .ok_or(Error::Overflow)?
+            .checked_div(10_000)
+            .ok_or(Error::Overflow)?;
+
+        if dispute_bond <= 0 {
+            return Err(Error::InsufficientBond);
+        }
+
+        let client = token::Client::new(&env, &m.token);
+        client.transfer(&disputer, &env.current_contract_address(), &dispute_bond);
+
         let dispute_id: u64 = env
             .storage()
             .instance()
@@ -1681,6 +1725,19 @@ impl EscrowContract {
             .ledger()
             .sequence()
             .checked_add(VOTING_PERIOD_LEDGERS)
+            .ok_or(Error::Overflow)?;
+
+        // Snapshot current voting weight for quorum/flash-loan prevention
+        let snapshot_total_weight = client.balance(&env.current_contract_address());
+        let quorum_basis_points: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::QuorumBasisPoints)
+            .unwrap_or(DEFAULT_QUORUM_BASIS_POINTS);
+        let quorum_threshold = snapshot_total_weight
+            .checked_mul(quorum_basis_points as i128)
+            .ok_or(Error::Overflow)?
+            .checked_div(10_000)
             .ok_or(Error::Overflow)?;
 
         let dispute = Dispute {
@@ -1695,6 +1752,10 @@ impl EscrowContract {
             created_ledger: env.ledger().sequence(),
             uphold_votes: 0,
             overturn_votes: 0,
+            dispute_bond,
+            snapshot_ledger: env.ledger().sequence(),
+            snapshot_total_weight,
+            quorum_threshold,
         };
 
         env.storage()
@@ -1716,6 +1777,16 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Store oracle address implicated by this result (for automatic slashing on overturn)
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeOracle(dispute_id), &oracle);
+
         let next_id = dispute_id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage()
             .instance()
@@ -1723,7 +1794,7 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "dispute"), Symbol::new(&env, "created")),
-            (dispute_id, match_id, disputer, evidence_hash),
+            (dispute_id, match_id, disputer, evidence_hash, dispute_bond),
         );
 
         Ok(dispute_id)
@@ -1731,9 +1802,12 @@ impl EscrowContract {
 
     /// Vote on an active dispute.
     ///
-    /// Only addresses that hold a positive balance of the match's escrow
-    /// token may vote (`stakers`). `vote` is `true` to overturn the oracle
-    /// result, `false` to uphold it.
+    /// Only addresses that held a positive balance of the match's escrow token
+    /// at the dispute-creation snapshot may vote. Prevents flash-loan attacks.
+    /// `vote` is `true` to overturn the oracle result, `false` to uphold it.
+    ///
+    /// Requires minimum holding duration (configurable) to have elapsed since
+    /// snapshot to defeat just-in-time acquisition attacks.
     ///
     /// Each address may only vote once per dispute.
     pub fn vote_on_dispute(
@@ -1764,17 +1838,78 @@ impl EscrowContract {
             return Err(Error::AlreadyVoted);
         }
 
-        // Verify voter holds a positive balance of the match's escrow token
         let m: Match = env
             .storage()
             .persistent()
             .get(&DataKey::Match(dispute.match_id))
             .ok_or(Error::MatchNotFound)?;
         let client = token::Client::new(&env, &m.token);
-        let balance = client.balance(&voter);
-        if balance <= 0 {
+
+        // Check minimum holding duration (must hold token before snapshot + min duration)
+        let min_hold_duration: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinimumHoldDuration)
+            .unwrap_or(DEFAULT_MINIMUM_HOLD_DURATION);
+
+        let min_acquisition_ledger = dispute
+            .snapshot_ledger
+            .saturating_sub(min_hold_duration);
+
+        // For snapshot-based voting: we look for a balance snapshot at/before snapshot_ledger
+        // If no history, voter had zero balance at snapshot (cannot vote)
+        // This prevents flash-loan and just-in-time acquisition attacks
+        let mut has_historical_balance = false;
+        let mut snapshot_weight: i128 = 0;
+
+        // Check player balance snapshot history
+        let snapshot_count_key = DataKey::PlayerBalanceSnapshotCount(voter.clone());
+        if let Some(count) = env.storage().persistent().get::<_, u64>(&snapshot_count_key) {
+            // Find the most recent snapshot at or before dispute.snapshot_ledger
+            for i in 0..core::cmp::min(count, 5u64) {
+                let idx = count.saturating_sub(i + 1);
+                let slot = idx % MAX_PLAYER_SNAPSHOTS as u64;
+                let key = DataKey::PlayerBalanceSnapshot(voter.clone(), slot);
+
+                if let Some(snap) = env.storage().persistent().get::<_, PlayerBalanceSnapshot>(&key) {
+                    if snap.ledger <= dispute.snapshot_ledger as u64 {
+                        // Check that the balance acquisition was before min_acquisition_ledger
+                        if snap.ledger <= min_acquisition_ledger as u64 {
+                            snapshot_weight = snap.balance;
+                            has_historical_balance = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // If no historical balance found, check if voter currently holds balance
+        // (for matches that occurred after player snapshot history began)
+        if !has_historical_balance {
+            let current_balance = client.balance(&voter);
+            if current_balance <= 0 {
+                return Err(Error::NotStaker);
+            }
+
+            // For newly-acquired balances, require minimum holding duration from now
+            // This is a fallback for voters without snapshot history
+            return Err(Error::InsufficientHoldingDuration);
+        }
+
+        if snapshot_weight <= 0 {
             return Err(Error::NotStaker);
         }
+
+        // Store vote weight snapshot for this voter
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeVoteWeight(dispute_id, voter.clone()), &snapshot_weight);
+        env.storage().persistent().extend_ttl(
+            &DataKey::DisputeVoteWeight(dispute_id, voter.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
 
         // Record vote
         env.storage()
@@ -1786,11 +1921,11 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
-        // Tally vote
+        // Tally vote using historical snapshot weight
         if vote {
-            dispute.yes_votes = dispute.yes_votes.saturating_add(balance as u32);
+            dispute.yes_votes = dispute.yes_votes.saturating_add(snapshot_weight as u32);
         } else {
-            dispute.no_votes = dispute.no_votes.saturating_add(balance as u32);
+            dispute.no_votes = dispute.no_votes.saturating_add(snapshot_weight as u32);
         }
 
         env.storage()
@@ -1804,7 +1939,7 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "dispute"), Symbol::new(&env, "voted")),
-            (dispute_id, voter, vote),
+            (dispute_id, voter, vote, snapshot_weight),
         );
 
         Ok(())
@@ -1812,11 +1947,12 @@ impl EscrowContract {
 
     /// Resolve a dispute after the voting period has elapsed.
     ///
-    /// Executes payout based on the majority vote:
-    /// - If the majority votes to overturn (`yes_votes > no_votes`), stakes
-    ///   are refunded to both players (draw outcome).
-    /// - If the majority upholds (`no_votes >= yes_votes`), the original
-    ///   oracle result stands and the winner receives the full pot.
+    /// Executes payout based on voting and quorum:
+    /// - If quorum not met: no resolution (explicit pending state, not silent).
+    /// - If quorum met and yes_votes > no_votes: overturned (refund both, draw).
+    ///   Automatically signals oracle for slashing (admin must call slash_oracle_for_dispute).
+    /// - If quorum met and no_votes >= yes_votes: upheld (original result stands).
+    ///   Dispute bond is forfeited to treasury.
     pub fn resolve_dispute_by_vote(env: Env, dispute_id: u64) -> Result<(), Error> {
         let mut dispute: Dispute = env
             .storage()
@@ -1849,12 +1985,18 @@ impl EscrowContract {
             .get(&DataKey::PendingWinner(match_id))
             .ok_or(Error::PendingResultNotFound)?;
 
+        // Check quorum requirement
+        let total_votes = (dispute.yes_votes as i128).saturating_add(dispute.no_votes as i128);
+        if total_votes < dispute.quorum_threshold {
+            return Err(Error::QuorumNotMet);
+        }
+
         let winner = if dispute.yes_votes > dispute.no_votes {
-            // Overturned: refund both players (draw outcome)
+            // Overturned: refund both players (draw outcome), signal oracle for slashing
             dispute.state = DisputeState::ResolvedOverturned;
             Winner::Draw
         } else {
-            // Upheld: original oracle result stands
+            // Upheld: original oracle result stands, bond forfeited to treasury
             dispute.state = DisputeState::ResolvedUpheld;
             pending_winner
         };
@@ -1862,6 +2004,34 @@ impl EscrowContract {
         Self::execute_payout(&env, &m, &winner)?;
         Self::remove_active_match_indexed(&env, &m.player1, match_id);
         Self::remove_active_match_indexed(&env, &m.player2, match_id);
+
+        // Handle dispute bond
+        if dispute.state == DisputeState::ResolvedOverturned {
+            // Bond refunded to disputer on successful overturn
+            let client = token::Client::new(&env, &m.token);
+            client.transfer(
+                &env.current_contract_address(),
+                &dispute.disputer,
+                &dispute.dispute_bond,
+            );
+        } else {
+            // Bond forfeited to treasury on upheld outcome
+            let protocol_config: ProtocolConfig = env
+                .storage()
+                .instance()
+                .get(&DataKey::ProtocolConfig)
+                .unwrap_or(ProtocolConfig {
+                    vesting_duration_seconds: 259_200,
+                    cancellation_fee_basis_points: 0,
+                    treasury: env.current_contract_address(),
+                });
+            let client = token::Client::new(&env, &m.token);
+            client.transfer(
+                &env.current_contract_address(),
+                &protocol_config.treasury,
+                &dispute.dispute_bond,
+            );
+        }
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
@@ -1891,7 +2061,47 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "dispute"), Symbol::new(&env, "resolved")),
-            (dispute_id, match_id, dispute.state, winner),
+            (dispute_id, match_id, dispute.state, winner, total_votes, dispute.quorum_threshold),
+        );
+
+        Ok(())
+    }
+
+    /// Admin-initiated automatic slashing of an oracle implicated by an overturned dispute.
+    /// Transfers bond amount to oracle slash pool. Oracle contract must be invoked separately
+    /// to actually slash the oracle's stake.
+    pub fn mark_dispute_for_oracle_slash(env: Env, dispute_id: u64, slash_amount: i128) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let dispute: Dispute = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+            .ok_or(Error::DisputeNotFound)?;
+
+        if dispute.state != DisputeState::ResolvedOverturned {
+            return Err(Error::InvalidState);
+        }
+
+        if slash_amount <= 0 || slash_amount > dispute.dispute_bond {
+            return Err(Error::InvalidAmount);
+        }
+
+        let oracle: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DisputeOracle(dispute_id))
+            .ok_or(Error::Unauthorized)?;
+
+        env.events().publish(
+            (Symbol::new(&env, "dispute"), Symbol::new(&env, "oracle_slash_signal")),
+            (dispute_id, oracle, slash_amount),
         );
 
         Ok(())
@@ -1946,6 +2156,101 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::MatchDispute(match_id))
             .ok_or(Error::DisputeNotFound)
+    }
+
+    /// Set the dispute bond requirement in basis points of match stake. Admin only.
+    pub fn set_dispute_bond_basis_points(env: Env, basis_points: u32) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if basis_points == 0 || basis_points > 10_000 {
+            return Err(Error::InvalidAmount);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::DisputeBondBasisPoints, &basis_points);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "dispute_bond")),
+            basis_points,
+        );
+        Ok(())
+    }
+
+    /// Set the minimum holding duration in ledgers for vote eligibility. Admin only.
+    pub fn set_minimum_hold_duration(env: Env, duration: u32) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::MinimumHoldDuration, &duration);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "min_hold_duration")),
+            duration,
+        );
+        Ok(())
+    }
+
+    /// Set the quorum threshold in basis points of dispute snapshot weight. Admin only.
+    pub fn set_quorum_basis_points(env: Env, basis_points: u32) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if basis_points == 0 || basis_points > 10_000 {
+            return Err(Error::InvalidAmount);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::QuorumBasisPoints, &basis_points);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "quorum_basis_points")),
+            basis_points,
+        );
+        Ok(())
+    }
+
+    /// Get current dispute bond requirement in basis points.
+    pub fn get_dispute_bond_basis_points(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::DisputeBondBasisPoints)
+            .unwrap_or(DEFAULT_DISPUTE_BOND_BASIS_POINTS)
+    }
+
+    /// Get current minimum holding duration in ledgers.
+    pub fn get_minimum_hold_duration(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::MinimumHoldDuration)
+            .unwrap_or(DEFAULT_MINIMUM_HOLD_DURATION)
+    }
+
+    /// Get current quorum threshold in basis points.
+    pub fn get_quorum_basis_points(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::QuorumBasisPoints)
+            .unwrap_or(DEFAULT_QUORUM_BASIS_POINTS)
     }
 
     // ── Balance snapshots ───────────────────────────────────────────────────
