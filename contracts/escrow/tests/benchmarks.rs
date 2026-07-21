@@ -23,9 +23,9 @@ use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, E
 const STAKE: i128 = 100;
 const MINT_AMOUNT: i128 = 1_000_000;
 
-/// Sample sizes used for every scaling benchmark below. `100+` per the
-/// issue's requirement is covered by the `100` case.
-const SCALES: [u32; 3] = [1, 10, 100];
+/// Sample sizes used for scaling benchmarks. Covers the range from single match
+/// to 1,000 concurrent active matches, demonstrating O(log n) or O(1) cost growth.
+const SCALES: [u32; 4] = [1, 10, 100, 1000];
 
 struct Measurement {
     name: &'static str,
