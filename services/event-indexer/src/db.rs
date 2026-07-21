@@ -87,7 +87,9 @@ impl Database {
                 game_id          TEXT,
                 platform         TEXT,
                 timestamp        TIMESTAMPTZ NOT NULL,
-                txn_hash         TEXT
+                txn_hash         TEXT,
+                event_index_in_txn SMALLINT,
+                reorg_invalidated_at TIMESTAMPTZ
             );
 
             CREATE INDEX IF NOT EXISTS idx_events_match_id      ON events(match_id);
@@ -97,6 +99,9 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_events_timestamp     ON events(timestamp);
             CREATE INDEX IF NOT EXISTS idx_events_ledger        ON events(ledger_sequence);
             CREATE INDEX IF NOT EXISTS idx_events_status        ON events(status);
+            CREATE INDEX IF NOT EXISTS idx_events_not_invalidated
+                ON events(ledger_sequence DESC)
+                WHERE reorg_invalidated_at IS NULL;
 
             -- Leader-election table.
             -- The single row (instance_id='__leader__') acts as a distributed
@@ -104,6 +109,27 @@ impl Database {
             CREATE TABLE IF NOT EXISTS leader_state (
                 instance_id TEXT        PRIMARY KEY,
                 held_until  TIMESTAMPTZ NOT NULL
+            );
+
+            -- Ingestion state tracking (one row per contract_id).
+            CREATE TABLE IF NOT EXISTS ingestion_state (
+                contract_id             TEXT        PRIMARY KEY,
+                last_polled_ledger      INTEGER,
+                last_polled_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                events_ingested         BIGINT      DEFAULT 0,
+                last_error              TEXT,
+                last_error_at           TIMESTAMPTZ
+            );
+
+            -- Reorg audit log.
+            CREATE TABLE IF NOT EXISTS reorg_events (
+                id                      SERIAL      PRIMARY KEY,
+                contract_id             TEXT        NOT NULL,
+                reorg_ledger            INTEGER     NOT NULL,
+                reorg_time              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                reason                  TEXT,
+                events_invalidated_count INTEGER,
+                created_at              TIMESTAMPTZ DEFAULT NOW()
             );
             "#,
         )
@@ -125,12 +151,12 @@ impl Database {
                 id, ledger_sequence, match_id, event_type,
                 player1, player2, status, winner,
                 stake_amount, token, game_id, platform,
-                timestamp, txn_hash
+                timestamp, txn_hash, event_index_in_txn, reorg_invalidated_at
             ) VALUES (
                 $1, $2, $3, $4,
                 $5, $6, $7, $8,
                 $9, $10, $11, $12,
-                $13, $14
+                $13, $14, $15, $16
             ) ON CONFLICT (id) DO NOTHING",
             &[
                 &event.id,
@@ -147,12 +173,87 @@ impl Database {
                 &event.platform,
                 &event.timestamp,
                 &event.txn_hash,
+                &event.event_index_in_txn.map(|i| i as i16),
+                &event.reorg_invalidated_at,
             ],
         )
         .await
         .map_err(|e| anyhow!("insert_event failed: {}", e))?;
 
         Ok(())
+    }
+
+    /// Get the latest polled ledger for a contract.
+    pub async fn get_latest_polled_ledger(&self, contract_id: &str) -> Result<Option<u32>> {
+        let conn = self.write_pool.get().await
+            .map_err(|e| anyhow!("Pool error: {}", e))?;
+
+        let row = conn
+            .query_opt(
+                "SELECT last_polled_ledger FROM ingestion_state WHERE contract_id = $1",
+                &[&contract_id],
+            )
+            .await
+            .map_err(|e| anyhow!("get_latest_polled_ledger failed: {}", e))?;
+
+        Ok(row.and_then(|r| r.get::<_, Option<i32>>(0)).map(|l| l as u32))
+    }
+
+    /// Update ingestion state after a poll.
+    pub async fn update_ingestion_state(
+        &self,
+        contract_id: &str,
+        ledger: u32,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.write_pool.get().await
+            .map_err(|e| anyhow!("Pool error: {}", e))?;
+
+        conn.execute(
+            "INSERT INTO ingestion_state (contract_id, last_polled_ledger, last_polled_at, last_error, last_error_at)
+             VALUES ($1, $2, NOW(), $3, CASE WHEN $3 IS NOT NULL THEN NOW() ELSE NULL END)
+             ON CONFLICT (contract_id) DO UPDATE
+             SET last_polled_ledger = $2, last_polled_at = NOW(), last_error = $3,
+                 last_error_at = CASE WHEN $3 IS NOT NULL THEN NOW() ELSE last_error_at END",
+            &[&contract_id, &(ledger as i32), &error],
+        )
+        .await
+        .map_err(|e| anyhow!("update_ingestion_state failed: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Mark events in a ledger range as invalidated by reorg.
+    pub async fn mark_events_as_invalid(
+        &self,
+        contract_id: &str,
+        start_ledger: u32,
+        end_ledger: u32,
+        reason: &str,
+    ) -> Result<i64> {
+        let conn = self.write_pool.get().await
+            .map_err(|e| anyhow!("Pool error: {}", e))?;
+
+        // Mark events as invalidated
+        let count = conn
+            .execute(
+                "UPDATE events SET reorg_invalidated_at = NOW()
+                 WHERE ledger_sequence BETWEEN $1 AND $2 AND reorg_invalidated_at IS NULL",
+                &[&(start_ledger as i32), &(end_ledger as i32)],
+            )
+            .await
+            .map_err(|e| anyhow!("mark_events_as_invalid failed: {}", e))?;
+
+        // Log the reorg event
+        conn.execute(
+            "INSERT INTO reorg_events (contract_id, reorg_ledger, reason, events_invalidated_count)
+             VALUES ($1, $2, $3, $4)",
+            &[&contract_id, &(start_ledger as i32), &reason, &(count as i32)],
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to log reorg event: {}", e))?;
+
+        Ok(count as i64)
     }
 
     // ── Read path (via read_pool) ─────────────────────────────────────────
@@ -418,6 +519,7 @@ impl Database {
 fn row_to_event(row: &tokio_postgres::Row) -> Result<IndexedEvent> {
     let ledger: i32 = row.get(1);
     let match_id: i64 = row.get(2);
+    let event_index: Option<i16> = row.get(14);
     Ok(IndexedEvent {
         id: row.get(0),
         ledger_sequence: ledger as u32,
@@ -433,5 +535,7 @@ fn row_to_event(row: &tokio_postgres::Row) -> Result<IndexedEvent> {
         platform: row.get(11),
         timestamp: row.get::<_, DateTime<Utc>>(12),
         txn_hash: row.get(13),
+        event_index_in_txn: event_index.map(|i| i as u16),
+        reorg_invalidated_at: row.get(15),
     })
 }
