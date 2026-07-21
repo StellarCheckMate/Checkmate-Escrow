@@ -33,7 +33,7 @@ use crate::types::{Match, MatchState, Winner, Platform};
 
 use std::collections::{HashMap, HashSet};
 use std::format;
-use std::string::String;
+use std::string::{String, ToString};
 use std::vec;
 use std::vec::Vec;
 
