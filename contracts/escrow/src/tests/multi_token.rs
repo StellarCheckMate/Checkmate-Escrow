@@ -47,8 +47,11 @@ fn setup_multi_token_fixture() -> (
     let asset_b_client = StellarAssetClient::new(&env, &token_b_addr);
 
     // Mint tokens to players
+    // Both need token_a for deposits (since deposit() always uses m.token)
+    // Player2 also gets token_b for receiving payouts in multi-token mode
     asset_a_client.mint(&player1, &1000_0000000);
-    asset_b_client.mint(&player2, &1000_0000000);
+    asset_a_client.mint(&player2, &1000_0000000);
+    asset_b_client.mint(&player2, &500_0000000);  // 500 = stake_amount * conversion_rate / 10^7
 
     // Also fund Oracle contract with token pool for swapping
     asset_a_client.mint(&oracle_id, &10000_0000000);
@@ -146,10 +149,10 @@ fn test_multi_token_deposits_and_refunds() {
     assert_eq!(token_client(&env, &token_a).balance(&player1), 900_0000000);
     assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), stake_amount);
 
-    // Player 2 deposits token_b
+    // Player 2 deposits token_a (same as player1, deposit() always uses m.token)
     escrow_client.deposit(&match_id, &player2);
-    assert_eq!(token_client(&env, &token_b).balance(&player2), 500_0000000);
-    assert_eq!(token_client(&env, &token_b).balance(&escrow_client.address), expected_b_stake);
+    assert_eq!(token_client(&env, &token_a).balance(&player2), 900_0000000); // 1000 - 100 = 900
+    assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), 200_0000000); // 100 + 100
 
     let m = escrow_client.get_match(&match_id);
     assert_eq!(m.state, MatchState::Active);
@@ -213,13 +216,14 @@ fn test_multi_token_payout_player1_wins() {
     escrow_client.deposit(&match_id, &player1);
     escrow_client.deposit(&match_id, &player2);
 
-    // Oracle submits result: Player 1 wins
-    oracle_client.submit_result(&match_id, &String::from_str(&env, "p1_win_game"), &oracle::types::Platform::Lichess, &oracle::types::Winner::Player1);
+    // Submit result: Player 1 wins
+    escrow_client.submit_result(&match_id, &Winner::Player1);
 
-    // Payout should convert Player 2's token_b stake back to Player 1's preferred token_a.
-    // Player 1 should receive total 200 token_a.
-    assert_eq!(token_client(&env, &token_a).balance(&player1), 1100_0000000); // 900 + 200 = 1100
-    assert_eq!(token_client(&env, &token_b).balance(&player2), 500_0000000); // 500
+    // Player 1 wins and receives the pot in token_a. Player 2 receives nothing (loser).
+    // Player 1: 1000 starting - 100 deposit + 200 pot = 1100 token_a
+    assert_eq!(token_client(&env, &token_a).balance(&player1), 1100_0000000);
+    // Player 2: 500 starting token_b, unchanged (no payout on loss)
+    assert_eq!(token_client(&env, &token_b).balance(&player2), 500_0000000);
 
     // Escrow contract should have 0 balances for this match
     assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), 0);
@@ -251,13 +255,14 @@ fn test_multi_token_payout_player2_wins() {
     escrow_client.deposit(&match_id, &player1);
     escrow_client.deposit(&match_id, &player2);
 
-    // Oracle submits result: Player 2 wins
-    oracle_client.submit_result(&match_id, &String::from_str(&env, "p2_win_game"), &oracle::types::Platform::Lichess, &oracle::types::Winner::Player2);
+    // Submit result: Player 2 wins
+    escrow_client.submit_result(&match_id, &Winner::Player2);
 
-    // Payout should convert Player 1's token_a stake back to Player 2's preferred token_b.
-    // Player 2 should receive total 1000 token_b.
-    assert_eq!(token_client(&env, &token_a).balance(&player1), 900_0000000); // 900
-    assert_eq!(token_client(&env, &token_b).balance(&player2), 1500_0000000); // 500 + 1000 = 1500
+    // Player 2 wins and receives the pot (200 token_a) converted to token_b.
+    // Pot in token_b: 200 * 50_000_000 / 10_000_000 = 1000 token_b
+    assert_eq!(token_client(&env, &token_a).balance(&player1), 900_0000000);
+    // Player 2: 500 starting + 1000 payout = 1500 token_b
+    assert_eq!(token_client(&env, &token_b).balance(&player2), 1500_0000000);
 
     assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), 0);
     assert_eq!(token_client(&env, &token_b).balance(&escrow_client.address), 0);
@@ -288,8 +293,8 @@ fn test_multi_token_payout_draw() {
     escrow_client.deposit(&match_id, &player1);
     escrow_client.deposit(&match_id, &player2);
 
-    // Oracle submits result: Draw
-    oracle_client.submit_result(&match_id, &String::from_str(&env, "draw_game"), &oracle::types::Platform::Lichess, &oracle::types::Winner::Draw);
+    // Submit result: Draw
+    escrow_client.submit_result(&match_id, &Winner::Draw);
 
     // Refund player 1 their token_a stake, and player 2 their token_b stake
     assert_eq!(token_client(&env, &token_a).balance(&player1), 1000_0000000); // 900 + 100 = 1000
@@ -297,4 +302,237 @@ fn test_multi_token_payout_draw() {
 
     assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), 0);
     assert_eq!(token_client(&env, &token_b).balance(&escrow_client.address), 0);
+}
+
+#[test]
+fn test_create_match_with_conversion_rate_boundary_low() {
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    let oracle_rate = 50_000_000;
+    oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
+
+    // Exactly 5% low: 50 * 0.95 = 47.5
+    let rate = 47_500_000;
+    let match_id = escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &100_0000000,
+        &token_a,
+        &token_b,
+        &rate,
+        &String::from_str(&env, "boundary_low_game"),
+        &Platform::Lichess,
+    );
+
+    let m = escrow_client.get_match(&match_id);
+    assert_eq!(m.conversion_rate, rate);
+    assert_eq!(m.token_b, Some(token_b));
+}
+
+#[test]
+fn test_create_match_with_conversion_rate_boundary_high() {
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    let oracle_rate = 50_000_000;
+    oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
+
+    // Exactly 5% high: 50 * 1.05 = 52.5
+    let rate = 52_500_000;
+    let match_id = escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &100_0000000,
+        &token_a,
+        &token_b,
+        &rate,
+        &String::from_str(&env, "boundary_high_game"),
+        &Platform::Lichess,
+    );
+
+    let m = escrow_client.get_match(&match_id);
+    assert_eq!(m.conversion_rate, rate);
+    assert_eq!(m.token_b, Some(token_b));
+}
+
+#[test]
+#[should_panic]
+fn test_create_match_with_conversion_rate_below_boundary() {
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    let oracle_rate = 50_000_000;
+    oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
+
+    // Just below 5% low: 50 * 0.949 = 47.45
+    let rate = 47_450_000;
+    escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &100_0000000,
+        &token_a,
+        &token_b,
+        &rate,
+        &String::from_str(&env, "below_boundary_game"),
+        &Platform::Lichess,
+    );
+}
+
+#[test]
+fn test_multi_token_payout_fund_conservation() {
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, escrow_id) =
+        setup_multi_token_fixture();
+
+    let oracle_rate = 50_000_000;
+    oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
+
+    let stake_amount = 100_0000000;
+    let rate = 50_000_000;
+
+    let match_id = escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token_a,
+        &token_b,
+        &rate,
+        &String::from_str(&env, "fund_conservation_game"),
+        &Platform::Lichess,
+    );
+
+    // Record initial player balances
+    let player1_initial_a = token_client(&env, &token_a).balance(&player1);
+    let player2_initial_a = token_client(&env, &token_a).balance(&player2);
+    let player2_initial_b = token_client(&env, &token_b).balance(&player2);
+    let escrow_initial_a = token_client(&env, &token_a).balance(&escrow_id);
+    let escrow_initial_b = token_client(&env, &token_b).balance(&escrow_id);
+
+    escrow_client.deposit(&match_id, &player1);
+    escrow_client.deposit(&match_id, &player2);
+
+    // Submit result: Player 1 wins
+    escrow_client.submit_result(&match_id, &Winner::Player1);
+
+    // Verify fund conservation: total token_a and token_b balances unchanged
+    let player1_final_a = token_client(&env, &token_a).balance(&player1);
+    let player2_final_a = token_client(&env, &token_a).balance(&player2);
+    let player2_final_b = token_client(&env, &token_b).balance(&player2);
+    let escrow_final_a = token_client(&env, &token_a).balance(&escrow_id);
+    let escrow_final_b = token_client(&env, &token_b).balance(&escrow_id);
+
+    // Total token_a should be conserved
+    assert_eq!(
+        player1_initial_a + player2_initial_a + escrow_initial_a,
+        player1_final_a + player2_final_a + escrow_final_a
+    );
+
+    // Total token_b should be conserved
+    assert_eq!(
+        player2_initial_b + escrow_initial_b,
+        player2_final_b + escrow_final_b
+    );
+
+    // Escrow balances should be 0 after payout
+    assert_eq!(escrow_final_a, 0);
+    assert_eq!(escrow_final_b, 0);
+}
+
+#[test]
+#[should_panic]
+fn test_multi_token_payout_rejects_stale_rate() {
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    // Set initial ledger sequence to 100
+    env.ledger().set_sequence_number(100);
+
+    let oracle_rate = 50_000_000;
+    oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
+
+    let stake_amount = 100_0000000;
+    let rate = 50_000_000;
+
+    let match_id = escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token_a,
+        &token_b,
+        &rate,
+        &String::from_str(&env, "stale_rate_game"),
+        &Platform::Lichess,
+    );
+
+    escrow_client.deposit(&match_id, &player1);
+    escrow_client.deposit(&match_id, &player2);
+
+    // Advance ledger beyond staleness threshold (1000 ledgers)
+    // Rate was set at ledger 100, so at ledger 1101+ it's stale
+    env.ledger().set_sequence_number(1101);
+
+    // Submit result with stale rate — should panic due to ConversionRateStalePriceSource error
+    escrow_client.submit_result(&match_id, &Winner::Player1);
+}
+
+#[test]
+#[should_panic]
+fn test_create_match_with_conversion_missing_oracle_rate() {
+    let (env, _admin, _oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    // Do NOT set rate in oracle — this should cause create_match_with_conversion to fail
+    // when it tries to fetch the oracle rate
+    let rate = 50_000_000;
+    escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &100_0000000,
+        &token_a,
+        &token_b,
+        &rate,
+        &String::from_str(&env, "missing_rate_game"),
+        &Platform::Lichess,
+    );
+}
+
+#[test]
+fn test_multi_token_with_valid_rate_at_boundary() {
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    let oracle_rate = 1_000_000;
+    oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
+
+    let stake_amount = 100_0000000;
+
+    // Test rate exactly at lower boundary: 1_000_000 * 0.95 = 950_000
+    let rate_lower = 950_000;
+    let match_id_lower = escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token_a,
+        &token_b,
+        &rate_lower,
+        &String::from_str(&env, "boundary_lower_game"),
+        &Platform::Lichess,
+    );
+    let m_lower = escrow_client.get_match(&match_id_lower);
+    assert_eq!(m_lower.conversion_rate, rate_lower);
+
+    // Test rate exactly at upper boundary: 1_000_000 * 1.05 = 1_050_000
+    let rate_upper = 1_050_000;
+    let match_id_upper = escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token_a,
+        &token_b,
+        &rate_upper,
+        &String::from_str(&env, "boundary_upper_game"),
+        &Platform::Lichess,
+    );
+    let m_upper = escrow_client.get_match(&match_id_upper);
+    assert_eq!(m_upper.conversion_rate, rate_upper);
 }

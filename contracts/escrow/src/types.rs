@@ -70,6 +70,8 @@ pub struct Match {
     pub conversion_rate: Option<i128>,
     /// Optional second token for multi-token matches.
     pub token_b: Option<Address>,
+    /// Ledger sequence when conversion_rate was validated against oracle price.
+    pub conversion_rate_ledger: Option<u32>,
     /// Ledger when pause started (if any).
     pub paused_ledger: Option<u32>,
     /// Total pause duration in ledgers.
