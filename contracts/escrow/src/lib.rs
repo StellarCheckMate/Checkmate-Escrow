@@ -72,6 +72,15 @@ const GOLD_MIN_STAKE: i128 = 501;
 const GOLD_MAX_STAKE: i128 = 1_000;
 const PLATINUM_MIN_STAKE: i128 = 1_001;
 
+/// Maximum number of simultaneously-active matches per player. This prevents
+/// attacker-inflated cost growth in ActiveMatch index operations.
+const MAX_ACTIVE_MATCHES_PER_PLAYER: u32 = 1_000;
+
+/// Hard cap on unbounded match scans. The deprecated get_*_matches() functions
+/// scan the full match history and are limited to this many results to cap
+/// per-call cost. Callers requiring more results should use the _paginated variants.
+const MAX_UNBOUNDED_MATCH_RESULTS: u32 = 10_000;
+
 /// Extend instance storage TTL on every invocation so Admin, Oracle, Paused, and other
 /// instance keys never expire.
 fn extend_instance_ttl(env: &Env) {
@@ -737,7 +746,8 @@ impl EscrowContract {
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
             );
-            Self::append_active_match(&env, match_id);
+            Self::add_active_match(&env, &m.player1, match_id)?;
+            Self::add_active_match(&env, &m.player2, match_id)?;
         } else {
             env.events().publish(
                 (Symbol::new(&env, "match"), symbol_short!("deposit")),
@@ -796,12 +806,16 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
-        Self::remove_active_match(&env, match_id);
+        Self::remove_active_match_indexed(&env, &m.player1, match_id);
+        Self::remove_active_match_indexed(&env, &m.player2, match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
         m.winner = winner.clone();
         m.vested_at = Some(env.ledger().timestamp());
+
+        Self::record_completed_match(&env, &m.player1);
+        Self::record_completed_match(&env, &m.player2);
 
         env.storage()
             .persistent()
@@ -1196,13 +1210,12 @@ impl EscrowContract {
             .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS)
     }
 
+    /// Get the cached count of completed matches for a player (O(1) lookup).
+    /// This counter is incremented once when each match completes, avoiding
+    /// the previous O(n) history walk for every tier check.
     fn completed_match_count(env: &Env, player: &Address) -> u32 {
-        let key = DataKey::PlayerMatches(player.clone());
-        let player_matches: soroban_sdk::Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or_else(|| soroban_sdk::vec![env]);
+        let key = DataKey::PlayerCompletedMatchCount(player.clone());
+        let count = env.storage().persistent().get(&key).unwrap_or(0u32);
 
         if env.storage().persistent().has(&key) {
             env.storage()
@@ -1210,19 +1223,21 @@ impl EscrowContract {
                 .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
         }
 
-        let mut completed_matches = 0u32;
-        for match_id in player_matches.iter() {
-            if let Some(m) = env
-                .storage()
-                .persistent()
-                .get::<DataKey, Match>(&DataKey::Match(match_id))
-            {
-                if m.state == MatchState::Completed {
-                    completed_matches = completed_matches.saturating_add(1);
-                }
-            }
-        }
-        completed_matches
+        count
+    }
+
+    /// Increment the completed-match counter for a player. Called once when
+    /// a match transitions to Completed state.
+    fn record_completed_match(env: &Env, player: &Address) {
+        let key = DataKey::PlayerCompletedMatchCount(player.clone());
+        let count: u32 = env.storage().persistent().get(&key).unwrap_or(0);
+
+        env.storage()
+            .persistent()
+            .set(&key, &(count.saturating_add(1)));
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
 
     fn tier_for_completed_matches(completed_matches: u32) -> PlayerTier {
@@ -1253,50 +1268,55 @@ impl EscrowContract {
         Ok(())
     }
 
-    fn get_active_match_ids(env: &Env) -> soroban_sdk::Vec<u64> {
-        if let Some(active_matches) = env.storage().persistent().get(&DataKey::ActiveMatches) {
-            env.storage().persistent().extend_ttl(
-                &DataKey::ActiveMatches,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-            active_matches
-        } else {
-            soroban_sdk::vec![env]
-        }
+    /// Check if a match is currently active for a player (O(1) lookup).
+    fn is_match_active(env: &Env, player: &Address, match_id: u64) -> bool {
+        let key = DataKey::ActiveMatch(player.clone(), match_id);
+        env.storage().persistent().has(&key)
     }
 
-    fn set_active_match_ids(env: &Env, active_matches: &soroban_sdk::Vec<u64>) {
+    /// Add a match to a player's active set with per-player cap enforcement (O(1)).
+    /// Returns an error if the player has already reached MAX_ACTIVE_MATCHES_PER_PLAYER.
+    fn add_active_match(env: &Env, player: &Address, match_id: u64) -> Result<(), Error> {
+        let count_key = DataKey::PlayerActiveMatchCount(player.clone());
+        let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+
+        if count >= MAX_ACTIVE_MATCHES_PER_PLAYER {
+            return Err(Error::TooManyActiveMatches);
+        }
+
+        let key = DataKey::ActiveMatch(player.clone(), match_id);
+        env.storage().persistent().set(&key, &true);
         env.storage()
             .persistent()
-            .set(&DataKey::ActiveMatches, active_matches);
-        env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
+            .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        env.storage()
+            .persistent()
+            .set(&count_key, &(count + 1));
+        env.storage()
+            .persistent()
+            .extend_ttl(&count_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        Ok(())
     }
 
-    fn append_active_match(env: &Env, match_id: u64) {
-        let mut active_matches = Self::get_active_match_ids(env);
-        active_matches.push_back(match_id);
-        Self::set_active_match_ids(env, &active_matches);
-    }
+    /// Remove a match from a player's active set (O(1)).
+    fn remove_active_match_indexed(env: &Env, player: &Address, match_id: u64) {
+        let key = DataKey::ActiveMatch(player.clone(), match_id);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
 
-    fn remove_active_match(env: &Env, match_id: u64) {
-        let active_matches = Self::get_active_match_ids(env);
-        if active_matches.is_empty() {
-            return;
-        }
-
-        let mut updated = soroban_sdk::vec![env];
-        for id in active_matches.iter() {
-            if id != match_id {
-                updated.push_back(id);
+            let count_key = DataKey::PlayerActiveMatchCount(player.clone());
+            let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
+            if count > 0 {
+                env.storage()
+                    .persistent()
+                    .set(&count_key, &(count - 1));
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&count_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
             }
         }
-
-        Self::set_active_match_ids(env, &updated);
     }
 
     pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
@@ -1570,10 +1590,14 @@ impl EscrowContract {
             .get(&DataKey::PendingWinner(match_id))
             .ok_or(Error::PendingResultNotFound)?;
         Self::execute_payout(&env, &m, &winner)?;
-        Self::remove_active_match(&env, match_id);
+        Self::remove_active_match_indexed(&env, &m.player1, match_id);
+        Self::remove_active_match_indexed(&env, &m.player2, match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
+
+        Self::record_completed_match(&env, &m.player1);
+        Self::record_completed_match(&env, &m.player2);
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -1831,10 +1855,15 @@ impl EscrowContract {
         };
 
         Self::execute_payout(&env, &m, &winner)?;
-        Self::remove_active_match(&env, match_id);
+        Self::remove_active_match_indexed(&env, &m.player1, match_id);
+        Self::remove_active_match_indexed(&env, &m.player2, match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
+
+        Self::record_completed_match(&env, &m.player1);
+        Self::record_completed_match(&env, &m.player2);
+
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -2245,6 +2274,10 @@ impl EscrowContract {
         0
     }
 
+    /// Collect all matches in a given state (DEPRECATED: use paginated variants).
+    /// Returns at most MAX_UNBOUNDED_MATCH_RESULTS to cap per-call cost.
+    /// This function scans the full match history and is included for backwards
+    /// compatibility only; new code should use collect_matches_by_state_paginated.
     fn collect_matches_by_state(
         env: &Env,
         state: MatchState,
@@ -2256,7 +2289,11 @@ impl EscrowContract {
             .get(&DataKey::MatchCount)
             .unwrap_or(0);
 
+        let mut collected = 0u32;
         for match_id in 0..count {
+            if collected >= MAX_UNBOUNDED_MATCH_RESULTS {
+                break;
+            }
             if let Some(m) = env
                 .storage()
                 .persistent()
@@ -2264,6 +2301,7 @@ impl EscrowContract {
             {
                 if m.state == state {
                     matches.push_back(m);
+                    collected = collected.saturating_add(1);
                 }
             }
         }
@@ -2330,14 +2368,6 @@ impl EscrowContract {
 
     /// Return all matches that are in Active state (fully funded).
     pub fn get_active_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
-        // Extend ActiveMatches TTL if the key exists (keeps the index alive on reads)
-        if env.storage().persistent().has(&DataKey::ActiveMatches) {
-            env.storage().persistent().extend_ttl(
-                &DataKey::ActiveMatches,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-        }
         Self::collect_matches_by_state(&env, MatchState::Active)
     }
 
@@ -2375,7 +2405,8 @@ impl EscrowContract {
 
     /// Return all match IDs for a given player (past and present).
     ///
-    /// Deprecated: use `get_player_matches_paginated` to avoid unbounded return sizes.
+    /// DEPRECATED: use `get_player_matches_paginated` instead.
+    /// Returns at most MAX_UNBOUNDED_MATCH_RESULTS to cap per-call cost.
     pub fn get_player_matches(env: Env, player: Address) -> Result<soroban_sdk::Vec<u64>, Error> {
         let key = DataKey::PlayerMatches(player.clone());
         let matches: soroban_sdk::Vec<u64> = env
@@ -2388,7 +2419,15 @@ impl EscrowContract {
                 .persistent()
                 .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
         }
-        Ok(matches)
+
+        let mut result = soroban_sdk::vec![&env];
+        for (i, id) in matches.iter().enumerate() {
+            if i >= MAX_UNBOUNDED_MATCH_RESULTS as usize {
+                break;
+            }
+            result.push_back(id);
+        }
+        Ok(result)
     }
 
     /// Return a page of match IDs for a given player.
