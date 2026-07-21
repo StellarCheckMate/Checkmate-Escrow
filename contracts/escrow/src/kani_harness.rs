@@ -17,6 +17,7 @@ mod kani_verification {
     use crate::formal_verification::*;
     use crate::types::MatchState;
     use std::collections::HashMap;
+    use std::{println, vec};
 
     /// HARNESS 1: INV_NO_DOUBLE_PAYOUT
     /// 
