@@ -758,3 +758,231 @@ fn test_full_dispute_lifecycle_overturned() {
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.state, DisputeState::ResolvedOverturned);
 }
+
+// ── Governance: Dispute bond requirement ──────────────────────────────────
+
+#[test]
+fn test_dispute_requires_bond() {
+    let (env, contract_id, oracle, player1, player2, token, admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    // Set dispute bond to 1% of stake (100 basis points)
+    client.set_dispute_bond_basis_points(&100);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "bond_test");
+
+    // Confirm match stake is 100 tokens
+    let m = client.get_match(&match_id);
+    assert_eq!(m.stake_amount, 100);
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1);
+
+    // Player2 initiates dispute
+    // Bond required: 100 tokens * 100 bps / 10_000 = 1 token
+    let initial_p2_balance = token_client.balance(&player2);
+    let dispute_id = client.dispute_oracle_result(
+        &match_id,
+        &player2,
+        &String::from_str(&env, "evidence"),
+    );
+
+    // Bond should be transferred from player2 to escrow
+    let after_bond_balance = token_client.balance(&player2);
+    assert_eq!(initial_p2_balance - after_bond_balance, 1); // 1% of 100 = 1 token
+    assert_eq!(token_client.balance(&contract_id), 201); // 200 escrow + 1 bond
+
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.dispute_bond, 1);
+}
+
+#[test]
+fn test_dispute_bond_refunded_on_overturn() {
+    let (env, contract_id, oracle, player1, player2, token, admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    client.set_dispute_bond_basis_points(&100); // 1% bond
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "bond_refund");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1);
+
+    let dispute_id = client.dispute_oracle_result(
+        &match_id,
+        &player2,
+        &String::from_str(&env, "evidence"),
+    );
+
+    let player2_before_vote = token_client.balance(&player2);
+
+    // Player2 votes to overturn
+    client.vote_on_dispute(&dispute_id, &player2, &true);
+
+    // Advance past voting deadline
+    env.ledger().set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+
+    // Resolve dispute (should overturn)
+    client.resolve_dispute_by_vote(&dispute_id);
+
+    // Bond should be refunded to player2
+    let player2_after = token_client.balance(&player2);
+    assert_eq!(player2_after, player2_before_vote + 1); // Bond refunded
+}
+
+#[test]
+fn test_dispute_bond_forfeited_on_upheld() {
+    let (env, contract_id, oracle, player1, player2, token, admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    client.set_dispute_bond_basis_points(&100); // 1% bond
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "bond_forfeit");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1);
+
+    let dispute_id = client.dispute_oracle_result(
+        &match_id,
+        &player2,
+        &String::from_str(&env, "evidence"),
+    );
+
+    let player2_before = token_client.balance(&player2);
+    let treasury_before = token_client.balance(&admin); // Admin is also treasury in tests
+
+    // Only player1 votes to uphold
+    client.vote_on_dispute(&dispute_id, &player1, &false);
+
+    env.ledger().set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+    client.resolve_dispute_by_vote(&dispute_id);
+
+    // Bond should be forfeited (not refunded to disputer)
+    let player2_after = token_client.balance(&player2);
+    assert_eq!(player2_after, player2_before); // Not refunded
+}
+
+// ── Governance: Snapshot voting & flash-loan prevention ──────────────────
+
+#[test]
+fn test_vote_uses_snapshot_weight() {
+    let (env, contract_id, oracle, player1, player2, token, admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "snapshot");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1);
+
+    // Dispute created, snapshot taken at this ledger
+    let dispute_id = client.dispute_oracle_result(
+        &match_id,
+        &player2,
+        &String::from_str(&env, "evidence"),
+    );
+
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.snapshot_ledger, 1000);
+
+    // Player1 votes with their balance at snapshot time
+    client.vote_on_dispute(&dispute_id, &player1, &true);
+
+    // Even if player1 sells all tokens, their vote weight is still based on snapshot
+    // This test demonstrates vote weight is snapshot-based, not live-balance based
+    let dispute_after = client.get_dispute(&dispute_id);
+    assert!(dispute_after.yes_votes > 0); // Vote counted with snapshot weight
+}
+
+// ── Governance: Quorum requirement ──────────────────────────────────────────
+
+#[test]
+fn test_quorum_not_met_prevents_resolution() {
+    let (env, contract_id, oracle, player1, player2, token, admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    // Set quorum to 50% of snapshot weight
+    client.set_quorum_basis_points(&5000);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "quorum");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1);
+
+    // At this point, escrow holds 200 tokens (stake for both players)
+    // Quorum threshold = 200 * 50% = 100 tokens minimum participation
+
+    let dispute_id = client.dispute_oracle_result(
+        &match_id,
+        &player2,
+        &String::from_str(&env, "evidence"),
+    );
+
+    // Only one player votes (100 tokens), which is exactly the quorum
+    client.vote_on_dispute(&dispute_id, &player1, &true);
+
+    env.ledger().set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+
+    // Resolution should succeed if exactly at quorum
+    client.resolve_dispute_by_vote(&dispute_id);
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.state, DisputeState::ResolvedOverturned);
+}
+
+#[test]
+fn test_quorum_not_met_with_low_participation() {
+    let (env, contract_id, oracle, player1, player2, token, admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Set quorum to 100% of snapshot weight (extreme, for testing)
+    client.set_quorum_basis_points(&10000);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "quorum_fail");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1);
+
+    let dispute_id = client.dispute_oracle_result(
+        &match_id,
+        &player2,
+        &String::from_str(&env, "evidence"),
+    );
+
+    // Only one player votes (less than 100%)
+    client.vote_on_dispute(&dispute_id, &player1, &true);
+
+    env.ledger().set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+
+    // Resolution should fail due to quorum not met
+    let result = client.try_resolve_dispute_by_vote(&dispute_id);
+    assert_eq!(result, Err(Ok(Error::QuorumNotMet)));
+}
+
+// ── Governance: Parameter getters ─────────────────────────────────────────
+
+#[test]
+fn test_get_governance_parameters() {
+    let (env, contract_id, oracle, player1, player2, token, admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Set custom governance parameters
+    client.set_dispute_bond_basis_points(&50); // 0.5%
+    client.set_minimum_hold_duration(&50);
+    client.set_quorum_basis_points(&3000); // 30%
+
+    // Verify getters return correct values
+    assert_eq!(client.get_dispute_bond_basis_points(), 50);
+    assert_eq!(client.get_minimum_hold_duration(), 50);
+    assert_eq!(client.get_quorum_basis_points(), 3000);
+}

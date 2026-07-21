@@ -119,12 +119,16 @@ pub enum DataKey {
     PlayerBalanceSnapshot(Address, u64),
     /// Total count of player balance snapshots (monotonic).
     PlayerBalanceSnapshotCount(Address),
-    /// Active match for a player: indexed O(1) removal. Replaces the single ActiveMatches vector.
-    ActiveMatch(Address, u64),
-    /// Count of currently-active matches for a player, used to enforce per-player cap.
-    PlayerActiveMatchCount(Address),
-    /// Cached count of completed matches for a player, incremented once per completion.
-    PlayerCompletedMatchCount(Address),
+    /// Vote weight snapshot for a dispute voter at dispute-creation time.
+    DisputeVoteWeight(u64, Address),
+    /// Minimum bond amount required to open a dispute (basis points of match stake).
+    DisputeBondBasisPoints,
+    /// Minimum ledger hold duration required for vote eligibility.
+    MinimumHoldDuration,
+    /// Quorum threshold as percentage of dispute snapshot weight (basis points).
+    QuorumBasisPoints,
+    /// Oracle address implicated by a dispute result (used for automatic slashing).
+    DisputeOracle(u64),
 }
 
 /// The lifecycle event that triggered a balance snapshot.
@@ -167,6 +171,14 @@ pub struct Dispute {
     pub overturn_votes: u32,
     pub yes_votes: u32,
     pub no_votes: u32,
+    /// Bonded stake required to open dispute; refunded on overturn, forfeited on upheld.
+    pub dispute_bond: i128,
+    /// Snapshot ledger for vote weight calculation; prevents flash-loan acquisition attacks.
+    pub snapshot_ledger: u32,
+    /// Total participating weight at vote snapshot; used for quorum calculation.
+    pub snapshot_total_weight: i128,
+    /// Minimum participation weight required for resolution.
+    pub quorum_threshold: i128,
 }
 
 /// A point-in-time record of a match's escrowed balance, taken at key
