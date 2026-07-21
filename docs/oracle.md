@@ -1,8 +1,33 @@
 ## Health Check
 
-The oracle exposes a /health endpoint to monitor connectivity and uptime.
+The oracle exposes a `/health` endpoint to monitor real-time connectivity and dependency health.
 
 **Endpoint:** GET /health
+
+Returns a comprehensive health status report including:
+- Overall service status: `healthy`, `degraded`, or `unhealthy`
+- Per-dependency checks (Stellar RPC, escrow contract, oracle contract, chess APIs)
+- Latency metrics for each dependency
+- Synthetic canary check status (planned)
+- Service uptime counter
+
+**Full documentation:** See [docs/monitoring-health-checks.md](monitoring-health-checks.md)
+
+**Integration guide:** See [docs/health-check-integration.md](health-check-integration.md)
+
+The health check system runs every 30 seconds and performs real connectivity
+verification to each critical dependency. Unlike the old hardcoded response, the
+health check now:
+
+1. Verifies Stellar RPC connectivity with actual `getNetwork` calls
+2. Tests escrow contract reachability via `getLedgerEntries`
+3. Tests oracle contract reachability
+4. Checks chess platform API availability (Lichess and Chess.com)
+5. Distinguishes transient failures (rate limits, timeouts) from permanent outages
+
+---
+
+## Oracle Contract Role
 
 The escrow contract uses its configured oracle address as the authoritative
 permission for submitting results to trigger payouts. The oracle contract is

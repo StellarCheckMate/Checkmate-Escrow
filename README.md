@@ -162,6 +162,7 @@ Prefer to learn by watching or testing yourself?
 - [Architecture Overview](docs/architecture.md)
 - [Oracle Design](docs/oracle.md)
 - [Threat Model & Security](docs/security.md)
+- [Balance-Privacy Model](docs/privacy-model.md) — what the balance-snapshot APIs hide from non-admins, and what they don't
 - [Roadmap](docs/roadmap.md)
 - [Deployment Guide](docs/deployment.md)
 - [Error Codes Reference](docs/error-codes.md) — every contract error code, its cause, and how to recover

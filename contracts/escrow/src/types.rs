@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, String};
+use soroban_sdk::{contracttype, Address, BytesN, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -188,6 +188,12 @@ pub struct Dispute {
 /// `MAX_SNAPSHOTS_PER_MATCH`); `index` identifies the snapshot's position in
 /// the full chronological sequence so callers can detect gaps caused by
 /// pruning of older entries.
+///
+/// `commitment` is a SHA-256 hash-commitment to `(stake_amount,
+/// escrow_balance, nonce)`, computed once when the snapshot is recorded. It
+/// lets a non-admin caller (see `redact_snapshot`) hold a value that is
+/// verifiable against a later admin disclosure without ever seeing
+/// `stake_amount`/`escrow_balance` themselves. See `docs/privacy-model.md`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct BalanceSnapshot {
@@ -204,6 +210,15 @@ pub struct BalanceSnapshot {
     pub escrow_balance: i128,
     pub player1_deposited: bool,
     pub player2_deposited: bool,
+    /// Random salt the commitment is bound to. Only ever populated in the
+    /// admin's full-access view — redacted to zero elsewhere so it cannot be
+    /// used to re-derive or brute-force `commitment` ahead of an intentional
+    /// admin disclosure.
+    pub nonce: BytesN<32>,
+    /// `sha256(stake_amount || escrow_balance || nonce)`. Present in both the
+    /// full and redacted views so a non-admin caller still has something
+    /// verifiable in place of the zeroed-out amounts.
+    pub commitment: BytesN<32>,
 }
 
 /// A point-in-time record of a player's aggregate escrow balance across all
@@ -233,4 +248,26 @@ pub struct PlayerBalanceSnapshot {
     pub ledger: u64,
     /// Aggregate escrow balance captured at this point in time.
     pub balance: i128,
+}
+
+/// Result of `get_balance_at_timestamp`, distinguishing a genuine zero
+/// balance from data the ring buffer has pruned away.
+///
+/// Returning a bare `i128` made these two cases indistinguishable: a
+/// caller had no way to tell "this player had 0 escrowed at that ledger"
+/// from "the answer might be nonzero but the snapshot that would prove it
+/// has been overwritten". See `docs/privacy-model.md`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BalanceAtTimestamp {
+    /// A snapshot at or before the requested ledger was found and retained;
+    /// this is the player's aggregate escrow balance at that point.
+    Known(i128),
+    /// The player has no snapshot at or before the requested ledger, and no
+    /// pruning has occurred — this is a genuine absence of history, not a
+    /// blind spot.
+    NoHistory,
+    /// The ring buffer has overwritten every snapshot old enough to answer
+    /// this query. The true balance at that point is unknown, not zero.
+    Pruned,
 }
