@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, String};
+use soroban_sdk::{contracttype, Address, String, Vec};
 
 /// Canonical result enum shared conceptually with the escrow contract.
 /// Variants mirror escrow's `Winner` enum for consistency.
@@ -48,6 +48,39 @@ pub struct OracleRegistration {
     pub token: Address,
 }
 
+/// A single registered oracle's vote for a specific match, recorded so a
+/// second, conflicting submission from the same oracle for the same match
+/// can be detected as equivocation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleVoteRecord {
+    pub game_id: String,
+    pub platform: Platform,
+    pub result: Winner,
+}
+
+/// One distinct (game_id, platform, result) candidate submitted for a match,
+/// and the set of independently-registered oracles that have voted for it.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CandidateTally {
+    pub game_id: String,
+    pub platform: Platform,
+    pub result: Winner,
+    pub submitters: Vec<Address>,
+}
+
+/// In-progress m-of-n consensus state for a match: every distinct candidate
+/// result submitted so far, and whether the match has been flagged as an
+/// irreconcilable dispute (no remaining eligible oracle vote could push any
+/// candidate over the configured threshold).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ConsensusState {
+    pub candidates: Vec<CandidateTally>,
+    pub disputed: bool,
+}
+
 #[contracttype]
 pub enum DataKey {
     Admin,
@@ -62,6 +95,16 @@ pub enum DataKey {
     /// Sliding window submission counters for the daily limit, keyed by oracle address.
     OracleDailyWindow(Address),
     Rate(Address, Address),
+    /// Number of matching independent-oracle submissions required to finalize
+    /// a match result via `submit_oracle_result`. Defaults to 1.
+    ConsensusThreshold,
+    /// Every address ever registered via `register_oracle_with_stake`.
+    OracleSet,
+    /// In-progress consensus tally for a match, keyed by match_id. Removed
+    /// once the match is finalized.
+    MatchVotes(u64),
+    /// A single oracle's recorded vote for a match, keyed by (match_id, oracle).
+    OracleVote(u64, Address),
 }
 
 /// Configurable submission limits for a single oracle address.

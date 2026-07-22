@@ -189,7 +189,11 @@ Both contracts implement emergency pause functionality for rapid response to sec
 1. **No Native Token Support**: Only supports Stellar assets (XLM, USDC), not native tokens
 2. **Fixed Timeout**: Match expiration timeout is hardcoded (~24 hours)
 3. **No Partial Withdrawals**: Players cannot withdraw partial stakes
-4. **Single Oracle**: Only one oracle address per escrow contract
+4. **Single Oracle (EscrowContract)**: `EscrowContract` still trusts exactly one
+   configured oracle address as the authoritative trigger for payouts (see
+   `submit_result` / `get_oracle`). This is unchanged by the m-of-n consensus
+   feature below, which lives in the separate `OracleContract` and governs its
+   own audit-log finalization, not `EscrowContract`'s payout authorization.
 
 ### Oracle Limitations
 
@@ -197,6 +201,16 @@ Both contracts implement emergency pause functionality for rapid response to sec
 2. **Rate Limiting**: Subject to platform API rate limits
 3. **Game Format**: Only supports standard chess games, not variants
 4. **Real-time Delay**: Results submitted after games complete, not in real-time
+5. **`OracleContract` admin override survives m-of-n**: `OracleContract` now
+   supports genuine m-of-n oracle consensus (`submit_oracle_result`,
+   `set_consensus_threshold`) with load-bearing staking/slashing — see
+   [docs/oracle.md § m-of-n Oracle Consensus](oracle.md#m-of-n-oracle-consensus)
+   for the protocol, its Byzantine-fault-tolerance bound, and the migration
+   path. However, the legacy admin-gated `submit_result` /
+   `submit_batch_results` functions remain callable regardless of the
+   configured threshold, so the admin key retains a standing unilateral
+   override on `OracleContract`'s own result storage even in an otherwise
+   fully-migrated m-of-n deployment.
 
 ### Platform Limitations
 
@@ -207,7 +221,16 @@ Both contracts implement emergency pause functionality for rapid response to sec
 ### Security Limitations
 
 1. **Admin Trust**: Admin keys must be kept secure (no on-chain enforcement)
-2. **Oracle Centralization**: Single point of failure for result verification
+2. **Oracle Centralization**: `EscrowContract` payouts remain gated by a
+   single configured oracle address (see above) regardless of how many
+   independent oracles are registered and voting in `OracleContract`.
+   Within `OracleContract` itself, centralization is now opt-in rather than
+   structural: an admin that configures `set_consensus_threshold(1)` (the
+   default) or continues using `submit_result` keeps a single point of
+   failure for result verification; raising the threshold and registering
+   independent oracles trades that for the Byzantine-fault-tolerance bound
+   documented in [docs/oracle.md](oracle.md#byzantine-fault-tolerance-bound),
+   at the cost of the residual admin override noted above.
 3. **No Upgrade Path**: No built-in contract upgrade mechanism
 4. **Event Monitoring**: Security depends on off-chain monitoring of contract events
 

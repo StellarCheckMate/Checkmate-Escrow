@@ -47,4 +47,5 @@ pub enum Error {
     QuorumNotMet = 42,
     InsufficientHoldingDuration = 43,
     OracleSlashFailed = 44,
+    TooManyActiveMatches = 45,
 }

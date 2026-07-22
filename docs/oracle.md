@@ -33,7 +33,10 @@ The escrow contract uses its configured oracle address as the authoritative
 permission for submitting results to trigger payouts. The oracle contract is
 supplementary: it does not authorise escrow payouts or act as a gatekeeper for
 escrow result submission. It provides an audit log and an independent on-chain
-record of results that can be queried later.
+record of results that can be queried later — and, as of the m-of-n consensus
+feature described below, it can itself require independent agreement from
+multiple staked oracles before that record is written, rather than trusting a
+single admin-controlled submitter.
 
 The off-chain oracle service today is the trusted operator that:
 1. verifies the platform result for `game_id` using an external chess API,
@@ -47,7 +50,298 @@ The two contracts are separate:
 - `EscrowContract` enforces match state, funding, and oracle address
   authentication.
 - `OracleContract` enforces admin-only result storage and exposes public or
-  admin-gated read interfaces.
+  admin-gated read interfaces. It additionally supports a genuine multi-oracle
+  consensus path — see [m-of-n Oracle Consensus](#m-of-n-oracle-consensus).
+
+---
+
+## m-of-n Oracle Consensus
+
+### Background
+
+Earlier versions of `OracleContract` shipped staking primitives
+(`register_oracle_with_stake` / `slash_oracle`) that looked like the
+foundation of a decentralized oracle set, but nothing in the contract actually
+required multiple oracles to agree. `submit_result` and `submit_batch_results`
+are gated purely by `admin.require_auth()`, and their stake check only ever
+looks up `OracleRegistration(admin)` — because the admin is the only address
+that can call them. In effect, the "oracle" was a single trusted address, and
+the staking/slashing machinery was decorative: it could not be triggered by
+anything other than a manual admin call.
+
+`submit_oracle_result` (below) is the genuine multi-oracle path. It makes the
+existing staking machinery load-bearing: a result-submitting oracle without
+adequate stake is rejected, and provable equivocation triggers automatic
+slashing. `submit_result` / `submit_batch_results` are unchanged and remain
+available — see [Migration path](#migration-path-from-single-oracle).
+
+### Registration and threshold
+
+Each oracle registers independently with its own key and its own stake:
+
+```rust
+oracle_client.register_oracle_with_stake(&oracle_address, &stake_amount, &token);
+```
+
+Registering appends the address to the contract's oracle set (queryable via
+`get_registered_oracle_count`). The admin configures how many *distinct*
+registered oracles must submit a matching result before it finalizes:
+
+```rust
+oracle_client.set_consensus_threshold(&m); // m ∈ [1, n]
+```
+
+The threshold defaults to **1** if never set — the degenerate single-oracle
+configuration described in [Migration path](#migration-path-from-single-oracle).
+`get_consensus_threshold()` reads the current value.
+
+### Submitting a vote
+
+```rust
+oracle_client.submit_oracle_result(&oracle_address, &match_id, &game_id, &platform, &result);
+```
+
+Unlike `submit_result`, this is authenticated by the **submitting oracle**,
+not the admin (`oracle_address.require_auth()`). Each call:
+
+1. Rejects if the contract is paused, uninitialized, `game_id` is empty, the
+   caller never registered stake (`NotRegisteredOracle`), the caller's stake
+   has been slashed to zero (`InsufficientStake`), the match is already
+   finalized (`AlreadySubmitted`), or the caller's per-oracle rate limit is
+   exceeded (`RateLimitExceeded`) — see [Oracle Submission Rate
+   Limiting](#oracle-submission-rate-limiting), which applies identically to
+   this path.
+2. Groups the vote into a *candidate*: the distinct `(game_id, platform,
+   result)` tuple it matches. Each candidate tracks the list of oracles that
+   voted for it.
+3. If a candidate's submitter count reaches the configured threshold, the
+   match **finalizes**: the winning candidate is written to the same
+   `Result(match_id)` storage that `submit_result` writes, so `get_result` /
+   `has_result` behave identically regardless of which path finalized the
+   match.
+4. If no candidate has reached the threshold yet, the match stays pending —
+   query `get_match_votes(match_id)` to see the current tally.
+
+With the default threshold of 1, a single registered oracle's vote finalizes
+immediately: this is the m-of-n code path running in its n=1 degenerate form,
+distinct from (but behaviourally equivalent to) the legacy admin-gated
+`submit_result`.
+
+### Disagreement handling
+
+Disagreement is resolved with an explicit, two-tier policy: **majority wins,
+minority is slashed**, with an **admin-resolved deadlock fallback** for splits
+that can never resolve on their own.
+
+**1. Majority wins, minority is slashed (the common case).** When a
+candidate's vote count reaches the threshold, the match finalizes with that
+result. Every oracle that had already voted for a *different* candidate for
+the same match is automatically slashed `MINORITY_SLASH_BPS` (10%) of its
+remaining stake, transferred to the admin/treasury address, and an
+`oracle / minority` event is emitted naming the slashed oracle. The penalty is
+deliberately lighter than the equivocation penalty (below) because landing in
+the minority can reflect an honest error — a stale platform-API read, a
+transient network partition — rather than malice.
+
+**2. Deadlock → disputed → admin resolution (the unresolvable case).** After
+every vote that doesn't finalize, the contract checks whether consensus is
+still mathematically reachable: it counts the registered, currently-staked
+oracles that haven't yet voted on this match (`remaining_eligible_oracles`),
+and checks whether *any* existing candidate's vote count plus that remaining
+pool could still reach the threshold. If not — for example, a 3-way split
+among 3 oracles at threshold 2, where every oracle has already voted for a
+different result — the match is flagged `disputed` (`get_match_votes` returns
+`disputed: true`, and an `oracle / disputed` event fires) instead of hanging
+forever waiting for votes that can never arrive.
+
+A disputed match is resolved by the admin, who acts as tie-breaker of last
+resort — consistent with the admin's existing ultimate authority elsewhere in
+this contract (`slash_oracle`, `update_admin`, `pause`):
+
+```rust
+oracle_client.resolve_disputed_match(&match_id, &game_id, &platform, &result);
+```
+
+This finalizes the match with the admin's chosen result and slashes
+`MINORITY_SLASH_BPS` from every oracle whose recorded vote disagreed with it —
+so attempting to force a deadlock (to trigger a slower, admin-mediated path)
+still costs a losing oracle its stake, the same as losing an ordinary
+majority vote.
+
+We chose this policy — rather than escalating every disagreement into
+`EscrowContract`'s heavier bonded, snapshot-based dispute-voting system (see
+[docs/dispute-governance.md](dispute-governance.md)) — because that mechanism
+is designed for economic disputes over a *single* asserted result raised by
+third-party token holders, not for reconciling *which of several
+independently-submitted oracle results* to accept in the first place. Routing
+every m-of-n disagreement through it would mean every close vote incurs a
+bond, a voting period, and a quorum check, even though the oracle contract
+already has the information needed to resolve most disagreements immediately
+via majority count. The admin-resolution fallback here is intentionally
+narrow: it only fires when the vote is *unresolvable* by counting, not
+whenever there's any disagreement at all. A future iteration could route
+`resolve_disputed_match` through the escrow dispute-voting system instead of
+direct admin authority, trading a slower resolution for removing the admin as
+a trust bottleneck in the rare deadlock case — see [Known
+limitations](#known-limitations-of-this-design).
+
+### Equivocation
+
+If the *same* oracle submits two different `(game_id, platform, result)`
+votes for the *same* `match_id`, the second submission is provable
+equivocation: the oracle has signed two mutually-exclusive claims about the
+same event. It cannot be an honest mistake in the way a minority vote can — an
+honest oracle simply doesn't re-submit a different answer to the same
+question. The vote is discarded (not counted toward any candidate) and the
+oracle's **entire remaining stake** is slashed (`EQUIVOCATION_SLASH_BPS`,
+100%) — effectively ejecting it from further participation, since
+`submit_oracle_result` rejects any oracle with `oracle_stake <= 0` with
+`InsufficientStake`.
+
+Equivocation slashing is signaled by the `oracle / equivoc` event rather than
+an error return. This is a deliberate consequence of Soroban's execution
+model: a contract call that returns `Err` reverts **every** storage write
+made during that call, including the slash. Returning an error here would
+silently undo the punishment it was reporting. Off-chain callers should treat
+a submission that emits `oracle / equivoc` as rejected, exactly as if it had
+errored, but detect it by watching contract events rather than the call's
+return value.
+
+### Byzantine-fault-tolerance bound
+
+Let `n` be the number of registered, staked oracles and `m` be the configured
+threshold. Let `f` be the number of oracles that collude (vote identically on
+a false result, in an attempt to force it through).
+
+- **Safety** (a colluding minority cannot force a false result): requires
+  `f < m`. If `f ≥ m`, the colluding set alone can supply enough matching
+  votes to finalize before any honest oracle needs to act at all.
+- **Liveness** (the honest oracles can still finalize the true result even if
+  every colluding oracle refuses to cooperate): requires `n − f ≥ m`, i.e.
+  `f ≤ n − m`.
+
+Combining both: the system tolerates up to
+
+```
+f_max = min(m − 1, n − m)
+```
+
+colluding oracles while still guaranteeing both that a false result can't be
+forced and that a true result can still be finalized. This bound is maximized
+by a simple-majority threshold `m = ⌊n/2⌋ + 1`, which gives the familiar
+`f_max = ⌊(n − 1) / 2⌋` — the same "more than half honest" bound as classical
+BFT quorum systems. Choosing `m` closer to `n` (e.g. requiring near-unanimity)
+tightens the safety margin but weakens liveness, since it takes fewer
+colluding/offline oracles to prevent the honest majority from ever reaching
+the threshold; choosing `m` closer to 1 does the reverse.
+
+This is a **threshold-voting bound backed by economic slashing**, not a full
+Byzantine state-machine-replication protocol: there is no leader election,
+view-change, or cryptographic message-authentication step beyond Soroban's
+own `require_auth`. A colluding set larger than `f_max` is not cryptographically
+prevented from finalizing a false result — it is only made expensive after the
+fact via the minority/equivocation slashing described above, and only for
+oracles that end up provably in the minority or that equivocate. Operators
+choosing `m` should size it, and the number of independently-operated oracles
+`n`, so that `f_max` exceeds the number of oracle operators they are willing
+to assume could plausibly collude.
+
+### Migration path from single-oracle
+
+The original single-admin-oracle deployment continues to work unmodified:
+
+| | Legacy (`submit_result`) | Consensus (`submit_oracle_result`) |
+|---|---|---|
+| Auth | `admin.require_auth()` | `oracle.require_auth()` (any registered oracle) |
+| Finalizes on | First (and only) call | Threshold-many matching votes |
+| Default n | 1 (hardcoded — only admin can call it) | 1 (`ConsensusThreshold` defaults to 1) |
+| Disagreement | Not possible — one submitter | Majority-wins-with-slash, or admin-resolved deadlock |
+
+To migrate an existing single-oracle deployment to genuine m-of-n:
+
+1. **Register additional independent oracles.** Each new oracle operator
+   calls `register_oracle_with_stake` with its own key and its own stake —
+   no admin action is required to add an oracle to the set.
+2. **Raise the threshold.** Once enough oracles are registered, the admin
+   calls `set_consensus_threshold(m)` with `1 < m ≤ n`. Existing pending
+   votes recorded before the change are re-evaluated against the new
+   threshold on their next submission; already-finalized results are
+   unaffected.
+3. **Point the off-chain oracle fleet at `submit_oracle_result`.** Each
+   independent oracle service instance authenticates as itself instead of a
+   shared admin key.
+4. **(Optional) retire the legacy path operationally.** `submit_result` and
+   `submit_batch_results` remain callable by the admin indefinitely — they
+   are not disabled by raising the threshold. This is intentional for
+   backward compatibility and emergency admin override, but it also means
+   the admin retains a standing unilateral override regardless of the
+   configured m-of-n threshold. Deployments that want the full
+   Byzantine-fault-tolerance guarantee above to hold in practice, not just on
+   the `submit_oracle_result` path, should treat the admin key with the same
+   operational care as an `f_max`-sized set of colluding oracles (e.g. behind
+   a multisig or hardware-backed signer used only for emergencies), since it
+   can unilaterally finalize any match regardless of the registered oracles'
+   votes. Fully removing that override — e.g. a one-way "renounce single-
+   submitter admin path" switch — is not implemented; see [Known
+   limitations](#known-limitations-of-this-design).
+
+To roll back to single-oracle behavior, call `set_consensus_threshold(1)`;
+any one registered oracle's vote (or the admin via the legacy path) then
+finalizes a match again.
+
+### Known limitations of this design
+
+- The admin retains a standing override via `submit_result` /
+  `submit_batch_results` regardless of the configured threshold (see above).
+- The deadlock-resolution fallback (`resolve_disputed_match`) is admin-gated
+  rather than routed through `EscrowContract`'s dispute-voting system; see the
+  rationale in [Disagreement handling](#disagreement-handling).
+- `remaining_eligible_oracles` scans the full registered oracle set on every
+  non-finalizing vote (see the [gas benchmarks](#consensus-gas-benchmarks)
+  below for measured cost at n = 3/5/10/25) — deployments expecting very
+  large oracle sets (hundreds+) should budget for this scaling when sizing
+  per-transaction resource limits.
+- Vote weight is equal per oracle regardless of stake size; a larger stake
+  only means a larger slashing penalty in absolute terms, not more voting
+  power. Stake-weighted voting was considered out of scope for this change.
+
+### Consensus gas benchmarks
+
+`contracts/oracle/tests/benchmarks.rs` measures `submit_oracle_result` at
+n = 3, 5, 10, and 25 registered oracles, run via:
+
+```bash
+cargo test -p oracle --test benchmarks -- --nocapture
+```
+
+It isolates two costs that scale differently with the registered oracle set
+size `n`:
+
+- **Pending vote** — a submission that does not yet reach the threshold, and
+  therefore runs the O(n) deadlock-detection scan over the full registered
+  set on every call.
+- **Finalizing vote** — the submission that crosses the threshold; its extra
+  cost comes from walking each losing candidate's submitter list to
+  auto-slash the minority, so it scales with how many oracles already voted
+  for a different result, not with `n` directly.
+
+A JSON report is written to
+`reports/performance/oracle-consensus-benchmark-results.json`. Representative
+CPU-instruction costs from a local run (exact numbers vary by SDK/host
+version — treat the report as authoritative over any numbers reproduced
+here):
+
+| n (registered oracles) | Pending vote (CPU insns) | Finalizing vote (CPU insns) |
+|---:|---:|---:|
+| 3 | ~390K | ~620K |
+| 5 | ~500K | ~730K |
+| 10 | ~840K | ~1.00M |
+| 25 | ~2.11M | ~1.72M |
+
+The pending-vote cost grows roughly linearly with `n` (the deadlock scan
+touches every registered oracle); the finalizing-vote cost grows more slowly,
+since it is bounded by the number of minority submitters rather than the full
+registry.
 
 ---
 
