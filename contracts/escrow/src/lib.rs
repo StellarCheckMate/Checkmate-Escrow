@@ -619,7 +619,7 @@ impl EscrowContract {
         let oracle_rate: i128 = env.invoke_contract(
             &oracle_address,
             &Symbol::new(&env, "get_rate"),
-            (&token_a, &token_b),
+            soroban_sdk::vec![&env, token_a.to_val(), token_b.to_val()],
         );
 
         // Verify conversion rate within ±5% of oracle rate

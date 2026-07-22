@@ -24,4 +24,16 @@ pub enum Error {
     InvalidRateLimit = 10,
     /// The oracle does not have enough staked balance to submit a result.
     InsufficientStake = 11,
+    /// `submit_oracle_result` was called by an address that has never
+    /// registered via `register_oracle_with_stake`.
+    NotRegisteredOracle = 12,
+    /// The match's m-of-n consensus has deadlocked (no remaining eligible
+    /// oracle vote can push any candidate result over the threshold) and is
+    /// awaiting admin resolution via `resolve_disputed_match`.
+    MatchDisputed = 14,
+    /// `set_consensus_threshold` was called with a threshold of 0.
+    InvalidThreshold = 15,
+    /// `resolve_disputed_match` was called for a match that is not in a
+    /// disputed (deadlocked) consensus state.
+    MatchNotDisputed = 16,
 }
