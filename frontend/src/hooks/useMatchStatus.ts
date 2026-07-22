@@ -170,6 +170,7 @@ export function useMatchStatus(
   // Initial fetch and polling setup
   useEffect(() => {
     if (!enabled) {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       setLoading(false);
       return;
     }

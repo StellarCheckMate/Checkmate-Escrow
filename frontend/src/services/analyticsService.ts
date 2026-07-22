@@ -97,7 +97,7 @@ export function buildEarningsSeries(matches: MatchSummary[], userAddress: string
   for (const m of completed) {
     const date = m.timestamp!.slice(0, 10);
     const stake = parseFloat(m.stake_amount ?? '0') || 0;
-    let delta = 0;
+    let delta: number;
     if (!m.winner) {
       delta = 0;
     } else if (m.winner === userAddress) {

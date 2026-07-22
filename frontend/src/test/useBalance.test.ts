@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { useBalance } from '../hooks/useBalance';
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockLoadAccount = vi.fn();
 
 vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const actual = await importOriginal<typeof import('@stellar/stellar-sdk')>();
   return {
     ...actual,
