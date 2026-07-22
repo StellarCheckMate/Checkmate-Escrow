@@ -27,7 +27,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Secure key zeroization
 zeroize = { version = "1.7", features = ["derive"] }
 # Ed25519 signing for Stellar transactions
-ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 # Hex encode/decode for key material
 hex = "0.4"
 # Stellar XDR for transaction construction
