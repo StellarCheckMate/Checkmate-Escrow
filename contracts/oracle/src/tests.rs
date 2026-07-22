@@ -1715,3 +1715,688 @@ fn test_get_admin_returns_unauthorized_when_not_initialized() {
     let result = client.try_get_admin();
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
+
+
+// ============================================================================
+// SWAP, SET_RATE, GET_RATE TESTS
+// ============================================================================
+
+#[test]
+fn test_set_rate_requires_admin_auth() {
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+
+    let other = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        let result = client.try_set_rate(&token_addr, &token2_addr, &10_000_000);
+        assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    });
+}
+
+#[test]
+fn test_set_rate_rejects_zero_or_negative_rate() {
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+
+    // As admin, try to set rate = 0
+    env.as_contract(&contract_id, || {
+        let result = client.try_set_rate(&token_addr, &token2_addr, &0);
+        assert_eq!(result, Err(Ok(Error::InvalidRateLimit)));
+    });
+
+    // As admin, try to set rate = -1
+    env.as_contract(&contract_id, || {
+        let result = client.try_set_rate(&token_addr, &token2_addr, &-1);
+        assert_eq!(result, Err(Ok(Error::InvalidRateLimit)));
+    });
+}
+
+#[test]
+fn test_set_rate_admin_can_set() {
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+
+    let rate = 10_000_000i128; // 1:1 after scaling
+    env.as_contract(&contract_id, || {
+        let result = client.try_set_rate(&token_addr, &token2_addr, &rate);
+        assert_eq!(result, Ok(Ok(())));
+    });
+
+    let retrieved = env.as_contract(&contract_id, || {
+        client.get_rate(&token_addr, &token2_addr)
+    });
+    assert_eq!(retrieved, rate);
+}
+
+#[test]
+fn test_get_rate_returns_error_when_rate_not_set() {
+    let (env, contract_id, .., _oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2.address();
+
+    let result = env.as_contract(&contract_id, || {
+        client.try_get_rate(&token_addr, &token2_addr)
+    });
+    assert_eq!(result, Err(Ok(Error::ResultNotFound)));
+}
+
+#[test]
+fn test_swap_rejects_unauthenticated_caller() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+
+    // Set a rate: 1 token_addr = 2 token2
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &20_000_000);
+    });
+
+    // Mint some token2 into the contract so it has funds
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+    token2_client.mint(&contract_id, &1000);
+
+    // Unauthenticated swap attempt should fail
+    env.mock_all_auths_allowing_non_root_auth();
+    let result = env.as_contract(&contract_id, || {
+        client.try_swap(
+            &player1,     // caller
+            &token_addr,  // token_in
+            &token2_addr, // token_out
+            &100,         // amount_in
+            &0,           // min_amount_out
+            &player1,     // recipient
+        )
+    });
+    // Result will be auth failure during the transfer of token_in
+    // (Soroban's require_auth will reject it)
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_swap_rejects_zero_amount_in() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &10_000_000);
+    });
+
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+    token2_client.mint(&contract_id, &1000);
+
+    let result = env.as_contract(&contract_id, || {
+        client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &0, // amount_in = 0
+            &0,
+            &player1,
+        )
+    });
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_swap_rejects_negative_amount_in() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &10_000_000);
+    });
+
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+    token2_client.mint(&contract_id, &1000);
+
+    let result = env.as_contract(&contract_id, || {
+        client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &-100, // amount_in = -100
+            &0,
+            &player1,
+        )
+    });
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_swap_rejects_missing_rate() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+
+    // No rate set between token_addr and token2_addr
+
+    let result = env.as_contract(&contract_id, || {
+        client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &100,
+            &0,
+            &player1,
+        )
+    });
+    assert_eq!(result, Err(Ok(Error::ResultNotFound)));
+}
+
+#[test]
+fn test_swap_rejects_slippage_exceeded_forward_rate() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+
+    // Set rate: 1 token_addr = 2 token2 (rate = 2 * 1e7)
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
+    });
+
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+    token2_client.mint(&contract_id, &1000);
+
+    // Try to swap 100 token_addr for min 300 token2 (but only get 200)
+    let result = env.as_contract(&contract_id, || {
+        client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &100,
+            &300, // min_amount_out too high
+            &player1,
+        )
+    });
+    assert_eq!(result, Err(Ok(Error::SlippageExceeded)));
+}
+
+#[test]
+fn test_swap_rejects_slippage_exceeded_inverse_rate() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+
+    // Set rate inversely: 2 token2 = 1 token_addr (rate = 0.5 * 1e7 = 5_000_000)
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token2_addr, &token_addr, &(5_000_000));
+    });
+
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+    token2_client.mint(&contract_id, &1000);
+
+    // Try to swap 100 token_addr for min 100 token2 (but only get 50)
+    let result = env.as_contract(&contract_id, || {
+        client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &100,
+            &100, // min_amount_out too high
+            &player1,
+        )
+    });
+    assert_eq!(result, Err(Ok(Error::SlippageExceeded)));
+}
+
+#[test]
+fn test_swap_correct_2_sided_settlement_forward_rate() {
+    let (env, contract_id, .., oracle_admin, player1, player2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+
+    // Set rate: 1 token_addr = 2 token2 (rate = 2 * 1e7)
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
+    });
+
+    // Mint player1 has token_addr (from setup), and contract has token2
+    token2_client.mint(&contract_id, &10000);
+
+    let player1_token2_before = token2_client.balance(&player1);
+    let contract_token_addr_before = token::Client::new(&env, &token_addr).balance(&contract_id);
+    let contract_token2_before = token2_client.balance(&contract_id);
+
+    // player1 swaps 100 token_addr for 200 token2
+    env.as_contract(&contract_id, || {
+        let result = client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &100,
+            &200, // Expect exactly 200
+            &player1,
+        );
+        assert_eq!(result, Ok(Ok(())));
+    });
+
+    let player1_token2_after = token2_client.balance(&player1);
+    let contract_token_addr_after = token::Client::new(&env, &token_addr).balance(&contract_id);
+    let contract_token2_after = token2_client.balance(&contract_id);
+
+    // player1 received 200 token2
+    assert_eq!(player1_token2_after - player1_token2_before, 200);
+    // contract received 100 token_addr
+    assert_eq!(contract_token_addr_after - contract_token_addr_before, 100);
+    // contract gave out 200 token2
+    assert_eq!(contract_token2_before - contract_token2_after, 200);
+}
+
+#[test]
+fn test_swap_correct_2_sided_settlement_inverse_rate() {
+    let (env, contract_id, .., oracle_admin, player1, _player2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+
+    // Set rate inversely: 1 token_addr = 0.5 token2 (rate = 5_000_000)
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token2_addr, &token_addr, &(5_000_000));
+    });
+
+    token2_client.mint(&contract_id, &10000);
+
+    let player1_token2_before = token2_client.balance(&player1);
+    let contract_token_addr_before = token::Client::new(&env, &token_addr).balance(&contract_id);
+    let contract_token2_before = token2_client.balance(&contract_id);
+
+    // player1 swaps 100 token_addr for 50 token2
+    env.as_contract(&contract_id, || {
+        let result = client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &100,
+            &50,
+            &player1,
+        );
+        assert_eq!(result, Ok(Ok(())));
+    });
+
+    let player1_token2_after = token2_client.balance(&player1);
+    let contract_token_addr_after = token::Client::new(&env, &token_addr).balance(&contract_id);
+    let contract_token2_after = token2_client.balance(&contract_id);
+
+    // player1 received 50 token2
+    assert_eq!(player1_token2_after - player1_token2_before, 50);
+    // contract received 100 token_addr
+    assert_eq!(contract_token_addr_after - contract_token_addr_before, 100);
+    // contract gave out 50 token2
+    assert_eq!(contract_token2_before - contract_token2_after, 50);
+}
+
+#[test]
+fn test_swap_slippage_bound_at_boundary() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+
+    // Rate: 1 token_addr = 2 token2
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
+    });
+
+    token2_client.mint(&contract_id, &10000);
+
+    // Exact slippage bound: min_amount_out = 200 (exactly what we get)
+    env.as_contract(&contract_id, || {
+        let result = client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &100,
+            &200, // Exact match
+            &player1,
+        );
+        assert_eq!(result, Ok(Ok(())));
+    });
+
+    // One less than the bound should fail
+    let result = env.as_contract(&contract_id, || {
+        client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &100,
+            &201, // One more than we get
+            &player1,
+        )
+    });
+    assert_eq!(result, Err(Ok(Error::SlippageExceeded)));
+}
+
+#[test]
+fn test_swap_cannot_drain_contract_without_funds() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+
+    // Set rate
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
+    });
+
+    // Do NOT mint token2 into the contract
+    // Attempted swap should fail at the transfer step
+    let result = env.as_contract(&contract_id, || {
+        client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &100,
+            &0,
+            &player1,
+        )
+    });
+    // Will fail because the contract doesn't have enough token2 to send out
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_swap_requires_sufficient_token_in_from_caller() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
+    });
+
+    token2_client.mint(&contract_id, &10000);
+
+    // player1 only has 1000 token_addr from setup
+    // Try to swap 1001, should fail
+    let result = env.as_contract(&contract_id, || {
+        client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &1001,
+            &0,
+            &player1,
+        )
+    });
+    assert!(result.is_err()); // Will fail at the transfer step
+}
+
+#[test]
+fn test_swap_to_different_recipient() {
+    let (env, contract_id, .., oracle_admin, player1, player2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
+    });
+
+    token2_client.mint(&contract_id, &10000);
+
+    let player2_token2_before = token2_client.balance(&player2);
+
+    // player1 swaps but sends output to player2
+    env.as_contract(&contract_id, || {
+        let result = client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &100,
+            &200,
+            &player2, // recipient is player2
+        );
+        assert_eq!(result, Ok(Ok(())));
+    });
+
+    let player2_token2_after = token2_client.balance(&player2);
+    assert_eq!(player2_token2_after - player2_token2_before, 200);
+}
+
+#[test]
+fn test_swap_overflow_detection_on_multiplication() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+
+    // Set a huge rate to trigger overflow
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &i128::MAX);
+    });
+
+    token2_client.mint(&contract_id, &10000);
+
+    // Try to swap with a large amount_in that will overflow when multiplied
+    let result = env.as_contract(&contract_id, || {
+        client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &i128::MAX, // Huge amount
+            &0,
+            &player1,
+        )
+    });
+    assert_eq!(result, Err(Ok(Error::Overflow)));
+}
+
+
+// ============================================================================
+// FUZZ TESTS FOR SWAP
+// ============================================================================
+//
+// These fuzz tests exercise swap against a range of adversarial rate, amount,
+// and recipient combinations to detect edge cases and invariant violations.
+
+#[test]
+fn fuzz_swap_various_rates_and_amounts() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+
+    // Test matrix of (rate, amount_in, min_amount_out)
+    let test_cases = vec![
+        (1_000_000, 100, 0),           // 0.1x rate, small amount
+        (10_000_000, 50, 0),           // 1x rate, tiny amount
+        (100_000_000, 200, 0),         // 10x rate, larger amount
+        (5_000_000, 1000, 0),          // 0.5x rate, large amount
+        (20_000_000, 10, 0),           // 2x rate, very small
+        (50_000_000, 999, 0),          // 5x rate, near-max amount from setup
+        (1_000_000, 100, 10),          // 0.1x rate with slippage bound
+        (10_000_000, 100, 100),        // Exact slippage bound
+        (2_000_000, 500, 50),          // 0.2x rate with slippage
+    ];
+
+    for (rate, amount_in, min_out) in test_cases {
+        // Reset contract for each test case
+        let contract_id = env.register_contract(None, OracleContract);
+        let client = OracleContractClient::new(&env, &contract_id);
+        client.initialize(&oracle_admin);
+
+        let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+        let token2_addr = token2.address();
+        let token2_client = StellarAssetClient::new(&env, &token2_addr);
+
+        env.as_contract(&contract_id, || {
+            client.set_rate(&token_addr, &token2_addr, &rate);
+        });
+
+        // Fund contract with sufficient token2
+        token2_client.mint(&contract_id, &100_000_000);
+
+        // Only attempt swap if amount_in is valid
+        if amount_in > 0 {
+            env.as_contract(&contract_id, || {
+                // Calculate expected output
+                let expected_out = (amount_in as i128)
+                    .checked_mul(rate)
+                    .unwrap_or(i128::MAX)
+                    .checked_div(10_000_000)
+                    .unwrap_or(i128::MAX);
+
+                let result = client.try_swap(
+                    &player1,
+                    &token_addr,
+                    &token2_addr,
+                    &amount_in,
+                    &min_out,
+                    &player1,
+                );
+
+                // If min_out <= expected_out, swap should succeed
+                if (min_out as i128) <= expected_out {
+                    assert!(
+                        result.is_ok(),
+                        "Swap failed for rate={}, amount_in={}, min_out={}, expected_out={}",
+                        rate, amount_in, min_out, expected_out
+                    );
+                } else {
+                    // Otherwise should fail with slippage
+                    assert_eq!(
+                        result,
+                        Err(Ok(Error::SlippageExceeded)),
+                        "Expected slippage error for rate={}, amount_in={}, min_out={}, expected_out={}",
+                        rate, amount_in, min_out, expected_out
+                    );
+                }
+            });
+        }
+    }
+}
+
+#[test]
+fn fuzz_swap_boundary_amounts() {
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &10_000_000); // 1:1 rate
+    });
+
+    token2_client.mint(&contract_id, &100_000_000);
+
+    // Test boundary conditions
+    let boundary_amounts = vec![
+        1,                      // Minimum valid amount
+        i128::MAX / 20_000_000, // Large but safe amount
+    ];
+
+    for amount_in in boundary_amounts {
+        if amount_in > 0 {
+            env.as_contract(&contract_id, || {
+                let result = client.try_swap(
+                    &player1,
+                    &token_addr,
+                    &token2_addr,
+                    &amount_in,
+                    &0,
+                    &player1,
+                );
+
+                // All should succeed with sufficient contract balance
+                assert!(
+                    result.is_ok(),
+                    "Swap failed for boundary amount_in={}",
+                    amount_in
+                );
+            });
+        }
+    }
+}
+
+#[test]
+fn fuzz_swap_with_oracle_stake_present() {
+    // Verify that swap cannot drain oracle stakes accidentally
+    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    // Register an oracle with a stake
+    let stake_token = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let stake_token_addr = stake_token.address();
+    let stake_token_client = StellarAssetClient::new(&env, &stake_token_addr);
+
+    stake_token_client.mint(&oracle_admin, &50000);
+    env.as_contract(&contract_id, || {
+        client.register_oracle_with_stake(&oracle_admin, &10000, &stake_token_addr);
+    });
+
+    let contract_stake_before = stake_token_client.balance(&contract_id);
+
+    // Now try to swap a different pair
+    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
+    let token2_addr = token2.address();
+    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+
+    env.as_contract(&contract_id, || {
+        client.set_rate(&token_addr, &token2_addr, &10_000_000);
+    });
+
+    token2_client.mint(&contract_id, &100_000_000);
+
+    env.as_contract(&contract_id, || {
+        let result = client.try_swap(
+            &player1,
+            &token_addr,
+            &token2_addr,
+            &100,
+            &0,
+            &player1,
+        );
+        assert!(result.is_ok());
+    });
+
+    // Verify the stake balance is unchanged (swap didn't touch it)
+    let contract_stake_after = stake_token_client.balance(&contract_id);
+    assert_eq!(
+        contract_stake_before, contract_stake_after,
+        "Swap incorrectly drained oracle stake"
+    );
+}
