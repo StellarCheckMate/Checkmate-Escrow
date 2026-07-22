@@ -24,4 +24,12 @@ pub enum Error {
     InvalidRateLimit = 10,
     /// The oracle does not have enough staked balance to submit a result.
     InsufficientStake = 11,
+    /// The computed `amount_out` from a swap is below the caller's
+    /// `min_amount_out` slippage floor.  The swap is aborted and no
+    /// funds change hands.
+    SlippageExceeded = 12,
+    /// A numeric overflow occurred during swap price computation.
+    Overflow = 13,
+    /// `amount_in` supplied to `swap` must be strictly positive.
+    InvalidAmount = 14,
 }
