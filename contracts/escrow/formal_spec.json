@@ -104,15 +104,16 @@
       "authorization": "player1",
       "preconditions": [
         "same as create_match",
-        "token_b != token",
-        "conversion_rate > 0"
+        "token_b != token_a",
+        "rate > 0",
+        "rate within ±5% of the oracle contract's stored get_rate(token_a, token_b) (or its inverse), where a rate is available"
       ],
       "state_transition": "N/A → Pending (new match)",
       "mutations": [
-        "Match(id) created with state=Pending, conversion_rate, token_b set",
+        "Match(id) created with state=Pending, conversion_rate=rate, token_b set, conversion_rate_ledger=current ledger",
         "all mutations as create_match"
       ],
-      "errors": ["same as create_match + InvalidConversionRate"]
+      "errors": ["same as create_match + ConversionRateOutOfBounds (rate outside the oracle-validated ±5% tolerance; note the similarly-named InvalidConversionRate error variant in errors.rs is currently unused dead code, not returned by this function)"]
     },
     {
       "name": "deposit",
@@ -157,7 +158,8 @@
         "match removed from ActiveMatches index"
       ],
       "errors": [
-        "ContractPaused", "Unauthorized", "MatchNotFound", "InvalidState", "NotFunded"
+        "ContractPaused", "Unauthorized", "MatchNotFound", "InvalidState", "NotFunded",
+        "ConversionRateStalePriceSource (multi-token matches only; execute_payout rejects a conversion_rate validated too long ago)"
       ]
     },
     {
@@ -260,7 +262,7 @@
         "PendingWinner and ResultDeadline entries cleaned up",
         "BalanceSnapshot recorded with reason=Finalized"
       ],
-      "errors": ["MatchNotFound", "MatchNotInPendingResult", "DisputePeriodNotElapsed"]
+      "errors": ["MatchNotFound", "MatchNotInPendingResult", "DisputePeriodNotElapsed", "ConversionRateStalePriceSource (multi-token matches only; execute_payout rejects a conversion_rate validated too long ago)"]
     },
     {
       "name": "dispute_oracle_result",
@@ -309,14 +311,14 @@
         "dispute.state == Active",
         "current_ledger >= dispute.voting_deadline"
       ],
-      "state_transition": "PendingResult → Completed (if result upheld) or PendingResult → Cancelled (if overturned)",
+      "state_transition": "PendingResult → Completed (always; an overturned vote settles as a Draw refund but match.state still becomes Completed, not Cancelled)",
       "mutations": [
-        "dispute.state = ResolvedUpheld (if uphold_votes > overturn_votes) or ResolvedOverturned (if overturn_votes > uphold_votes)",
+        "dispute.state = ResolvedUpheld (if no_votes >= yes_votes) or ResolvedOverturned (if yes_votes > no_votes) — tally uses Dispute.yes_votes/no_votes as mutated by vote_on_dispute; Dispute.uphold_votes/overturn_votes are unused legacy fields",
         "if upheld: execute_payout with stored PendingWinner, match.state = Completed",
-        "if overturned: refund both players, match.state = Cancelled",
+        "if overturned: execute_payout with Winner::Draw (refund both players), match.state = Completed",
         "BalanceSnapshot recorded with reason=Finalized"
       ],
-      "errors": ["DisputeNotFound", "VotingPeriodNotElapsed", "DisputeAlreadyResolved"]
+      "errors": ["DisputeNotFound", "VotingPeriodNotElapsed", "DisputeAlreadyResolved", "ConversionRateStalePriceSource (multi-token matches only; execute_payout rejects a conversion_rate validated too long ago)"]
     },
     {
       "name": "claim_vested_payout",
@@ -375,7 +377,7 @@
     "claim_vested_payout": ["player1_claimed", "player2_claimed"],
     "finalize_match": ["state", "completed_ledger"],
     "dispute_oracle_result": ["state (persisted as PendingResult)"],
-    "resolve_dispute_by_vote": ["state (either Completed or Cancelled)"]
+    "resolve_dispute_by_vote": ["state (always Completed; see entry_points[].state_transition for the overturned-vote nuance)"]
   },
   "critical_invariants": [
     {

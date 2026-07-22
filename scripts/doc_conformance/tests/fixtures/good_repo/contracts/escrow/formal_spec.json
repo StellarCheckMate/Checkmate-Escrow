@@ -1,0 +1,15 @@
+{
+  "contract": "EscrowContract",
+  "version": "1.0",
+  "match_states": [
+    {"state": "Pending", "reachable_from": ["*"], "terminal": false},
+    {"state": "Active", "reachable_from": ["Pending"], "terminal": false},
+    {"state": "Completed", "reachable_from": ["Active"], "terminal": true},
+    {"state": "Cancelled", "reachable_from": ["Pending"], "terminal": true}
+  ],
+  "entry_points": [
+    {"name": "create_match", "state_transition": "N/A -> Pending"},
+    {"name": "get_match", "state_transition": "none"},
+    {"name": "set_match_timeout", "state_transition": "none"}
+  ]
+}

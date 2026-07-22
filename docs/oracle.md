@@ -432,13 +432,104 @@ On-chain persistent storage has a finite TTL (~30 days). In normal operation res
 
 ## has_result vs has_result_admin
 
-(Existing contract documentation continues unchanged.)
+Both functions answer "has a result been submitted for this `match_id`?", but differ in access control:
+
+| Function | Auth Required | Use Case |
+|---|---|---|
+| `has_result(match_id) -> bool` | None (public) | General-purpose polling by indexers, frontends, or the escrow contract's integrators. |
+| `has_result_admin(match_id) -> Result<bool, Error>` | Admin (`require_auth`) | Private-tournament contexts where even the *existence* of a submitted result should not be observable by third parties before an official announcement. Returns `Error::Unauthorized` if the contract is uninitialized or the caller is not the admin. |
+
+Both read the same underlying `DataKey::Result(match_id)` storage entry; `has_result_admin` adds an authorization gate in front of the identical lookup.
 
 ---
 
 ## Data Structures
 
-(Existing contract documentation continues unchanged.)
+The oracle contract's public `#[contracttype]` types, defined in `contracts/oracle/src/types.rs`:
+
+### `ResultEntry`
+
+Returned by `get_result(match_id)`.
+
+| Field | Type | Description |
+|---|---|---|
+| `game_id` | `String` | External game ID from the chess platform. |
+| `platform` | `Platform` | `Lichess` or `ChessDotCom`. |
+| `result` | `Winner` | `Player1`, `Player2`, or `Draw`. |
+| `submitted_ledger` | `u32` | Ledger sequence at submission time. |
+| `submitter` | `Address` | Admin address that submitted the result. |
+
+### `BatchResultEntry`
+
+One entry within the `entries` vector passed to `submit_batch_results`.
+
+| Field | Type | Description |
+|---|---|---|
+| `match_id` | `u64` | Match this entry's result applies to. |
+| `game_id` | `String` | External game ID from the chess platform. |
+| `platform` | `Platform` | `Lichess` or `ChessDotCom`. |
+| `result` | `Winner` | `Player1`, `Player2`, or `Draw`. |
+
+### `OracleRegistration`
+
+Stored per oracle address via `register_oracle_with_stake`; read and mutated by `slash_oracle`.
+
+| Field | Type | Description |
+|---|---|---|
+| `oracle_address` | `Address` | The registered oracle's address. |
+| `oracle_stake` | `i128` | Token stake currently backing this oracle; reduced by `slash_oracle`. |
+| `token` | `Address` | Token contract the stake was posted in. |
+
+### `RateLimitConfig`
+
+Returned by `get_oracle_rate_limits`; set by `set_oracle_rate_limits`.
+
+| Field | Type | Description |
+|---|---|---|
+| `hourly_limit` | `u32` | Max submissions accepted per rolling hour. Defaults to 100 if never set. |
+| `daily_limit` | `u32` | Max submissions accepted per rolling day. Defaults to 1,000 if never set. |
+
+### `RateLimitStatus`
+
+Returned by `get_oracle_rate_limit_status`. The on-chain analogue of HTTP rate-limit response headers.
+
+| Field | Type | Description |
+|---|---|---|
+| `hourly_used` | `u32` | Estimated submissions counted in the current hourly sliding window. |
+| `hourly_limit` | `u32` | Configured (or default) hourly limit. |
+| `hourly_remaining` | `u32` | `hourly_limit - hourly_used`, saturating at 0. |
+| `daily_used` | `u32` | Estimated submissions counted in the current daily sliding window. |
+| `daily_limit` | `u32` | Configured (or default) daily limit. |
+| `daily_remaining` | `u32` | `daily_limit - daily_used`, saturating at 0. |
+
+## Contract Function Reference
+
+The complete public function surface of `OracleContract` (`contracts/oracle/src/lib.rs`). Functions above with dedicated sections are cross-referenced rather than re-described.
+
+| Function | Signature | Description |
+|---|---|---|
+| `initialize` | `(admin: Address)` | One-time setup; stores the admin address. Panics-free — returns `Error::AlreadyInitialized` on a second call. |
+| `is_initialized` | `() -> bool` | Returns whether `initialize` has been called. |
+| `register_oracle_with_stake` | `(oracle_address: Address, stake_amount: i128, token: Address)` | Transfers `stake_amount` of `token` from `oracle_address` into the contract as a slashable bond, recorded in `OracleRegistration`. |
+| `slash_oracle` | `(oracle_address: Address, slash_amount: i128)` | Admin-only. Deducts `slash_amount` from a registered oracle's stake and transfers it to the admin. |
+| `submit_result` | `(match_id: u64, game_id: String, platform: Platform, result: Winner)` | See [Submitting a Result](#submitting-a-result). Admin-authorized, rate-limited, one result per `match_id`. |
+| `submit_batch_results` | `(entries: Vec<BatchResultEntry>)` | All-or-nothing submission of up to `MAX_BATCH_SIZE` (100) results in one call; each entry counts toward the submitting admin's rate limit. |
+| `get_result` | `(match_id: u64) -> ResultEntry` | Returns the stored result, or `Error::ResultNotFound`. Extends the entry's TTL on read. |
+| `has_result` | `(match_id: u64) -> bool` | Public existence check. See [has_result vs has_result_admin](#has_result-vs-has_result_admin). |
+| `has_result_admin` | `(match_id: u64) -> Result<bool, Error>` | Admin-gated existence check. See [has_result vs has_result_admin](#has_result-vs-has_result_admin). |
+| `delete_result` | `(match_id: u64)` | Admin-only, irreversible. See [Result Deletion Policy](#result-deletion-policy-delete_result). |
+| `get_admin` | `() -> Address` | Returns the stored admin address, or `Error::Unauthorized` if uninitialized. |
+| `update_admin` | `(new_admin: Address)` | Rotates the admin address. Requires current admin auth. |
+| `pause` | `()` | Admin-only. Blocks `submit_result` and `submit_batch_results` while paused (`delete_result` is also blocked; see [Security: Oracle Contract Pause](security.md#oracle-contract-pause)). |
+| `unpause` | `()` | Admin-only. Reverses `pause`. |
+| `set_oracle_rate_limits` | `(oracle: Address, hourly_limit: u32, daily_limit: u32)` | Admin-only. Overrides the default hourly/daily submission caps for one oracle address. Pass `0` for either field to reset that field to the contract default. |
+| `get_oracle_rate_limits` | `(oracle: Address) -> RateLimitConfig` | Returns the effective (override or default) rate-limit configuration for `oracle`. |
+| `get_oracle_rate_limit_status` | `(oracle: Address) -> RateLimitStatus` | Returns `oracle`'s current sliding-window usage and remaining quota. |
+| `set_rate` | `(token_a: Address, token_b: Address, rate: i128)` | Admin-only. Stores a fixed-point exchange rate (scaled `1e7`) between `token_a` and `token_b`, used by `swap` and by the escrow contract's multi-token conversion-rate validation (see [Roadmap v1.0.1](roadmap.md#v101--multi-token-conversion-rate-hardening-complete)). |
+| `get_rate` | `(token_a: Address, token_b: Address) -> i128` | Returns the rate previously stored by `set_rate` for the ordered pair, or `Error::ResultNotFound` if none has been set. |
+| `swap` | `(token_in: Address, token_out: Address, amount_in: i128, recipient: Address)` | Converts `amount_in` of `token_in` to `token_out` using whichever direction of a stored rate exists, and transfers the result to `recipient` from the contract's own balance. Does not pull `token_in` from the caller — callers must fund the contract with `token_in` separately. |
+
+> **Note:** `set_rate`, `get_rate`, and `swap` predate formal documentation and currently carry no `# Errors` doc comments in source (unlike the rest of the contract's public functions). They are included here for conformance-checker coverage; treat their error behavior (both return `Error::ResultNotFound`/`Error::InvalidRateLimit`/`Error::Unauthorized` in the cases shown in `contracts/oracle/src/lib.rs:710-789`) as subject to change without the same stability guarantee as the rest of this reference.
 
 ---
 
