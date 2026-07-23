@@ -129,6 +129,12 @@ pub enum DataKey {
     QuorumBasisPoints,
     /// Oracle address implicated by a dispute result (used for automatic slashing).
     DisputeOracle(u64),
+    /// Active match for a player: indexed O(1) removal. Replaces the single ActiveMatches vector.
+    ActiveMatch(Address, u64),
+    /// Count of currently-active matches for a player, capped at MAX_ACTIVE_MATCHES_PER_PLAYER.
+    PlayerActiveMatchCount(Address),
+    /// Cached count of completed matches for a player, updated atomically at completion.
+    PlayerCompletedMatchCount(Address),
 }
 
 /// The lifecycle event that triggered a balance snapshot.
