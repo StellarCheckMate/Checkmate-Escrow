@@ -32,10 +32,12 @@ async function callView(method: string): Promise<unknown> {
 
 // Stub: builds a minimal invoke-host-function transaction XDR.
 // In production this would use @stellar/stellar-sdk ContractSpec + TransactionBuilder.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function buildInvokeTx(_method: string, _args: unknown[]): string {
   return '';
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function useAdminContract(walletPublicKey: string | null, _walletType: WalletType | null) {
   const [state, setState] = useState<AdminState>({
     admin: null,

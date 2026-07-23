@@ -30,6 +30,7 @@ export function useMatch(matchId: number | null) {
 
   useEffect(() => {
     if (matchId === null) {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       setMatch(null);
       setError(null);
       setLoading(false);
