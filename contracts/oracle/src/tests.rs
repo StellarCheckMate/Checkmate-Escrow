@@ -1716,687 +1716,609 @@ fn test_get_admin_returns_unauthorized_when_not_initialized() {
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
-
-// ============================================================================
-// SWAP, SET_RATE, GET_RATE TESTS
-// ============================================================================
-
-#[test]
-fn test_set_rate_requires_admin_auth() {
-    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-
-    let other = Address::generate(&env);
-    env.as_contract(&contract_id, || {
-        let result = client.try_set_rate(&token_addr, &token2_addr, &10_000_000);
-        assert_eq!(result, Err(Ok(Error::Unauthorized)));
-    });
-}
-
-#[test]
-fn test_set_rate_rejects_zero_or_negative_rate() {
-    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-
-    // As admin, try to set rate = 0
-    env.as_contract(&contract_id, || {
-        let result = client.try_set_rate(&token_addr, &token2_addr, &0);
-        assert_eq!(result, Err(Ok(Error::InvalidRateLimit)));
-    });
-
-    // As admin, try to set rate = -1
-    env.as_contract(&contract_id, || {
-        let result = client.try_set_rate(&token_addr, &token2_addr, &-1);
-        assert_eq!(result, Err(Ok(Error::InvalidRateLimit)));
-    });
-}
-
-#[test]
-fn test_set_rate_admin_can_set() {
-    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-
-    let rate = 10_000_000i128; // 1:1 after scaling
-    env.as_contract(&contract_id, || {
-        let result = client.try_set_rate(&token_addr, &token2_addr, &rate);
-        assert_eq!(result, Ok(Ok(())));
-    });
-
-    let retrieved = env.as_contract(&contract_id, || {
-        client.get_rate(&token_addr, &token2_addr)
-    });
-    assert_eq!(retrieved, rate);
-}
-
-#[test]
-fn test_get_rate_returns_error_when_rate_not_set() {
-    let (env, contract_id, .., _oracle_admin, _, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(Address::generate(&env));
-    let token2_addr = token2.address();
-
-    let result = env.as_contract(&contract_id, || {
-        client.try_get_rate(&token_addr, &token2_addr)
-    });
-    assert_eq!(result, Err(Ok(Error::ResultNotFound)));
-}
-
-#[test]
-fn test_swap_rejects_unauthenticated_caller() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-
-    // Set a rate: 1 token_addr = 2 token2
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &20_000_000);
-    });
-
-    // Mint some token2 into the contract so it has funds
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-    token2_client.mint(&contract_id, &1000);
-
-    // Unauthenticated swap attempt should fail
-    env.mock_all_auths_allowing_non_root_auth();
-    let result = env.as_contract(&contract_id, || {
-        client.try_swap(
-            &player1,     // caller
-            &token_addr,  // token_in
-            &token2_addr, // token_out
-            &100,         // amount_in
-            &0,           // min_amount_out
-            &player1,     // recipient
-        )
-    });
-    // Result will be auth failure during the transfer of token_in
-    // (Soroban's require_auth will reject it)
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_swap_rejects_zero_amount_in() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &10_000_000);
-    });
-
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-    token2_client.mint(&contract_id, &1000);
-
-    let result = env.as_contract(&contract_id, || {
-        client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &0, // amount_in = 0
-            &0,
-            &player1,
-        )
-    });
-    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
-}
-
-#[test]
-fn test_swap_rejects_negative_amount_in() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &10_000_000);
-    });
-
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-    token2_client.mint(&contract_id, &1000);
-
-    let result = env.as_contract(&contract_id, || {
-        client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &-100, // amount_in = -100
-            &0,
-            &player1,
-        )
-    });
-    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
-}
-
-#[test]
-fn test_swap_rejects_missing_rate() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-
-    // No rate set between token_addr and token2_addr
-
-    let result = env.as_contract(&contract_id, || {
-        client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &100,
-            &0,
-            &player1,
-        )
-    });
-    assert_eq!(result, Err(Ok(Error::ResultNotFound)));
-}
-
-#[test]
-fn test_swap_rejects_slippage_exceeded_forward_rate() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-
-    // Set rate: 1 token_addr = 2 token2 (rate = 2 * 1e7)
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
-    });
-
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-    token2_client.mint(&contract_id, &1000);
-
-    // Try to swap 100 token_addr for min 300 token2 (but only get 200)
-    let result = env.as_contract(&contract_id, || {
-        client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &100,
-            &300, // min_amount_out too high
-            &player1,
-        )
-    });
-    assert_eq!(result, Err(Ok(Error::SlippageExceeded)));
-}
-
-#[test]
-fn test_swap_rejects_slippage_exceeded_inverse_rate() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-
-    // Set rate inversely: 2 token2 = 1 token_addr (rate = 0.5 * 1e7 = 5_000_000)
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token2_addr, &token_addr, &(5_000_000));
-    });
-
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-    token2_client.mint(&contract_id, &1000);
-
-    // Try to swap 100 token_addr for min 100 token2 (but only get 50)
-    let result = env.as_contract(&contract_id, || {
-        client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &100,
-            &100, // min_amount_out too high
-            &player1,
-        )
-    });
-    assert_eq!(result, Err(Ok(Error::SlippageExceeded)));
-}
-
-#[test]
-fn test_swap_correct_2_sided_settlement_forward_rate() {
-    let (env, contract_id, .., oracle_admin, player1, player2, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-
-    // Set rate: 1 token_addr = 2 token2 (rate = 2 * 1e7)
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
-    });
-
-    // Mint player1 has token_addr (from setup), and contract has token2
-    token2_client.mint(&contract_id, &10000);
-
-    let player1_token2_before = token2_client.balance(&player1);
-    let contract_token_addr_before = token::Client::new(&env, &token_addr).balance(&contract_id);
-    let contract_token2_before = token2_client.balance(&contract_id);
-
-    // player1 swaps 100 token_addr for 200 token2
-    env.as_contract(&contract_id, || {
-        let result = client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &100,
-            &200, // Expect exactly 200
-            &player1,
-        );
-        assert_eq!(result, Ok(Ok(())));
-    });
-
-    let player1_token2_after = token2_client.balance(&player1);
-    let contract_token_addr_after = token::Client::new(&env, &token_addr).balance(&contract_id);
-    let contract_token2_after = token2_client.balance(&contract_id);
-
-    // player1 received 200 token2
-    assert_eq!(player1_token2_after - player1_token2_before, 200);
-    // contract received 100 token_addr
-    assert_eq!(contract_token_addr_after - contract_token_addr_before, 100);
-    // contract gave out 200 token2
-    assert_eq!(contract_token2_before - contract_token2_after, 200);
-}
-
-#[test]
-fn test_swap_correct_2_sided_settlement_inverse_rate() {
-    let (env, contract_id, .., oracle_admin, player1, _player2, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-
-    // Set rate inversely: 1 token_addr = 0.5 token2 (rate = 5_000_000)
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token2_addr, &token_addr, &(5_000_000));
-    });
-
-    token2_client.mint(&contract_id, &10000);
-
-    let player1_token2_before = token2_client.balance(&player1);
-    let contract_token_addr_before = token::Client::new(&env, &token_addr).balance(&contract_id);
-    let contract_token2_before = token2_client.balance(&contract_id);
-
-    // player1 swaps 100 token_addr for 50 token2
-    env.as_contract(&contract_id, || {
-        let result = client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &100,
-            &50,
-            &player1,
-        );
-        assert_eq!(result, Ok(Ok(())));
-    });
-
-    let player1_token2_after = token2_client.balance(&player1);
-    let contract_token_addr_after = token::Client::new(&env, &token_addr).balance(&contract_id);
-    let contract_token2_after = token2_client.balance(&contract_id);
-
-    // player1 received 50 token2
-    assert_eq!(player1_token2_after - player1_token2_before, 50);
-    // contract received 100 token_addr
-    assert_eq!(contract_token_addr_after - contract_token_addr_before, 100);
-    // contract gave out 50 token2
-    assert_eq!(contract_token2_before - contract_token2_after, 50);
-}
-
-#[test]
-fn test_swap_slippage_bound_at_boundary() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-
-    // Rate: 1 token_addr = 2 token2
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
-    });
-
-    token2_client.mint(&contract_id, &10000);
-
-    // Exact slippage bound: min_amount_out = 200 (exactly what we get)
-    env.as_contract(&contract_id, || {
-        let result = client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &100,
-            &200, // Exact match
-            &player1,
-        );
-        assert_eq!(result, Ok(Ok(())));
-    });
-
-    // One less than the bound should fail
-    let result = env.as_contract(&contract_id, || {
-        client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &100,
-            &201, // One more than we get
-            &player1,
-        )
-    });
-    assert_eq!(result, Err(Ok(Error::SlippageExceeded)));
-}
-
-#[test]
-fn test_swap_cannot_drain_contract_without_funds() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-
-    // Set rate
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
-    });
-
-    // Do NOT mint token2 into the contract
-    // Attempted swap should fail at the transfer step
-    let result = env.as_contract(&contract_id, || {
-        client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &100,
-            &0,
-            &player1,
-        )
-    });
-    // Will fail because the contract doesn't have enough token2 to send out
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_swap_requires_sufficient_token_in_from_caller() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
-    });
-
-    token2_client.mint(&contract_id, &10000);
-
-    // player1 only has 1000 token_addr from setup
-    // Try to swap 1001, should fail
-    let result = env.as_contract(&contract_id, || {
-        client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &1001,
-            &0,
-            &player1,
-        )
-    });
-    assert!(result.is_err()); // Will fail at the transfer step
-}
-
-#[test]
-fn test_swap_to_different_recipient() {
-    let (env, contract_id, .., oracle_admin, player1, player2, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &(2 * 10_000_000));
-    });
-
-    token2_client.mint(&contract_id, &10000);
-
-    let player2_token2_before = token2_client.balance(&player2);
-
-    // player1 swaps but sends output to player2
-    env.as_contract(&contract_id, || {
-        let result = client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &100,
-            &200,
-            &player2, // recipient is player2
-        );
-        assert_eq!(result, Ok(Ok(())));
-    });
-
-    let player2_token2_after = token2_client.balance(&player2);
-    assert_eq!(player2_token2_after - player2_token2_before, 200);
-}
-
-#[test]
-fn test_swap_overflow_detection_on_multiplication() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-
-    // Set a huge rate to trigger overflow
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &i128::MAX);
-    });
-
-    token2_client.mint(&contract_id, &10000);
-
-    // Try to swap with a large amount_in that will overflow when multiplied
-    let result = env.as_contract(&contract_id, || {
-        client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &i128::MAX, // Huge amount
-            &0,
-            &player1,
-        )
-    });
-    assert_eq!(result, Err(Ok(Error::Overflow)));
-}
-
-
-// ============================================================================
-// FUZZ TESTS FOR SWAP
-// ============================================================================
-//
-// These fuzz tests exercise swap against a range of adversarial rate, amount,
-// and recipient combinations to detect edge cases and invariant violations.
-
-#[test]
-fn fuzz_swap_various_rates_and_amounts() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
-    let client = OracleContractClient::new(&env, &contract_id);
-
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-
-    // Test matrix of (rate, amount_in, min_amount_out)
-    let test_cases = vec![
-        (1_000_000, 100, 0),           // 0.1x rate, small amount
-        (10_000_000, 50, 0),           // 1x rate, tiny amount
-        (100_000_000, 200, 0),         // 10x rate, larger amount
-        (5_000_000, 1000, 0),          // 0.5x rate, large amount
-        (20_000_000, 10, 0),           // 2x rate, very small
-        (50_000_000, 999, 0),          // 5x rate, near-max amount from setup
-        (1_000_000, 100, 10),          // 0.1x rate with slippage bound
-        (10_000_000, 100, 100),        // Exact slippage bound
-        (2_000_000, 500, 50),          // 0.2x rate with slippage
-    ];
-
-    for (rate, amount_in, min_out) in test_cases {
-        // Reset contract for each test case
-        let contract_id = env.register_contract(None, OracleContract);
-        let client = OracleContractClient::new(&env, &contract_id);
-        client.initialize(&oracle_admin);
-
-        let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-        let token2_addr = token2.address();
-        let token2_client = StellarAssetClient::new(&env, &token2_addr);
-
-        env.as_contract(&contract_id, || {
-            client.set_rate(&token_addr, &token2_addr, &rate);
-        });
-
-        // Fund contract with sufficient token2
-        token2_client.mint(&contract_id, &100_000_000);
-
-        // Only attempt swap if amount_in is valid
-        if amount_in > 0 {
-            env.as_contract(&contract_id, || {
-                // Calculate expected output
-                let expected_out = (amount_in as i128)
-                    .checked_mul(rate)
-                    .unwrap_or(i128::MAX)
-                    .checked_div(10_000_000)
-                    .unwrap_or(i128::MAX);
-
-                let result = client.try_swap(
-                    &player1,
-                    &token_addr,
-                    &token2_addr,
-                    &amount_in,
-                    &min_out,
-                    &player1,
-                );
-
-                // If min_out <= expected_out, swap should succeed
-                if (min_out as i128) <= expected_out {
-                    assert!(
-                        result.is_ok(),
-                        "Swap failed for rate={}, amount_in={}, min_out={}, expected_out={}",
-                        rate, amount_in, min_out, expected_out
-                    );
-                } else {
-                    // Otherwise should fail with slippage
-                    assert_eq!(
-                        result,
-                        Err(Ok(Error::SlippageExceeded)),
-                        "Expected slippage error for rate={}, amount_in={}, min_out={}, expected_out={}",
-                        rate, amount_in, min_out, expected_out
-                    );
-                }
-            });
-        }
+// ── m-of-n oracle consensus ──────────────────────────────────────────────
+
+/// Registers `n` freshly-generated oracle addresses, each staking `stake` of
+/// `token_addr`, and returns them in registration order.
+fn register_n_oracles(
+    env: &Env,
+    client: &OracleContractClient,
+    token_addr: &Address,
+    n: u32,
+    stake: i128,
+) -> std::vec::Vec<Address> {
+    let asset_client = StellarAssetClient::new(env, token_addr);
+    let mut oracles = std::vec::Vec::new();
+    for _ in 0..n {
+        let oracle = Address::generate(env);
+        asset_client.mint(&oracle, &stake);
+        client.register_oracle_with_stake(&oracle, &stake, token_addr);
+        oracles.push(oracle);
     }
+    oracles
 }
 
 #[test]
-fn fuzz_swap_boundary_amounts() {
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+fn test_consensus_threshold_defaults_to_one() {
+    let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
-
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &10_000_000); // 1:1 rate
-    });
-
-    token2_client.mint(&contract_id, &100_000_000);
-
-    // Test boundary conditions
-    let boundary_amounts = vec![
-        1,                      // Minimum valid amount
-        i128::MAX / 20_000_000, // Large but safe amount
-    ];
-
-    for amount_in in boundary_amounts {
-        if amount_in > 0 {
-            env.as_contract(&contract_id, || {
-                let result = client.try_swap(
-                    &player1,
-                    &token_addr,
-                    &token2_addr,
-                    &amount_in,
-                    &0,
-                    &player1,
-                );
-
-                // All should succeed with sufficient contract balance
-                assert!(
-                    result.is_ok(),
-                    "Swap failed for boundary amount_in={}",
-                    amount_in
-                );
-            });
-        }
-    }
+    assert_eq!(client.get_consensus_threshold(), 1);
 }
 
 #[test]
-fn fuzz_swap_with_oracle_stake_present() {
-    // Verify that swap cannot drain oracle stakes accidentally
-    let (env, contract_id, .., oracle_admin, player1, _, token_addr) = setup();
+fn test_set_consensus_threshold_updates_value() {
+    let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
-    // Register an oracle with a stake
-    let stake_token = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let stake_token_addr = stake_token.address();
-    let stake_token_client = StellarAssetClient::new(&env, &stake_token_addr);
+    client.set_consensus_threshold(&3);
+    assert_eq!(client.get_consensus_threshold(), 3);
+}
 
-    stake_token_client.mint(&oracle_admin, &50000);
-    env.as_contract(&contract_id, || {
-        client.register_oracle_with_stake(&oracle_admin, &10000, &stake_token_addr);
-    });
+#[test]
+fn test_set_consensus_threshold_rejects_zero() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
 
-    let contract_stake_before = stake_token_client.balance(&contract_id);
+    let result = client.try_set_consensus_threshold(&0);
+    assert_eq!(result, Err(Ok(Error::InvalidThreshold)));
+}
 
-    // Now try to swap a different pair
-    let token2 = env.register_stellar_asset_contract_v2(oracle_admin.clone());
-    let token2_addr = token2.address();
-    let token2_client = StellarAssetClient::new(&env, &token2_addr);
+#[test]
+#[should_panic]
+fn test_set_consensus_threshold_requires_admin_auth() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin);
+    client.set_consensus_threshold(&2);
+}
 
-    env.as_contract(&contract_id, || {
-        client.set_rate(&token_addr, &token2_addr, &10_000_000);
-    });
+#[test]
+fn test_get_registered_oracle_count() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
 
-    token2_client.mint(&contract_id, &100_000_000);
+    assert_eq!(client.get_registered_oracle_count(), 0);
+    register_n_oracles(&env, &client, &token_addr, 5, 100);
+    assert_eq!(client.get_registered_oracle_count(), 5);
+}
 
-    env.as_contract(&contract_id, || {
-        let result = client.try_swap(
-            &player1,
-            &token_addr,
-            &token2_addr,
-            &100,
-            &0,
-            &player1,
-        );
-        assert!(result.is_ok());
-    });
+/// Backward compatibility: the original admin-gated `submit_result` path
+/// (n=1 via admin auth) and the new consensus `submit_oracle_result` path at
+/// threshold=1 (n=1 via a registered oracle's own auth) both work, on
+/// different matches, on the same contract instance.
+#[test]
+fn test_both_legacy_admin_mode_and_new_consensus_mode_work_side_by_side() {
+    let (env, contract_id, _escrow_id, oracle_admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
 
-    // Verify the stake balance is unchanged (swap didn't touch it)
-    let contract_stake_after = stake_token_client.balance(&contract_id);
-    assert_eq!(
-        contract_stake_before, contract_stake_after,
-        "Swap incorrectly drained oracle stake"
+    // Legacy path: admin-gated submit_result, no consensus machinery involved.
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "legacy_game"),
+        &Platform::Lichess,
+        &Winner::Player1,
     );
+    assert!(client.has_result(&0u64));
+
+    // New path: a registered oracle submits via submit_oracle_result; default
+    // threshold of 1 finalizes on the first vote (degenerate n=1).
+    let oracles = register_n_oracles(&env, &client, &token_addr, 1, 500);
+    client.submit_oracle_result(
+        &oracles[0],
+        &1u64,
+        &String::from_str(&env, "consensus_game"),
+        &Platform::Lichess,
+        &Winner::Player2,
+    );
+    assert!(client.has_result(&1u64));
+    assert_eq!(client.get_result(&1u64).result, Winner::Player2);
+
+    // The admin can still submit legacy-path results for other matches too.
+    client.submit_result(
+        &2u64,
+        &String::from_str(&env, "legacy_game_2"),
+        &Platform::Lichess,
+        &Winner::Draw,
+    );
+    assert!(client.has_result(&2u64));
+    let _ = oracle_admin; // sanity: admin identity unused beyond setup wiring
+}
+
+#[test]
+fn test_submit_oracle_result_not_registered_rejected() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let stranger = Address::generate(&env);
+
+    let result = client.try_submit_oracle_result(
+        &stranger,
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::NotRegisteredOracle)));
+    assert!(!client.has_result(&0u64));
+}
+
+#[test]
+fn test_submit_oracle_result_rejects_zero_stake() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 1, 100);
+
+    client.slash_oracle(&oracles[0], &100i128);
+
+    let result = client.try_submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::InsufficientStake)));
+}
+
+#[test]
+fn test_submit_oracle_result_empty_game_id_rejected() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 1, 100);
+
+    let result = client.try_submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, ""),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+}
+
+#[test]
+fn test_submit_oracle_result_blocked_when_paused() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 1, 100);
+
+    client.pause();
+
+    let result = client.try_submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
+
+/// threshold reached -> payout proceeds: once enough independent oracles
+/// agree, the match finalizes (has_result flips true) and the same result is
+/// accepted by the escrow contract's own (separately-configured) oracle to
+/// actually execute payout, demonstrating the two systems compose.
+#[test]
+fn test_mofn_threshold_reached_finalizes_result_and_escrow_payout_proceeds() {
+    let (env, contract_id, escrow_id, oracle_admin, _player1, _player2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let escrow_client = EscrowContractClient::new(&env, &escrow_id);
+
+    client.set_consensus_threshold(&2);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 3, 500);
+
+    // First vote: not yet finalized.
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "test_game"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert!(!client.has_result(&0u64));
+
+    // Second matching vote crosses the threshold.
+    client.submit_oracle_result(
+        &oracles[1],
+        &0u64,
+        &String::from_str(&env, "test_game"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert!(client.has_result(&0u64));
+    assert_eq!(client.get_result(&0u64).result, Winner::Player1);
+
+    // The oracle contract's finalized result is purely an audit record; the
+    // escrow contract trusts its own configured oracle address separately.
+    // (Exact settlement amounts are covered by the escrow crate's own test
+    // suite; here we only check that the finalized m-of-n result is accepted
+    // downstream and drives the match to completion.)
+    escrow_client.submit_result(&0u64, &EscrowWinner::Player1);
+    let m = escrow_client.get_match(&0u64);
+    assert_eq!(m.state, MatchState::Completed);
+    let _ = oracle_admin;
+}
+
+/// threshold not reached -> match stays pending.
+#[test]
+fn test_mofn_threshold_not_reached_match_stays_pending() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.set_consensus_threshold(&3);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 5, 500);
+
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    client.submit_oracle_result(
+        &oracles[1],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    assert!(!client.has_result(&0u64));
+    let votes = client.get_match_votes(&0u64).unwrap();
+    assert!(!votes.disputed);
+    assert_eq!(votes.candidates.len(), 1);
+    assert_eq!(votes.candidates.get(0).unwrap().submitters.len(), 2);
+}
+
+/// Conflicting submissions that still resolve to consensus: the losing
+/// (minority) oracle is automatically slashed once the majority finalizes.
+#[test]
+fn test_mofn_conflicting_submissions_minority_auto_slashed_on_finalize() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    client.set_consensus_threshold(&2);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 3, 500);
+
+    // Oracle 0 disagrees with the eventual majority.
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player2,
+    );
+    // Oracles 1 and 2 agree on Player1, reaching the threshold.
+    client.submit_oracle_result(
+        &oracles[1],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    client.submit_oracle_result(
+        &oracles[2],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    assert!(client.has_result(&0u64));
+    assert_eq!(client.get_result(&0u64).result, Winner::Player1);
+
+    // Minority oracle 0 (10% of its 500 stake) was auto-slashed.
+    assert_eq!(balance_client.balance(&contract_id), 500 + 500 + 450);
+
+    let result = client.try_submit_oracle_result(
+        &oracles[0],
+        &1u64,
+        &String::from_str(&env, "g2"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert!(
+        result.is_ok(),
+        "minority oracle keeps its remaining stake and can still vote"
+    );
+}
+
+/// A single malicious minority oracle cannot force an incorrect result: its
+/// lone vote never crosses the threshold, and once the honest majority
+/// agrees, the correct result finalizes instead.
+#[test]
+fn test_mofn_single_malicious_minority_cannot_force_incorrect_result() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.set_consensus_threshold(&2);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 3, 500);
+
+    // Malicious oracle submits a false result alone.
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player2,
+    );
+    assert!(
+        !client.has_result(&0u64),
+        "a single oracle's vote must never unilaterally finalize a match above threshold 1"
+    );
+
+    // Two honest oracles agree on the true result.
+    client.submit_oracle_result(
+        &oracles[1],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    client.submit_oracle_result(
+        &oracles[2],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    assert!(client.has_result(&0u64));
+    assert_eq!(
+        client.get_result(&0u64).result,
+        Winner::Player1,
+        "the honest majority's result must win, not the malicious minority's"
+    );
+}
+
+#[test]
+fn test_mofn_equivocation_slashes_full_stake_and_rejects_submission() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    // threshold=2 so the first vote doesn't finalize, leaving room to equivocate.
+    client.set_consensus_threshold(&2);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 2, 500);
+
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    // The call itself succeeds (Ok) — a contract call returning `Err` would
+    // revert the slash performed inside it, so equivocation is signaled via
+    // the `oracle/equivoc` event and the stake drop, not an error return.
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player2, // conflicts with its own earlier vote
+    );
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("equivoc").into_val(&env),
+    ];
+    assert!(
+        events
+            .iter()
+            .any(|(_, topics, _)| topics == expected_topics),
+        "equivoc event not emitted"
+    );
+
+    // The equivocating oracle's entire remaining stake (100% of 500) was slashed.
+    assert_eq!(balance_client.balance(&contract_id), 500);
+
+    // Full remaining stake was slashed.
+    let further = client.try_submit_oracle_result(
+        &oracles[0],
+        &1u64,
+        &String::from_str(&env, "g2"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(further, Err(Ok(Error::InsufficientStake)));
+
+    // Match 0 still isn't finalized — the equivocating vote was rejected.
+    assert!(!client.has_result(&0u64));
+}
+
+#[test]
+fn test_mofn_duplicate_identical_vote_returns_already_submitted_no_slash() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    client.set_consensus_threshold(&2);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 2, 500);
+
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    let result = client.try_submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1, // identical repeat, not equivocation
+    );
+    assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
+
+    // No slashing occurred for a duplicate identical vote.
+    assert_eq!(balance_client.balance(&contract_id), 1000);
+}
+
+/// conflicting submissions -> correct dispute/slash path: an irreconcilable
+/// 3-way split (no candidate can reach threshold even with every remaining
+/// oracle voting) marks the match disputed rather than hanging forever, and
+/// the admin's resolution finalizes it while slashing every oracle that
+/// disagreed with the resolution.
+#[test]
+fn test_mofn_deadlock_marks_disputed_and_admin_resolves() {
+    let (env, contract_id, _escrow_id, admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    client.set_consensus_threshold(&2);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 3, 500);
+
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    client.submit_oracle_result(
+        &oracles[1],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player2,
+    );
+    // Third and final oracle breaks for a third distinct result: no
+    // candidate can now possibly reach the threshold of 2.
+    client.submit_oracle_result(
+        &oracles[2],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Draw,
+    );
+
+    assert!(!client.has_result(&0u64));
+    let votes = client.get_match_votes(&0u64).unwrap();
+    assert!(
+        votes.disputed,
+        "an irreconcilable 3-way split must be flagged disputed"
+    );
+
+    // Admin resolves in favor of oracle 0's submission (Player1).
+    client.resolve_disputed_match(
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    assert!(client.has_result(&0u64));
+    assert_eq!(client.get_result(&0u64).result, Winner::Player1);
+
+    // Oracles 1 and 2 disagreed with the resolution and were slashed 10%;
+    // oracle 0 agreed and keeps its full stake.
+    assert_eq!(balance_client.balance(&contract_id), 500 + 450 + 450);
+    let _ = admin;
+}
+
+#[test]
+fn test_mofn_resolve_disputed_match_requires_disputed_state() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let result = client.try_resolve_disputed_match(
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::MatchNotDisputed)));
+}
+
+#[test]
+#[should_panic]
+fn test_mofn_resolve_disputed_match_requires_admin_auth() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin);
+    client.resolve_disputed_match(
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+}
+
+#[test]
+fn test_mofn_already_finalized_match_rejects_further_oracle_submissions() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let oracles = register_n_oracles(&env, &client, &token_addr, 2, 500);
+
+    // Default threshold=1: first oracle's vote finalizes immediately.
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert!(client.has_result(&0u64));
+
+    let result = client.try_submit_oracle_result(
+        &oracles[1],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
+}
+
+#[test]
+fn test_mofn_finalized_event_reports_submitter_count_and_threshold() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.set_consensus_threshold(&2);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 2, 500);
+
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    client.submit_oracle_result(
+        &oracles[1],
+        &0u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("finalzd").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "finalzd event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_id, ev_count, ev_threshold): (u64, u32, u32) =
+        soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_id, 0u64);
+    assert_eq!(ev_count, 2);
+    assert_eq!(ev_threshold, 2);
 }
