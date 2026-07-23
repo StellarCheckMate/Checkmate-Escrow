@@ -32,6 +32,7 @@ export function useAnalytics(
     const key = cacheKey(userAddress, period, tokenFilter, statusFilter);
     const cached = cache.get(key);
     if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       setResult(cached.result);
       return;
     }

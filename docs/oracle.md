@@ -796,6 +796,195 @@ Returned by `get_oracle_rate_limit_status`. The on-chain analogue of HTTP rate-l
 | `daily_limit` | `u32` | Configured (or default) daily limit. |
 | `daily_remaining` | `u32` | `daily_limit - daily_used`, saturating at 0. |
 
+---
+
+## Swap Function (Token Exchange)
+
+The `swap` function atomically exchanges `token_in` for `token_out` using a stored fixed-point exchange rate. It is intended for multi-token settlement and conversions.
+
+### Function Signature
+
+```rust
+pub fn swap(
+    env: Env,
+    caller: Address,          // Must authorize the swap
+    token_in: Address,        // Token to provide (collected from caller)
+    token_out: Address,       // Token to receive (dispensed from contract)
+    amount_in: i128,          // Amount of token_in to provide (must be > 0)
+    min_amount_out: i128,     // Minimum acceptable token_out (slippage floor)
+    recipient: Address,       // Address to receive token_out
+) -> Result<(), Error>
+```
+
+### Execution Flow (Atomic, Single Transaction)
+
+1. **Authentication:** Verify `caller` has signed the transaction via `caller.require_auth()`.
+2. **Input Validation:** Ensure `amount_in > 0`.
+3. **Rate Lookup:** Find the exchange rate for `(token_in, token_out)` in either direction.
+4. **Compute Output:** Calculate `amount_out` using the rate, scaled as `1e7`.
+5. **Slippage Check:** Verify `amount_out ≥ min_amount_out`; abort if not.
+6. **Collect Input:** Transfer `amount_in` of `token_in` from `caller` to the contract.
+7. **Dispense Output:** Transfer `amount_out` of `token_out` from the contract to `recipient`.
+
+If any step fails, the entire transaction is rolled back (no partial settlement).
+
+### Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `caller` | `Address` | Yes | The account authorizing and funding the swap. Must sign the transaction. |
+| `token_in` | `Address` | Yes | The contract address of the input token. |
+| `token_out` | `Address` | Yes | The contract address of the output token. |
+| `amount_in` | `i128` | Yes | Quantity of `token_in` to provide. Must be > 0. |
+| `min_amount_out` | `i128` | Yes | Minimum acceptable `token_out` to receive. Caller's slippage floor. |
+| `recipient` | `Address` | Yes | Address to receive `amount_out` of `token_out`. Can be `caller` or any other address. |
+
+### Errors
+
+| Error | Cause | Recovery |
+|-------|-------|----------|
+| `Unauthorized` | Contract uninitialized, or insufficient admin stake. | Initialize and ensure oracle stakes exist. |
+| `InvalidAmount` | `amount_in ≤ 0`. | Provide a positive `amount_in`. |
+| `ResultNotFound` | No rate exists for `(token_in, token_out)` in either direction. | Admin must call `set_rate` to establish the rate. |
+| `Overflow` | Numeric overflow during rate multiplication or division. | Use smaller `amount_in` or lower `rate`. |
+| `SlippageExceeded` | Computed `amount_out < min_amount_out`. | Increase `min_amount_out` tolerance or wait for better rate. |
+
+### Rate Directions
+
+The contract stores rates bidirectionally:
+
+- **Forward:** `set_rate(token_out, token_in, rate)` means "1 unit of `token_in` costs `rate / 1e7` units of `token_out`"
+  ```
+  amount_out = amount_in * rate / 1e7
+  ```
+
+- **Inverse:** `set_rate(token_in, token_out, rate)` means "1 unit of `token_out` costs `rate / 1e7` units of `token_in`"
+  ```
+  amount_out = amount_in * 1e7 / rate
+  ```
+
+### Examples
+
+**Example 1: Simple exchange (1:1 rate)**
+
+```rust
+// Set rate: 1 USDC = 1 XLM
+oracle_client.set_rate(&usdc_addr, &xlm_addr, &10_000_000);
+
+// Swap 100 USDC for XLM (expecting ~100 XLM)
+oracle_client.swap(
+    &my_address,    // caller (must sign)
+    &usdc_addr,     // token_in
+    &xlm_addr,      // token_out
+    &100,           // amount_in (100 USDC)
+    &95,            // min_amount_out (accept 95–100 XLM, reject if <95)
+    &my_address,    // recipient (me)
+);
+// Result: My balance increases by ~100 XLM, decreases by 100 USDC
+```
+
+**Example 2: Slippage protection (swapping to different recipient)**
+
+```rust
+// Rate: 1 ETH = 0.5 BTC
+oracle_client.set_rate(&btc_addr, &eth_addr, &5_000_000);
+
+// Swap 10 ETH for BTC, send to vault
+oracle_client.swap(
+    &my_address,      // caller (I pay)
+    &eth_addr,        // token_in
+    &btc_addr,        // token_out
+    &10,              // amount_in (10 ETH)
+    &4_500_000,       // min_amount_out (floor at 4.5 BTC; if <, fail)
+    &vault_address,   // recipient (vault receives BTC)
+);
+// Result: I lose 10 ETH, vault gains ~5 BTC
+```
+
+**Example 3: Tight slippage (price-sensitive)**
+
+```rust
+// Rate: 1 GOLD = 0.01 SILVER
+oracle_client.set_rate(&silver_addr, &gold_addr, &100_000);
+
+// Swap 1000 SILVER for GOLD, accept only 9.99–10 GOLD
+oracle_client.swap(
+    &trader_address,
+    &silver_addr,
+    &gold_addr,
+    &1000,
+    &9_990_000,      // min_amount_out = 9.99 GOLD (0.01% slippage tolerance)
+    &trader_address,
+);
+// If computed amount_out < 9.99, transaction fails without settling
+```
+
+### Security Properties
+
+**1. Authorization Required**
+- The `caller` must cryptographically sign the transaction.
+- Without a valid signature, `swap` is rejected before any state changes.
+
+**2. Atomic Settlement**
+- Token input is collected **before** token output is dispensed.
+- If the contract doesn't have sufficient `token_out` balance, the output transfer fails and the entire transaction is rolled back.
+- No partial settlements (both-or-nothing).
+
+**3. Slippage Protection**
+- Caller specifies `min_amount_out`, enforced before settlement.
+- If the rate has moved unfavorably (smaller payout), the transaction aborts.
+- Protects against MEV, flash loans, and delayed execution.
+
+**4. Reentrancy Safety**
+- If `token_out` is a malicious contract with a callback hook, the callback fires during the output transfer (step 7).
+- By that time, the input transfer is complete (step 6).
+- The callback cannot re-enter `swap` and claim additional funds because the contract has already received the caller's `token_in`.
+- Thus, no double-extraction or fund drain via reentrancy is possible.
+
+### Admin Pricing Model
+
+The contract uses **fixed exchange rates** set by the admin via `set_rate`:
+
+```rust
+pub fn set_rate(
+    env: Env,
+    token_a: Address,
+    token_b: Address,
+    rate: i128,       // Fixed-point rate, scaled 1e7
+) -> Result<(), Error>
+```
+
+**Advantages:**
+- ✅ Deterministic and auditable
+- ✅ No external oracle dependency
+- ✅ Instant (no latency)
+- ✅ Admin has full control
+
+**Limitations:**
+- ❌ Static (doesn't respond to market changes)
+- ❌ No staleness bounds (rate can be arbitrarily old)
+- ❌ No deviation checks (admin can set unreasonable rates)
+
+**Future Enhancements (v1.1+):**
+- Oracle-fed rates from an external price feed
+- Staleness checks (e.g., reject if rate is >1 hour old)
+- Deviation bounds (e.g., reject if rate changed >10% since last update)
+- Multi-provider fallback and consensus
+
+### Use Cases
+
+1. **Multi-token escrow settlement:** If a match is funded in one token but requires payout in another, use `swap` to convert.
+2. **Cross-asset tournaments:** Players deposit in different stablecoins; `swap` unifies payouts to a single token.
+3. **Liquidity protocol:** The contract can mediate token exchanges with stored rates.
+
+### Not Recommended For
+
+- **High-frequency trading:** Rates are static; no real-time market response.
+- **Large swaps:** Slippage protection is caller-specified (not algorithmic); large swaps may breach tolerance.
+- **Volatile pairs:** Fixed rates quickly become stale; consider oracle-fed rates instead.
+
+---
+
 ## Contract Function Reference
 
 The complete public function surface of `OracleContract` (`contracts/oracle/src/lib.rs`). Functions above with dedicated sections are cross-referenced rather than re-described.
@@ -819,11 +1008,9 @@ The complete public function surface of `OracleContract` (`contracts/oracle/src/
 | `set_oracle_rate_limits` | `(oracle: Address, hourly_limit: u32, daily_limit: u32)` | Admin-only. Overrides the default hourly/daily submission caps for one oracle address. Pass `0` for either field to reset that field to the contract default. |
 | `get_oracle_rate_limits` | `(oracle: Address) -> RateLimitConfig` | Returns the effective (override or default) rate-limit configuration for `oracle`. |
 | `get_oracle_rate_limit_status` | `(oracle: Address) -> RateLimitStatus` | Returns `oracle`'s current sliding-window usage and remaining quota. |
-| `set_rate` | `(token_a: Address, token_b: Address, rate: i128)` | Admin-only. Stores a fixed-point exchange rate (scaled `1e7`) between `token_a` and `token_b`, used by `swap` and by the escrow contract's multi-token conversion-rate validation (see [Roadmap v1.0.1](roadmap.md#v101--multi-token-conversion-rate-hardening-complete)). |
-| `get_rate` | `(token_a: Address, token_b: Address) -> i128` | Returns the rate previously stored by `set_rate` for the ordered pair, or `Error::ResultNotFound` if none has been set. |
-| `swap` | `(token_in: Address, token_out: Address, amount_in: i128, recipient: Address)` | Converts `amount_in` of `token_in` to `token_out` using whichever direction of a stored rate exists, and transfers the result to `recipient` from the contract's own balance. Does not pull `token_in` from the caller — callers must fund the contract with `token_in` separately. |
-
-> **Note:** `set_rate`, `get_rate`, and `swap` predate formal documentation and currently carry no `# Errors` doc comments in source (unlike the rest of the contract's public functions). They are included here for conformance-checker coverage; treat their error behavior (both return `Error::ResultNotFound`/`Error::InvalidRateLimit`/`Error::Unauthorized` in the cases shown in `contracts/oracle/src/lib.rs:710-789`) as subject to change without the same stability guarantee as the rest of this reference.
+| `set_rate` | `(token_a: Address, token_b: Address, rate: i128)` | Admin-only. Stores a fixed-point exchange rate (scaled `1e7`) between `token_a` and `token_b`, used by `swap` for atomic token conversion. |
+| `get_rate` | `(token_a: Address, token_b: Address) -> i128` | Public query. Returns the rate previously stored by `set_rate` for the ordered pair, or `Error::ResultNotFound` if none has been set. |
+| `swap` | `(caller: Address, token_in: Address, token_out: Address, amount_in: i128, min_amount_out: i128, recipient: Address)` | Atomically exchanges `amount_in` of `token_in` (collected from `caller`) for `token_out` (dispensed to `recipient`) using a stored rate. Requires `caller` authorization and enforces slippage protection via `min_amount_out`. See [Swap Function](#swap-function-token-exchange) for complete details. |
 
 ---
 

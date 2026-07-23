@@ -107,8 +107,7 @@ echo "Oracle: $ORACLE_ID"
 ```
 
 > 📸 _Screenshot:_ `assets/tutorial/00-setup-deployed.png` — terminal showing the
-> two contract IDs printed after deployment. See the
-> [assets guide](assets/tutorial/README.md) for how to add yours.
+> two contract IDs printed after deployment.
 
 ✅ **Checkpoint:** you should see two long `C...` contract IDs. Keep this terminal
 open — the `$ESCROW_ID`, `$ORACLE_ID`, `$XLM_TOKEN`, `$P1_ADDR`, and `$P2_ADDR`
@@ -300,7 +299,7 @@ Short screen recordings of the full tutorial flow and individual steps. Each wal
 
 ### Recording Guidelines
 
-Recordings are produced with [OBS Studio](https://obsproject.com/) or [Loom](https://www.loom.com/) and follow the checklist in [docs/assets/tutorial/README.md](assets/tutorial/README.md):
+Recordings are produced with [OBS Studio](https://obsproject.com/) or [Loom](https://www.loom.com/) and follow these guidelines:
 
 - Consistent window size and zoom level
 - Redacted secret keys and private data

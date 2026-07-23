@@ -8,9 +8,8 @@ scale as the contract accumulates matches over its lifetime.
 
 Results are produced by the benchmarking suite in
 [`contracts/escrow/tests/benchmarks.rs`](../contracts/escrow/tests/benchmarks.rs),
-run via [`scripts/benchmark.sh`](../scripts/benchmark.sh). Each run overwrites
-[`reports/performance/benchmark-results.json`](../reports/performance/benchmark-results.json);
-the numbers below are a committed snapshot from that file, captured against
+run via [`scripts/benchmark.sh`](../scripts/benchmark.sh). Each run produces
+`reports/performance/benchmark-results.json`; the numbers below are a committed snapshot from that file, captured against
 the v0.1.0 contract.
 
 ## How to reproduce
@@ -65,8 +64,8 @@ CPU cost for all three roughly scales linearly with `n`, growing
 For contrast, `cancel_match` (which never touches the active-match index)
 stayed an order of magnitude cheaper than `deposit`/`submit_result` at every
 `n` in the same test run, despite being measured against an equally-sized
-match history — see [`benchmark-results.json`](../reports/performance/benchmark-results.json)
-in `reports/performance/` for the raw `cancel_match` series.
+match history — see the raw `cancel_match` series in the benchmark results
+in `reports/performance/` for details.
 
 ## Identified performance / DoS vectors (RESOLVED)
 

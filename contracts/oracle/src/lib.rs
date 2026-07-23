@@ -1258,39 +1258,89 @@ impl OracleContract {
             .ok_or(Error::ResultNotFound)
     }
 
+    /// Atomically swap `token_in` for `token_out` using an on-chain exchange rate.
+    ///
+    /// # Flow (atomic, single transaction):
+    /// 1. Caller authorizes the swap and provides `amount_in` via `caller.require_auth()`.
+    /// 2. Compute `amount_out` using the stored rate between `token_in` and `token_out`.
+    /// 3. Verify `amount_out ≥ min_amount_out` (slippage bound).
+    /// 4. Transfer `amount_in` of `token_in` **from the caller** into the contract.
+    /// 5. Transfer `amount_out` of `token_out` **from the contract** to the recipient.
+    ///
+    /// If step 3 or 4 fails, the transaction aborts with no state changes (checks-effects-interactions).
+    ///
+    /// # Parameters
+    /// - `caller: Address` — the account authorizing and providing `token_in`.
+    /// - `token_in: Address` — the token contract for the input token.
+    /// - `token_out: Address` — the token contract for the output token.
+    /// - `amount_in: i128` — quantity of `token_in` the caller provides. Must be > 0.
+    /// - `min_amount_out: i128` — minimum `token_out` acceptable to the caller.
+    ///   If the computed `amount_out` is less, the swap is rejected.
+    /// - `recipient: Address` — address to receive `amount_out` of `token_out`.
+    ///
+    /// # Errors
+    /// - [`Error::InvalidAmount`] — `amount_in` ≤ 0.
+    /// - [`Error::ResultNotFound`] — no rate exists for the `(token_in, token_out)` pair.
+    /// - [`Error::Overflow`] — numeric overflow during rate multiplication/division.
+    /// - [`Error::SlippageExceeded`] — computed `amount_out` < `min_amount_out`.
     pub fn swap(
         env: Env,
+        caller: Address,
         token_in: Address,
         token_out: Address,
         amount_in: i128,
+        min_amount_out: i128,
         recipient: Address,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
 
-        let mut amount_out = 0i128;
-        if let Some(rate) = env
+        // Caller must authorize and provide token_in.
+        caller.require_auth();
+
+        if amount_in <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        // Look up the exchange rate (token_out per token_in, scaled 1e7).
+        let rate = if let Some(rate) = env
             .storage()
             .persistent()
             .get::<_, i128>(&DataKey::Rate(token_out.clone(), token_in.clone()))
         {
-            amount_out = amount_in
-                .checked_mul(10_000_000)
-                .ok_or(Error::Unauthorized)?
-                .checked_div(rate)
-                .ok_or(Error::Unauthorized)?;
+            // Rate is token_out/token_in; compute amount_in * rate / 1e7
+            let amount_out = amount_in
+                .checked_mul(rate)
+                .ok_or(Error::Overflow)?
+                .checked_div(10_000_000)
+                .ok_or(Error::Overflow)?;
+            if amount_out < min_amount_out {
+                return Err(Error::SlippageExceeded);
+            }
+            amount_out
         } else if let Some(rate) = env
             .storage()
             .persistent()
             .get::<_, i128>(&DataKey::Rate(token_in.clone(), token_out.clone()))
         {
-            amount_out = amount_in
-                .checked_mul(rate)
-                .ok_or(Error::Unauthorized)?
-                .checked_div(10_000_000)
-                .ok_or(Error::Unauthorized)?;
+            // Rate is token_in/token_out; compute amount_in * 1e7 / rate
+            let amount_out = amount_in
+                .checked_mul(10_000_000)
+                .ok_or(Error::Overflow)?
+                .checked_div(rate)
+                .ok_or(Error::Overflow)?;
+            if amount_out < min_amount_out {
+                return Err(Error::SlippageExceeded);
+            }
+            amount_out
         } else {
             return Err(Error::ResultNotFound);
-        }
+        };
+
+        // Checks passed. Now effects (atomic): collect token_in, then transfer token_out.
+        // Order matters: collect first, then distribute (checks-effects-interactions).
+
+        let client_in = soroban_sdk::token::Client::new(&env, &token_in);
+        client_in.transfer(&caller, &env.current_contract_address(), &amount_in);
 
         let client_out = soroban_sdk::token::Client::new(&env, &token_out);
         client_out.transfer(&env.current_contract_address(), &recipient, &amount_out);
