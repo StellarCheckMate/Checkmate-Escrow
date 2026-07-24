@@ -161,6 +161,7 @@ Prefer to learn by watching or testing yourself?
 - [Glossary](docs/glossary.md) — key terms (escrow, oracle, match states, Soroban, wave-ready, and more) for new contributors
 - [Architecture Overview](docs/architecture.md)
 - [Oracle Design](docs/oracle.md)
+- [WebSocket API](docs/websocket-api.md) — real-time match event protocol (protocol v1), connection lifecycle, subscription model, React hook
 - [Threat Model & Security](docs/security.md)
 - [Balance-Privacy Model](docs/privacy-model.md) — what the balance-snapshot APIs hide from non-admins, and what they don't
 - [Roadmap](docs/roadmap.md)
