@@ -1,0 +1,2649 @@
+openapi: 3.0.3
+
+info:
+  title: Checkmate-Escrow API
+  version: 1.0.0
+  description: |
+    ## Overview
+
+    Checkmate-Escrow is a trustless chess wagering platform built on Stellar Soroban smart contracts.
+    This specification covers three layers of the stack:
+
+    1. **Escrow Contract** – Soroban smart contract functions (invoked via Stellar RPC / `stellar contract invoke`).
+    2. **Oracle Service** – Off-chain HTTP service that bridges Chess.com / Lichess results to the on-chain oracle contract (port **8000**).
+    3. **Event Indexer** – Off-chain HTTP service that indexes Soroban events and exposes REST queries (port **8080**).
+
+    > **Note on Soroban contract calls:** Contract functions are not traditional HTTP endpoints.
+    > They are invoked by building a `InvokeContractHostFunction` transaction and submitting it to the
+    > Stellar RPC `simulateTransaction` / `sendTransaction` flow. The paths under `/contract/escrow/*`
+    > and `/contract/oracle/*` use a **logical URL scheme** to describe each function's parameters,
+    > return type, authorization requirements, and error codes in a format that Swagger UI can render
+    > interactively. Use the provided `curl` / JS / Python / Rust examples to see how to invoke them
+    > with the Stellar CLI or SDKs.
+
+    ## Match Lifecycle
+
+    ```
+    Pending ──► Active ──► PendingResult ──► Completed
+       │           │                              ▲
+       │           └──────────────────────────────┘
+       │                  (no dispute period)
+       └──► Cancelled
+            (cancel_match / expire_match)
+    ```
+
+    | State           | Description                                               |
+    |-----------------|-----------------------------------------------------------|
+    | `Pending`       | Created; awaiting deposits from both players              |
+    | `Active`        | Both players deposited; game in progress                  |
+    | `PendingResult` | Oracle submitted result; awaiting dispute window          |
+    | `Completed`     | Payout executed                                           |
+    | `Cancelled`     | Cancelled before activation, or expired after timeout     |
+    | `Paused`        | Match paused by a player                                  |
+
+  contact:
+    name: Checkmate-Escrow Contributors
+    url: https://github.com/checkmate-escrow
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8000
+    description: Oracle Service (local dev)
+  - url: http://localhost:8080
+    description: Event Indexer (local dev)
+  - url: https://oracle.checkmate-escrow.example.com
+    description: Oracle Service (testnet)
+  - url: https://indexer.checkmate-escrow.example.com
+    description: Event Indexer (testnet)
+
+tags:
+  - name: Escrow Contract – Match Management
+    description: Create, query, and cancel matches on the Soroban escrow contract.
+  - name: Escrow Contract – Escrow & Deposits
+    description: Deposit funds and query escrow balances.
+  - name: Escrow Contract – Oracle & Payouts
+    description: Submit verified results and trigger payouts.
+  - name: Escrow Contract – Admin
+    description: Admin-only contract management functions (pause, oracle rotation, token allowlist).
+  - name: Escrow Contract – Disputes
+    description: Open, vote on, and resolve disputed match results.
+  - name: Escrow Contract – Balance Snapshots
+    description: Audit-grade balance snapshot queries.
+  - name: Oracle Service
+    description: HTTP endpoints exposed by the off-chain oracle service on port 8000.
+  - name: Event Indexer
+    description: HTTP endpoints exposed by the event-indexer service on port 8080.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reusable components
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+  schemas:
+
+    # ── Enumerations ──────────────────────────────────────────────────────────
+
+    MatchState:
+      type: string
+      enum: [Pending, Active, PendingResult, Completed, Cancelled, Paused]
+      description: |
+        Lifecycle state of a match.
+        - `Pending` – awaiting both deposits
+        - `Active` – both deposited, game in progress
+        - `PendingResult` – oracle result submitted, dispute window open
+        - `Completed` – payout executed
+        - `Cancelled` – cancelled or expired
+        - `Paused` – paused by a player
+
+    Platform:
+      type: string
+      enum: [Lichess, ChessDotCom]
+      description: Chess platform that hosts the game.
+
+    Winner:
+      type: string
+      enum: [None, Player1, Player2, Draw]
+      description: |
+        Result of a completed match.
+        - `None` – not yet determined
+        - `Player1` / `Player2` – that player wins the full pot
+        - `Draw` – stakes returned to both players
+
+    PlayerTier:
+      type: string
+      enum: [Bronze, Silver, Gold, Platinum]
+      description: |
+        Player tier that controls maximum stake amounts.
+        | Tier     | Min completed | Stake range              |
+        |----------|--------------|--------------------------|
+        | Bronze   | 0            | 1 – 100 stroops          |
+        | Silver   | 3            | 101 – 500 stroops        |
+        | Gold     | 6            | 501 – 1 000 stroops      |
+        | Platinum | 10           | 1 001+ stroops           |
+
+    DisputeState:
+      type: string
+      enum: [Active, Upheld, Overturned, ResolvedUpheld, ResolvedOverturned]
+
+    SnapshotReason:
+      type: string
+      enum: [Created, Deposit, Paused, Resumed, Completed, Cancelled, ResultSubmitted, Finalized]
+
+    CanaryStatus:
+      type: string
+      enum: [pending, passed, failed]
+
+    CheckStatus:
+      type: string
+      enum: [up, degraded, down, rate_limited, unknown]
+
+    HealthStatus:
+      type: string
+      enum: [healthy, degraded, unhealthy]
+
+    MatchStatusIndexer:
+      type: string
+      enum: [pending, active, completed, cancelled, expired]
+      description: Match status as reported by the Event Indexer (lowercase).
+
+    WinnerIndexer:
+      type: string
+      enum: [player1, player2, draw]
+      description: Winner as reported by the Event Indexer (lowercase).
+
+    # ── Core contract structs ─────────────────────────────────────────────────
+
+    Match:
+      type: object
+      description: Full match record stored on-chain.
+      required:
+        - id
+        - player1
+        - player2
+        - stake_amount
+        - token
+        - game_id
+        - platform
+        - state
+        - player1_deposited
+        - player2_deposited
+        - created_ledger
+        - winner
+        - player1_claimed
+        - player2_claimed
+        - total_pause_duration
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 42
+        player1:
+          type: string
+          description: Stellar address of player 1 (match creator).
+          example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+        player2:
+          type: string
+          description: Stellar address of player 2.
+          example: "GBVVYFEQXUAYJMHQNMCQRZ6XJNMVWKK7KPZJZJZJZJZJZJZJZJZJZJ"
+        stake_amount:
+          type: integer
+          format: int64
+          description: Stake per player in the token's smallest unit (stroops for XLM).
+          example: 100
+        token:
+          type: string
+          description: Stellar token contract address.
+          example: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCN3"
+        game_id:
+          type: string
+          maxLength: 64
+          description: |
+            Platform-specific game identifier.
+            - Lichess: 8-character alphanumeric (e.g. `abcd1234`)
+            - Chess.com: numeric string 7–12 digits (e.g. `123456789`)
+          example: "abcd1234"
+        platform:
+          $ref: '#/components/schemas/Platform'
+        state:
+          $ref: '#/components/schemas/MatchState'
+        player1_deposited:
+          type: boolean
+        player2_deposited:
+          type: boolean
+        created_ledger:
+          type: integer
+          format: int32
+          description: Ledger sequence at match creation.
+          example: 1000000
+        completed_ledger:
+          type: integer
+          format: int32
+          nullable: true
+          description: Ledger sequence when match reached a terminal state.
+        winner:
+          $ref: '#/components/schemas/Winner'
+        vested_at:
+          type: integer
+          format: int64
+          nullable: true
+          description: UNIX timestamp when payout vesting started.
+        player1_claimed:
+          type: boolean
+        player2_claimed:
+          type: boolean
+        conversion_rate:
+          type: integer
+          format: int64
+          nullable: true
+          description: Multi-token conversion rate (scaled by 10^7).
+        token_b:
+          type: string
+          nullable: true
+          description: Second token address for multi-token matches.
+        conversion_rate_ledger:
+          type: integer
+          format: int32
+          nullable: true
+        paused_ledger:
+          type: integer
+          format: int32
+          nullable: true
+        total_pause_duration:
+          type: integer
+          format: int32
+          description: Accumulated pause duration in ledgers.
+          example: 0
+
+    ProtocolConfig:
+      type: object
+      description: Protocol-level configuration.
+      required: [vesting_duration_seconds, cancellation_fee_basis_points, treasury]
+      properties:
+        vesting_duration_seconds:
+          type: integer
+          format: int64
+          description: Seconds winners must wait before claiming vested payout.
+          example: 259200
+        cancellation_fee_basis_points:
+          type: integer
+          format: int32
+          description: Fee charged on cancellation refunds in basis points (0 = no fee).
+          example: 0
+        treasury:
+          type: string
+          description: Address that receives cancellation fees.
+          example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+
+    BalanceSnapshot:
+      type: object
+      description: Point-in-time audit snapshot of a match's escrowed balance.
+      required:
+        - match_id
+        - index
+        - reason
+        - ledger
+        - token
+        - token_symbol
+        - stake_amount
+        - escrow_balance
+        - player1_deposited
+        - player2_deposited
+      properties:
+        match_id:
+          type: integer
+          format: int64
+        index:
+          type: integer
+          format: int32
+          description: Monotonically increasing position in the snapshot ring buffer.
+        reason:
+          $ref: '#/components/schemas/SnapshotReason'
+        ledger:
+          type: integer
+          format: int32
+        token:
+          type: string
+        token_symbol:
+          type: string
+          example: "USDC"
+        stake_amount:
+          type: integer
+          format: int64
+          description: Stake per player. Zero in non-admin (redacted) views.
+        escrow_balance:
+          type: integer
+          format: int64
+          description: Total tokens held in escrow. Zero in non-admin (redacted) views.
+        player1_deposited:
+          type: boolean
+        player2_deposited:
+          type: boolean
+        nonce:
+          type: string
+          description: 32-byte hex salt. Only populated in admin view.
+          example: "0000000000000000000000000000000000000000000000000000000000000000"
+        commitment:
+          type: string
+          description: SHA-256(stake_amount || escrow_balance || nonce) — present in all views.
+          example: "a1b2c3d4..."
+
+    BalanceAtTimestamp:
+      type: object
+      description: |
+        Result of `get_balance_at_timestamp`. Distinguishes genuine zero from pruned data.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [Known, NoHistory, Pruned]
+          description: |
+            - `Known` – snapshot found; `value` holds the balance.
+            - `NoHistory` – no snapshot exists before the requested ledger (genuine absence).
+            - `Pruned` – ring buffer has overwritten old-enough snapshots; true balance unknown.
+        value:
+          type: integer
+          format: int64
+          nullable: true
+          description: Balance when `kind` is `Known`.
+
+    Dispute:
+      type: object
+      description: Dispute record for a contested match result.
+      required:
+        - id
+        - match_id
+        - disputer
+        - created_ledger
+        - voting_deadline
+        - state
+        - evidence_hash
+        - uphold_votes
+        - overturn_votes
+        - yes_votes
+        - no_votes
+        - dispute_bond
+        - snapshot_ledger
+        - snapshot_total_weight
+        - quorum_threshold
+      properties:
+        id:
+          type: integer
+          format: int64
+        match_id:
+          type: integer
+          format: int64
+        disputer:
+          type: string
+        created_ledger:
+          type: integer
+          format: int32
+        voting_deadline:
+          type: integer
+          format: int32
+        state:
+          $ref: '#/components/schemas/DisputeState'
+        evidence_hash:
+          type: string
+          description: On-chain reference to dispute evidence.
+        uphold_votes:
+          type: integer
+          format: int32
+        overturn_votes:
+          type: integer
+          format: int32
+        yes_votes:
+          type: integer
+          format: int32
+        no_votes:
+          type: integer
+          format: int32
+        dispute_bond:
+          type: integer
+          format: int64
+          description: Bond staked to open dispute; refunded on overturn.
+        snapshot_ledger:
+          type: integer
+          format: int32
+        snapshot_total_weight:
+          type: integer
+          format: int64
+        quorum_threshold:
+          type: integer
+          format: int64
+
+    # ── Request bodies ────────────────────────────────────────────────────────
+
+    CreateMatchRequest:
+      type: object
+      required: [player1, player2, stake_amount, token, game_id, platform]
+      properties:
+        player1:
+          type: string
+          description: Must authorize this call (match creator).
+          example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+        player2:
+          type: string
+          example: "GBVVYFEQXUAYJMHQNMCQRZ6XJNMVWKK7KPZJZJZJZJZJZJZJZJZJZJ"
+        stake_amount:
+          type: integer
+          format: int64
+          description: Stake per player (> 0). Must satisfy player tier limits.
+          example: 100
+        token:
+          type: string
+          description: Token contract address. Must be on the allowlist if enforcement is active.
+          example: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCN3"
+        game_id:
+          type: string
+          maxLength: 64
+          description: Platform-specific game ID (≤ 64 bytes, must be unique).
+          example: "abcd1234"
+        platform:
+          $ref: '#/components/schemas/Platform'
+
+    CreateMatchWithConversionRequest:
+      type: object
+      required: [player1, player2, stake_amount, token_a, token_b, rate, game_id, platform]
+      properties:
+        player1:
+          type: string
+          example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+        player2:
+          type: string
+          example: "GBVVYFEQXUAYJMHQNMCQRZ6XJNMVWKK7KPZJZJZJZJZJZJZJZJZJZJ"
+        stake_amount:
+          type: integer
+          format: int64
+          example: 100
+        token_a:
+          type: string
+          description: Token player1 stakes.
+        token_b:
+          type: string
+          description: Token player2 stakes.
+        rate:
+          type: integer
+          format: int64
+          description: Conversion rate scaled by 10^7. Must be within ±5% of the oracle price.
+          example: 10000000
+        game_id:
+          type: string
+          maxLength: 64
+          example: "abcd1234"
+        platform:
+          $ref: '#/components/schemas/Platform'
+
+    DepositRequest:
+      type: object
+      required: [match_id, player]
+      properties:
+        match_id:
+          type: integer
+          format: int64
+          example: 42
+        player:
+          type: string
+          description: Must be player1 or player2; must authorize this call.
+          example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+
+    SubmitResultRequest:
+      type: object
+      required: [match_id, winner]
+      properties:
+        match_id:
+          type: integer
+          format: int64
+          example: 42
+        winner:
+          $ref: '#/components/schemas/Winner'
+
+    SubmitResultWithRecordRequest:
+      type: object
+      required: [match_id, winner, game_id]
+      properties:
+        match_id:
+          type: integer
+          format: int64
+          example: 42
+        winner:
+          $ref: '#/components/schemas/Winner'
+        game_id:
+          type: string
+          maxLength: 64
+          example: "abcd1234"
+
+    CancelMatchRequest:
+      type: object
+      required: [match_id, caller]
+      properties:
+        match_id:
+          type: integer
+          format: int64
+          example: 42
+        caller:
+          type: string
+          description: Must be player1 or player2; must authorize this call.
+          example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+
+    PauseResumeMatchRequest:
+      type: object
+      required: [match_id, caller]
+      properties:
+        match_id:
+          type: integer
+          format: int64
+          example: 42
+        caller:
+          type: string
+          description: Must be player1 or player2; must authorize this call.
+
+    OpenDisputeRequest:
+      type: object
+      required: [match_id, disputer, evidence_hash]
+      properties:
+        match_id:
+          type: integer
+          format: int64
+          example: 42
+        disputer:
+          type: string
+          description: Address opening the dispute; must be a staker and must authorize.
+        evidence_hash:
+          type: string
+          description: On-chain string reference to evidence.
+
+    VoteOnDisputeRequest:
+      type: object
+      required: [dispute_id, voter, uphold]
+      properties:
+        dispute_id:
+          type: integer
+          format: int64
+        voter:
+          type: string
+          description: Must be an eligible staker; must authorize.
+        uphold:
+          type: boolean
+          description: "`true` to uphold the oracle result; `false` to overturn."
+
+    UpdateOracleRequest:
+      type: object
+      required: [new_oracle]
+      properties:
+        new_oracle:
+          type: string
+          description: New oracle address.
+
+    TransferAdminRequest:
+      type: object
+      required: [new_admin]
+      properties:
+        new_admin:
+          type: string
+          description: Address to transfer admin rights to (two-step; new admin must accept).
+
+    TokenRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: Token contract address to add/remove.
+
+    # ── Error ─────────────────────────────────────────────────────────────────
+
+    ContractError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+          description: Soroban contract error code.
+          example: 1
+        message:
+          type: string
+          description: Human-readable description of the error.
+          example: "MatchNotFound"
+
+    ApiError:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          example: "Database error: connection refused"
+
+    # ── Oracle service ─────────────────────────────────────────────────────────
+
+    CheckResult:
+      type: object
+      required: [status, latency_ms, last_checked_at, consecutive_failures]
+      properties:
+        status:
+          $ref: '#/components/schemas/CheckStatus'
+        latency_ms:
+          type: integer
+          format: int64
+          example: 42
+        last_checked_at:
+          type: string
+          format: date-time
+        consecutive_failures:
+          type: integer
+          format: int32
+          example: 0
+        details:
+          type: string
+          nullable: true
+
+    HealthChecks:
+      type: object
+      required: [stellar_rpc, escrow_contract, oracle_contract, lichess_api, chess_com_api]
+      properties:
+        stellar_rpc:
+          $ref: '#/components/schemas/CheckResult'
+        escrow_contract:
+          $ref: '#/components/schemas/CheckResult'
+        oracle_contract:
+          $ref: '#/components/schemas/CheckResult'
+        lichess_api:
+          $ref: '#/components/schemas/CheckResult'
+        chess_com_api:
+          $ref: '#/components/schemas/CheckResult'
+
+    OracleHealthResponse:
+      type: object
+      required:
+        - status
+        - service_ready
+        - network
+        - contract_escrow
+        - contract_oracle
+        - oracle_address
+        - checks
+        - canary_status
+        - last_full_check_at
+        - uptime_seconds
+      properties:
+        status:
+          $ref: '#/components/schemas/HealthStatus'
+        service_ready:
+          type: boolean
+          description: True when the oracle is fully operational and processing matches.
+        network:
+          type: string
+          example: "testnet"
+        contract_escrow:
+          type: string
+          description: Escrow contract address being monitored.
+        contract_oracle:
+          type: string
+          description: Oracle contract address.
+        oracle_address:
+          type: string
+          description: Public key of the oracle's signing keypair.
+        checks:
+          $ref: '#/components/schemas/HealthChecks'
+        canary_status:
+          $ref: '#/components/schemas/CanaryStatus'
+        canary_details:
+          type: string
+          nullable: true
+        last_full_check_at:
+          type: string
+          format: date-time
+        uptime_seconds:
+          type: integer
+          format: int64
+          example: 3600
+
+    # ── Event indexer ──────────────────────────────────────────────────────────
+
+    IndexedEvent:
+      type: object
+      required: [id, ledger_sequence, match_id, event_type, timestamp]
+      properties:
+        id:
+          type: string
+          description: Unique event ID generated by the indexer.
+          example: "01HZV3BGKXY8JPKJQ4X5MGST4E"
+        ledger_sequence:
+          type: integer
+          format: int32
+          example: 1000050
+        match_id:
+          type: integer
+          format: int64
+          example: 42
+        event_type:
+          type: string
+          description: Event name as emitted by the contract (e.g. `match/created`).
+          example: "match/created"
+        player1:
+          type: string
+          nullable: true
+        player2:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        winner:
+          type: string
+          nullable: true
+        stake_amount:
+          type: string
+          nullable: true
+          description: Stake amount as a decimal string.
+        token:
+          type: string
+          nullable: true
+        game_id:
+          type: string
+          nullable: true
+        platform:
+          type: string
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+        txn_hash:
+          type: string
+          nullable: true
+        event_index_in_txn:
+          type: integer
+          nullable: true
+        reorg_invalidated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    MatchInfo:
+      type: object
+      required:
+        - match_id
+        - player1
+        - player2
+        - status
+        - stake_amount
+        - token
+        - game_id
+        - platform
+        - created_ledger
+        - events
+      properties:
+        match_id:
+          type: integer
+          format: int64
+          example: 42
+        player1:
+          type: string
+        player2:
+          type: string
+        status:
+          $ref: '#/components/schemas/MatchStatusIndexer'
+        winner:
+          $ref: '#/components/schemas/WinnerIndexer'
+        stake_amount:
+          type: string
+          description: Stake as a decimal string.
+          example: "100"
+        token:
+          type: string
+        game_id:
+          type: string
+        platform:
+          type: string
+        created_ledger:
+          type: integer
+          format: int32
+        completed_ledger:
+          type: integer
+          format: int32
+          nullable: true
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/IndexedEvent'
+
+    IndexerStats:
+      type: object
+      required: [total_events, cache_size]
+      properties:
+        total_events:
+          type: integer
+          format: int64
+          example: 15000
+        cache_size:
+          type: integer
+          example: 342
+
+    ApiResponseEvents:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/IndexedEvent'
+        error:
+          type: string
+          nullable: true
+
+    ApiResponseMatches:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/MatchInfo'
+        error:
+          type: string
+          nullable: true
+
+    ApiResponseMatchInfo:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        data:
+          nullable: true
+          $ref: '#/components/schemas/MatchInfo'
+        error:
+          type: string
+          nullable: true
+
+    ApiResponseStats:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+        data:
+          nullable: true
+          $ref: '#/components/schemas/IndexerStats'
+        error:
+          type: string
+          nullable: true
+
+  # ── Security schemes ─────────────────────────────────────────────────────────
+  securitySchemes:
+    SorobanAdminAuth:
+      type: apiKey
+      in: header
+      name: X-Stellar-Authorization
+      description: |
+        Soroban transactions require the admin's Stellar keypair authorization.
+        The transaction envelope must carry a valid Ed25519 signature from the
+        admin address. This header is a placeholder for documentation purposes;
+        actual authorization is enforced by the Stellar network at the
+        transaction level, not via HTTP headers.
+    SorobanPlayerAuth:
+      type: apiKey
+      in: header
+      name: X-Stellar-Authorization
+      description: |
+        Soroban transactions that mutate player-owned state (deposit, cancel,
+        pause/resume) require an Ed25519 signature from the relevant player.
+    SorobanOracleAuth:
+      type: apiKey
+      in: header
+      name: X-Stellar-Authorization
+      description: |
+        Result submission requires an Ed25519 signature from the configured
+        oracle address.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────────────────────────────────────
+paths:
+
+  # ── Escrow: Match Management ─────────────────────────────────────────────
+
+  /contract/escrow/create_match:
+    post:
+      tags: [Escrow Contract – Match Management]
+      summary: Create a new match
+      description: |
+        Creates a wagered match on-chain. `player1` must authorize this transaction.
+
+        **Authorization:** `player1` signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 9  | ContractPaused    | Contract is paused |
+        | 10 | InvalidAmount     | `stake_amount` ≤ 0 |
+        | 13 | DuplicateGameId   | `game_id` already used |
+        | 15 | InvalidGameId     | `game_id` empty or > 64 bytes |
+        | 16 | InvalidPlayers    | `player1 == player2` or invalid address |
+        | 17 | TokenNotAllowed   | Token not on allowlist (when enforcement active) |
+        | 35 | TierStakeNotAllowed | Stake exceeds player's tier limit |
+        | 45 | TooManyActiveMatches | Player has hit the 1000 active-match cap |
+
+        **curl example:**
+        ```bash
+        stellar contract invoke \
+          --id $CONTRACT_ESCROW \
+          --network testnet \
+          --source player1_keypair \
+          -- create_match \
+          --player1 GAHJJ...NLNM \
+          --player2 GBVVY...JZJZ \
+          --stake_amount 100 \
+          --token CDLZF...CN3 \
+          --game_id abcd1234 \
+          --platform Lichess
+        ```
+      operationId: createMatch
+      security:
+        - SorobanPlayerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMatchRequest'
+            example:
+              player1: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+              player2: "GBVVYFEQXUAYJMHQNMCQRZ6XJNMVWKK7KPZJZJZJZJZJZJZJZJZJZJ"
+              stake_amount: 100
+              token: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCN3"
+              game_id: "abcd1234"
+              platform: "Lichess"
+      responses:
+        '200':
+          description: Match created. Returns the new match ID (`u64`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: integer
+                    format: int64
+                    description: Newly assigned match ID.
+                    example: 42
+        '400':
+          description: Contract error (see error table above).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/create_match_with_conversion:
+    post:
+      tags: [Escrow Contract – Match Management]
+      summary: Create a multi-token match with conversion rate
+      description: |
+        Creates a match where player1 stakes `token_a` and player2 stakes `token_b`.
+        The conversion `rate` is verified against the oracle's price feed (must be within ±5%).
+
+        **Authorization:** `player1` signature required.
+
+        **Errors:** Same as `create_match` plus:
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 38 | InvalidConversionRate      | `rate` ≤ 0 |
+        | 39 | ConversionRateOutOfBounds  | `rate` more than ±5% from oracle price |
+      operationId: createMatchWithConversion
+      security:
+        - SorobanPlayerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMatchWithConversionRequest'
+      responses:
+        '200':
+          description: Match created. Returns the new match ID.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: integer
+                    format: int64
+                    example: 43
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/get_match:
+    get:
+      tags: [Escrow Contract – Match Management]
+      summary: Get a match by ID
+      description: |
+        Returns the full on-chain match record.
+
+        **curl example:**
+        ```bash
+        stellar contract invoke \
+          --id $CONTRACT_ESCROW \
+          --network testnet \
+          -- get_match \
+          --match_id 42
+        ```
+      operationId: getMatch
+      parameters:
+        - name: match_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 42
+      responses:
+        '200':
+          description: Match record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Match'
+        '404':
+          description: Match not found (error code 1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/get_player_matches:
+    get:
+      tags: [Escrow Contract – Match Management]
+      summary: Get all match IDs for a player
+      description: Returns a list of match IDs in which the given address participates.
+      operationId: getPlayerMatches
+      parameters:
+        - name: player
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+      responses:
+        '200':
+          description: List of match IDs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: array
+                    items:
+                      type: integer
+                      format: int64
+                    example: [1, 5, 42]
+
+  /contract/escrow/get_pending_matches:
+    get:
+      tags: [Escrow Contract – Match Management]
+      summary: Get all pending matches (deprecated — use paginated variant)
+      description: |
+        Returns up to 10 000 matches in `Pending` state. For large datasets use
+        `get_pending_matches_paginated`.
+      operationId: getPendingMatches
+      responses:
+        '200':
+          description: List of pending matches.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Match'
+
+  /contract/escrow/get_active_matches:
+    get:
+      tags: [Escrow Contract – Match Management]
+      summary: Get all active matches (deprecated — use paginated variant)
+      description: Returns up to 10 000 matches in `Active` state.
+      operationId: getActiveMatches
+      responses:
+        '200':
+          description: List of active matches.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Match'
+
+  /contract/escrow/cancel_match:
+    post:
+      tags: [Escrow Contract – Match Management]
+      summary: Cancel a pending match
+      description: |
+        Either player can cancel a `Pending` match. Any deposited funds are refunded
+        (minus cancellation fee if configured).
+
+        **Authorization:** `caller` (player1 or player2) signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 1  | MatchNotFound     | No match for `match_id` |
+        | 4  | Unauthorized      | `caller` is not player1 or player2 |
+        | 5  | InvalidState      | Match is not `Pending` |
+        | 19 | MatchAlreadyActive | Match is already `Active` |
+      operationId: cancelMatch
+      security:
+        - SorobanPlayerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelMatchRequest'
+      responses:
+        '200':
+          description: Match cancelled successfully.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/expire_match:
+    post:
+      tags: [Escrow Contract – Match Management]
+      summary: Expire a match that has timed out
+      description: |
+        Anyone can call this once the match timeout has elapsed (default ~30 days).
+        Refunds any deposited stakes. Pause duration is excluded from the timeout.
+
+        **Authorization:** None required (permissionless).
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 1  | MatchNotFound   | No match for `match_id` |
+        | 5  | InvalidState    | Match is not `Pending` |
+        | 14 | MatchNotExpired | Timeout has not elapsed yet |
+      operationId: expireMatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [match_id]
+              properties:
+                match_id:
+                  type: integer
+                  format: int64
+                  example: 42
+      responses:
+        '200':
+          description: Match expired and any deposits refunded.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/pause_match:
+    post:
+      tags: [Escrow Contract – Match Management]
+      summary: Pause an active match
+      description: |
+        Either player can pause an `Active` match. Sets state to `Paused` and records
+        the pause start ledger. Pause duration is excluded from match timeout.
+
+        **Authorization:** `caller` (player1 or player2) signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 1  | MatchNotFound    | No match for `match_id` |
+        | 4  | Unauthorized     | `caller` is not a match player |
+        | 37 | InvalidPauseState | Match is not `Active` |
+      operationId: pauseMatch
+      security:
+        - SorobanPlayerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PauseResumeMatchRequest'
+      responses:
+        '200':
+          description: Match paused.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/resume_match:
+    post:
+      tags: [Escrow Contract – Match Management]
+      summary: Resume a paused match
+      description: |
+        Either player can resume a `Paused` match. Accumulates pause duration and
+        returns state to `Active`.
+
+        **Authorization:** `caller` (player1 or player2) signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 1 | MatchNotFound | No match for `match_id` |
+        | 4 | Unauthorized  | `caller` is not a match player |
+        | 5 | InvalidState  | Match is not `Paused` |
+      operationId: resumeMatch
+      security:
+        - SorobanPlayerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PauseResumeMatchRequest'
+      responses:
+        '200':
+          description: Match resumed.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  # ── Escrow: Deposits & Balances ──────────────────────────────────────────
+
+  /contract/escrow/deposit:
+    post:
+      tags: [Escrow Contract – Escrow & Deposits]
+      summary: Deposit stake into escrow
+      description: |
+        A matched player transfers their stake to the escrow contract.
+        When both players have deposited the match transitions to `Active`.
+
+        **Authorization:** `player` signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 1  | MatchNotFound  | No match for `match_id` |
+        | 2  | AlreadyFunded  | This player already deposited |
+        | 4  | Unauthorized   | `player` is not player1 or player2 |
+        | 5  | InvalidState   | Match is not `Pending` |
+        | 9  | ContractPaused | Contract is paused |
+        | 35 | TierStakeNotAllowed | Stake exceeds player's tier limit |
+
+        **curl example:**
+        ```bash
+        stellar contract invoke \
+          --id $CONTRACT_ESCROW \
+          --network testnet \
+          --source player1_keypair \
+          -- deposit \
+          --match_id 42 \
+          --player GAHJJ...NLNM
+        ```
+      operationId: deposit
+      security:
+        - SorobanPlayerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DepositRequest'
+      responses:
+        '200':
+          description: Deposit successful. Match transitions to `Active` when both players deposit.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/is_funded:
+    get:
+      tags: [Escrow Contract – Escrow & Deposits]
+      summary: Check whether both players have deposited
+      description: |
+        Returns `true` only when **both** players have deposited (match is `Active`).
+        Use this to gate game-start logic; do not confuse with `get_escrow_balance`.
+
+        | Scenario                        | is_funded | get_escrow_balance  |
+        |---------------------------------|-----------|---------------------|
+        | Only player1 deposited          | false     | 1 × stake_amount    |
+        | Both deposited (Active)         | true      | 2 × stake_amount    |
+        | Match completed (payout done)   | true      | 0                   |
+        | Match cancelled (refunds done)  | false     | 0                   |
+      operationId: isFunded
+      parameters:
+        - name: match_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 42
+      responses:
+        '200':
+          description: Funding status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: boolean
+                    example: true
+        '404':
+          description: Match not found (error code 1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/get_escrow_balance:
+    get:
+      tags: [Escrow Contract – Escrow & Deposits]
+      summary: Get total tokens currently held in escrow
+      description: |
+        Returns the live token balance held in escrow for a match.
+        Returns `0` for completed or cancelled matches (funds already paid out/refunded).
+      operationId: getEscrowBalance
+      parameters:
+        - name: match_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 42
+      responses:
+        '200':
+          description: Escrow balance in the token's smallest unit.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: integer
+                    format: int64
+                    example: 200
+        '404':
+          description: Match not found (error code 1).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  # ── Escrow: Oracle & Payouts ────────────────────────────────────────────
+
+  /contract/escrow/submit_result:
+    post:
+      tags: [Escrow Contract – Oracle & Payouts]
+      summary: Submit a verified match result (oracle)
+      description: |
+        The configured oracle submits the game result. If no dispute period is
+        configured the match transitions directly to `Completed` and the payout
+        is executed. Otherwise the match enters `PendingResult` and a dispute
+        window opens.
+
+        **Authorization:** Oracle address signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 3  | NotFunded      | One or both players have not deposited |
+        | 4  | Unauthorized   | Caller is not the configured oracle |
+        | 5  | InvalidState   | Match is not `Active` |
+        | 9  | ContractPaused | Contract is paused |
+
+        **curl example:**
+        ```bash
+        stellar contract invoke \
+          --id $CONTRACT_ESCROW \
+          --network testnet \
+          --source oracle_keypair \
+          -- submit_result \
+          --match_id 42 \
+          --winner Player1
+        ```
+      operationId: submitResult
+      security:
+        - SorobanOracleAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitResultRequest'
+      responses:
+        '200':
+          description: Result submitted. Payout executed (or dispute window opened).
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/submit_result_with_oracle_record:
+    post:
+      tags: [Escrow Contract – Oracle & Payouts]
+      summary: Submit result and store audit record (canonical oracle path)
+      description: |
+        Canonical oracle integration path. Calls `submit_result` internally and
+        additionally stores the verified `game_id` on-chain for an audit trail.
+
+        **Authorization:** Oracle address signature required.
+
+        **Errors:** Same as `submit_result`.
+      operationId: submitResultWithOracleRecord
+      security:
+        - SorobanOracleAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitResultWithRecordRequest'
+      responses:
+        '200':
+          description: Result submitted and oracle record stored.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/finalize_result:
+    post:
+      tags: [Escrow Contract – Oracle & Payouts]
+      summary: Finalize a pending result after the dispute window
+      description: |
+        Anyone can call this after the dispute window has elapsed for a
+        `PendingResult` match. Executes the payout if no dispute was raised.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 25 | PendingResultNotFound   | No pending result for this match |
+        | 31 | MatchNotInPendingResult | Match not in `PendingResult` state |
+        | 32 | DisputePeriodNotElapsed | Dispute window still open |
+      operationId: finalizeResult
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [match_id]
+              properties:
+                match_id:
+                  type: integer
+                  format: int64
+                  example: 42
+      responses:
+        '200':
+          description: Result finalized and payout executed.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  # ── Escrow: Admin ───────────────────────────────────────────────────────
+
+  /contract/escrow/initialize:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Initialize the escrow contract
+      description: |
+        One-time initialization. Sets the trusted oracle and admin addresses.
+
+        **Authorization:** Deployer (no prior admin exists — first-call only).
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 7  | AlreadyInitialized | Contract already initialized |
+        | 18 | InvalidAddress     | `oracle` is the contract's own address |
+      operationId: escrowInitialize
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [oracle, admin]
+              properties:
+                oracle:
+                  type: string
+                  example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+                admin:
+                  type: string
+                  example: "GBVVYFEQXUAYJMHQNMCQRZ6XJNMVWKK7KPZJZJZJZJZJZJZJZJZJZJ"
+      responses:
+        '200':
+          description: Contract initialized.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/pause:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Pause the contract
+      description: |
+        Blocks `create_match`, `deposit`, and `submit_result`.
+
+        **Authorization:** Admin signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 4 | Unauthorized | Caller is not the admin |
+      operationId: pauseContract
+      security:
+        - SorobanAdminAuth: []
+      responses:
+        '200':
+          description: Contract paused.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/unpause:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Unpause the contract
+      description: |
+        Resumes normal operation.
+
+        **Authorization:** Admin signature required.
+      operationId: unpauseContract
+      security:
+        - SorobanAdminAuth: []
+      responses:
+        '200':
+          description: Contract unpaused.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/is_paused:
+    get:
+      tags: [Escrow Contract – Admin]
+      summary: Check whether the contract is paused
+      operationId: isPaused
+      responses:
+        '200':
+          description: Pause status.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: boolean
+                    example: false
+
+  /contract/escrow/update_oracle:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Update the trusted oracle address
+      description: |
+        Rotates the on-chain oracle to a new address.
+
+        **Authorization:** Admin signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 4  | Unauthorized   | Caller is not the admin |
+        | 18 | InvalidAddress | New oracle is the contract's own address |
+      operationId: updateOracle
+      security:
+        - SorobanAdminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOracleRequest'
+      responses:
+        '200':
+          description: Oracle updated.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/transfer_admin:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Initiate admin transfer (two-step)
+      description: |
+        Proposes a new admin. The new admin must call `accept_admin` to complete
+        the transfer.
+
+        **Authorization:** Current admin signature required.
+      operationId: transferAdmin
+      security:
+        - SorobanAdminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferAdminRequest'
+      responses:
+        '200':
+          description: Pending admin set.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/accept_admin:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Accept a pending admin transfer
+      description: |
+        Completes the two-step admin transfer initiated by `transfer_admin`.
+
+        **Authorization:** Pending admin signature required.
+      operationId: acceptAdmin
+      security:
+        - SorobanAdminAuth: []
+      responses:
+        '200':
+          description: Admin transfer complete.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/add_allowed_token:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Add a token to the allowlist
+      description: |
+        Adds a token to the allowlist. Once the first token is added,
+        allowlist enforcement activates and only listed tokens are accepted
+        for new matches.
+
+        **Authorization:** Admin signature required.
+      operationId: addAllowedToken
+      security:
+        - SorobanAdminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: Token added.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/remove_allowed_token:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Remove a token from the allowlist
+      description: |
+        Removes a token. If the allowlist becomes empty, enforcement is
+        automatically disabled.
+
+        **Authorization:** Admin signature required.
+      operationId: removeAllowedToken
+      security:
+        - SorobanAdminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: Token removed.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/get_allowed_tokens:
+    get:
+      tags: [Escrow Contract – Admin]
+      summary: List all allowlisted tokens
+      operationId: getAllowedTokens
+      responses:
+        '200':
+          description: Ordered list of allowlisted token addresses.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: array
+                    items:
+                      type: string
+                    example: ["CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCN3"]
+
+  /contract/escrow/is_token_allowed:
+    get:
+      tags: [Escrow Contract – Admin]
+      summary: Check if a token is on the allowlist
+      operationId: isTokenAllowed
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Whether the token is allowed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: boolean
+                    example: true
+
+  /contract/escrow/set_match_timeout:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Set the match expiration timeout
+      description: |
+        Configures how many ledgers a `Pending` match may exist before it can
+        be expired. Must be between 17 280 (1 day) and 1 555 200 (90 days).
+
+        **Authorization:** Admin signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 20 | InvalidTimeout | Value outside [17280, 1555200] |
+      operationId: setMatchTimeout
+      security:
+        - SorobanAdminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timeout_ledgers]
+              properties:
+                timeout_ledgers:
+                  type: integer
+                  format: int32
+                  minimum: 17280
+                  maximum: 1555200
+                  example: 518400
+      responses:
+        '200':
+          description: Timeout updated.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/set_protocol_config:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Update protocol configuration
+      description: |
+        Sets vesting duration, cancellation fee, and treasury address.
+
+        **Authorization:** Admin signature required.
+      operationId: setProtocolConfig
+      security:
+        - SorobanAdminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProtocolConfig'
+      responses:
+        '200':
+          description: Config updated.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/get_protocol_config:
+    get:
+      tags: [Escrow Contract – Admin]
+      summary: Get current protocol configuration
+      operationId: getProtocolConfig
+      responses:
+        '200':
+          description: Current protocol config.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProtocolConfig'
+
+  # ── Escrow: Disputes ────────────────────────────────────────────────────
+
+  /contract/escrow/open_dispute:
+    post:
+      tags: [Escrow Contract – Disputes]
+      summary: Open a dispute on a pending result
+      description: |
+        Any staker can challenge a `PendingResult` by locking a bond
+        (default 1% of match stake). The bond is refunded if the result is
+        overturned, or forfeited if it is upheld.
+
+        **Authorization:** `disputer` signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 29 | NotStaker              | Disputer has no staked tokens |
+        | 31 | MatchNotInPendingResult | Match is not `PendingResult` |
+        | 33 | DisputeAlreadyRaised   | Dispute already open for this match |
+        | 34 | InvalidEvidenceHash    | Empty evidence hash |
+        | 41 | InsufficientBond       | Bond amount below required threshold |
+        | 43 | InsufficientHoldingDuration | Tokens held < minimum hold duration |
+      operationId: openDispute
+      security:
+        - SorobanPlayerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenDisputeRequest'
+      responses:
+        '200':
+          description: Dispute opened. Voting window starts.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/vote_on_dispute:
+    post:
+      tags: [Escrow Contract – Disputes]
+      summary: Cast a vote on an open dispute
+      description: |
+        Eligible stakers vote to uphold or overturn the oracle result during
+        the voting window (default 1 day).
+
+        **Authorization:** `voter` signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 24 | DisputeNotFound        | No dispute for this ID |
+        | 27 | VotingPeriodElapsed    | Voting window has closed |
+        | 28 | AlreadyVoted           | Voter already voted |
+        | 29 | NotStaker              | Voter has no eligible stake |
+        | 43 | InsufficientHoldingDuration | Tokens held < minimum hold duration |
+      operationId: voteOnDispute
+      security:
+        - SorobanPlayerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoteOnDisputeRequest'
+      responses:
+        '200':
+          description: Vote recorded.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/resolve_dispute:
+    post:
+      tags: [Escrow Contract – Disputes]
+      summary: Resolve a dispute after the voting period
+      description: |
+        Anyone can call after the voting deadline. Tallies votes; if quorum is
+        met the majority verdict is applied. If quorum is not met the result
+        is escalated for admin resolution.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 24 | DisputeNotFound         | No dispute for this ID |
+        | 26 | DisputeAlreadyResolved  | Dispute is no longer active |
+        | 30 | VotingPeriodNotElapsed  | Voting window still open |
+        | 42 | QuorumNotMet            | Insufficient participation |
+      operationId: resolveDispute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [dispute_id]
+              properties:
+                dispute_id:
+                  type: integer
+                  format: int64
+                  example: 1
+      responses:
+        '200':
+          description: Dispute resolved. Payout or refund executed.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/get_dispute:
+    get:
+      tags: [Escrow Contract – Disputes]
+      summary: Get a dispute record
+      operationId: getDispute
+      parameters:
+        - name: dispute_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 1
+      responses:
+        '200':
+          description: Dispute record.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dispute'
+        '404':
+          description: Dispute not found (error code 24).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  # ── Escrow: Balance Snapshots ────────────────────────────────────────────
+
+  /contract/escrow/get_balance_snapshot:
+    get:
+      tags: [Escrow Contract – Balance Snapshots]
+      summary: Get a specific balance snapshot for a match
+      description: |
+        Returns the snapshot at the given ring-buffer slot index. Non-admin
+        callers receive a redacted view with `stake_amount`, `escrow_balance`,
+        and `nonce` zeroed out but `commitment` intact for verification.
+
+        See [docs/privacy-model.md](../docs/privacy-model.md) for details.
+      operationId: getBalanceSnapshot
+      parameters:
+        - name: match_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 42
+        - name: index
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int32
+          example: 0
+      responses:
+        '200':
+          description: Balance snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceSnapshot'
+        '404':
+          description: Snapshot not found (error code 21).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/escrow/get_snapshot_count:
+    get:
+      tags: [Escrow Contract – Balance Snapshots]
+      summary: Get the total number of snapshots for a match
+      description: Returns the monotonically increasing snapshot count (never reset).
+      operationId: getSnapshotCount
+      parameters:
+        - name: match_id
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 42
+      responses:
+        '200':
+          description: Total snapshot count.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    type: integer
+                    format: int32
+                    example: 4
+
+  /contract/escrow/get_balance_at_timestamp:
+    get:
+      tags: [Escrow Contract – Balance Snapshots]
+      summary: Get a player's aggregate escrow balance at a ledger
+      description: |
+        Returns the player's aggregate escrow balance at or before the given
+        ledger. Distinguishes genuine zero from ring-buffer pruning.
+
+        See `BalanceAtTimestamp` schema for the three possible response kinds.
+      operationId: getBalanceAtTimestamp
+      parameters:
+        - name: player
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+        - name: ledger
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+          description: Ledger sequence to query.
+          example: 1000000
+      responses:
+        '200':
+          description: Balance result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceAtTimestamp'
+
+  # ── Oracle Contract ──────────────────────────────────────────────────────
+
+  /contract/oracle/initialize:
+    post:
+      tags: [Escrow Contract – Admin]
+      summary: Initialize the oracle contract
+      description: |
+        One-time initialization. Sets the trusted admin for the oracle contract.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 4 | AlreadyInitialized | Already initialized |
+      operationId: oracleInitialize
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [admin]
+              properties:
+                admin:
+                  type: string
+                  example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+      responses:
+        '200':
+          description: Oracle contract initialized.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/oracle/register_oracle_with_stake:
+    post:
+      tags: [Escrow Contract – Oracle & Payouts]
+      summary: Register an oracle with a token stake
+      description: |
+        An oracle registers itself by transferring a stake. The stake can be
+        slashed if the oracle misbehaves (equivocation or minority vote).
+
+        **Authorization:** `oracle_address` signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 11 | InsufficientStake | `stake_amount` ≤ 0 |
+      operationId: registerOracleWithStake
+      security:
+        - SorobanOracleAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [oracle_address, stake_amount, token]
+              properties:
+                oracle_address:
+                  type: string
+                  example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+                stake_amount:
+                  type: integer
+                  format: int64
+                  example: 1000
+                token:
+                  type: string
+                  example: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCN3"
+      responses:
+        '200':
+          description: Oracle registered and stake locked.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/oracle/submit_oracle_result:
+    post:
+      tags: [Escrow Contract – Oracle & Payouts]
+      summary: Submit an oracle result (registered oracles)
+      description: |
+        A registered oracle submits a result for a match. Results are tallied
+        via m-of-n consensus. When the threshold is reached the escrow
+        `submit_result_with_oracle_record` is called automatically.
+
+        **Authorization:** `oracle` signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 1  | Unauthorized       | Caller is not authorized |
+        | 2  | AlreadySubmitted   | This oracle already submitted for this match |
+        | 5  | ContractPaused     | Contract is paused |
+        | 9  | RateLimitExceeded  | Oracle exceeded hourly/daily limit |
+        | 11 | InsufficientStake  | Oracle stake too low |
+        | 12 | NotRegisteredOracle | Oracle never registered |
+        | 14 | MatchDisputed      | Consensus deadlocked; awaiting admin |
+      operationId: submitOracleResult
+      security:
+        - SorobanOracleAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [match_id, game_id, winner, oracle]
+              properties:
+                match_id:
+                  type: integer
+                  format: int64
+                  example: 42
+                game_id:
+                  type: string
+                  example: "abcd1234"
+                winner:
+                  $ref: '#/components/schemas/Winner'
+                oracle:
+                  type: string
+                  description: Registered oracle address.
+      responses:
+        '200':
+          description: Oracle result submitted. Payout may be triggered if consensus reached.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  /contract/oracle/submit_batch:
+    post:
+      tags: [Escrow Contract – Oracle & Payouts]
+      summary: Submit a batch of oracle results (up to 100)
+      description: |
+        Submits multiple results in one transaction. Batch size is capped at
+        100 entries. Duplicate `match_id` entries within a batch are rejected.
+
+        **Authorization:** `oracle` signature required.
+
+        **Errors:**
+        | Code | Name | Cause |
+        |------|------|-------|
+        | 7 | BatchTooLarge      | More than 100 entries |
+        | 8 | BatchDuplicateEntry | Duplicate match_id in batch |
+      operationId: submitBatch
+      security:
+        - SorobanOracleAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entries, oracle]
+              properties:
+                oracle:
+                  type: string
+                entries:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [match_id, game_id, winner]
+                    properties:
+                      match_id:
+                        type: integer
+                        format: int64
+                      game_id:
+                        type: string
+                      winner:
+                        $ref: '#/components/schemas/Winner'
+      responses:
+        '200':
+          description: Batch submitted. Individual result errors are returned per-entry.
+        '400':
+          description: Contract error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractError'
+
+  # ── Oracle Service HTTP ──────────────────────────────────────────────────
+
+  /health:
+    get:
+      tags: [Oracle Service]
+      summary: Oracle service health check
+      description: |
+        Returns real-time liveness status for all critical dependencies:
+        Stellar RPC, escrow contract, oracle contract, Lichess API, and Chess.com API.
+
+        **Status semantics:**
+        - `healthy` – all critical dependencies operational
+        - `degraded` – some non-critical dependencies failing
+        - `unhealthy` – critical dependencies down
+
+        **curl example:**
+        ```bash
+        curl http://localhost:8000/health
+        ```
+      operationId: oracleHealth
+      servers:
+        - url: http://localhost:8000
+          description: Oracle Service (local dev)
+      responses:
+        '200':
+          description: Health status (always 200; inspect `status` field).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OracleHealthResponse'
+              example:
+                status: healthy
+                service_ready: true
+                network: testnet
+                contract_escrow: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCN3"
+                contract_oracle: "CBORACLE3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHG"
+                oracle_address: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+                checks:
+                  stellar_rpc:
+                    status: up
+                    latency_ms: 38
+                    last_checked_at: "2026-07-24T13:00:00Z"
+                    consecutive_failures: 0
+                  escrow_contract:
+                    status: up
+                    latency_ms: 55
+                    last_checked_at: "2026-07-24T13:00:00Z"
+                    consecutive_failures: 0
+                  oracle_contract:
+                    status: up
+                    latency_ms: 52
+                    last_checked_at: "2026-07-24T13:00:00Z"
+                    consecutive_failures: 0
+                  lichess_api:
+                    status: up
+                    latency_ms: 120
+                    last_checked_at: "2026-07-24T13:00:00Z"
+                    consecutive_failures: 0
+                  chess_com_api:
+                    status: up
+                    latency_ms: 95
+                    last_checked_at: "2026-07-24T13:00:00Z"
+                    consecutive_failures: 0
+                canary_status: passed
+                last_full_check_at: "2026-07-24T13:00:00Z"
+                uptime_seconds: 3600
+
+  # ── Event Indexer HTTP ───────────────────────────────────────────────────
+
+  /indexer/health:
+    get:
+      tags: [Event Indexer]
+      summary: Event indexer health check
+      description: |
+        Returns database connectivity status.
+
+        **curl example:**
+        ```bash
+        curl http://localhost:8080/health
+        ```
+      operationId: indexerHealth
+      servers:
+        - url: http://localhost:8080
+          description: Event Indexer (local dev)
+      responses:
+        '200':
+          description: Service healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  db:
+                    type: string
+                    example: ok
+        '500':
+          description: Database error.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  db:
+                    type: string
+                    example: error
+                  detail:
+                    type: string
+
+  /indexer/events:
+    get:
+      tags: [Event Indexer]
+      summary: Query indexed events with optional filters
+      description: |
+        Returns events sorted by ledger sequence (newest first).
+        Uses the read replica pool when `DATABASE_READ_URL` is configured.
+
+        **curl example:**
+        ```bash
+        # All events for a player
+        curl "http://localhost:8080/events?player_address=GAHJJ...NLNM&limit=20"
+
+        # Active match events
+        curl "http://localhost:8080/events?status=active&limit=50"
+        ```
+      operationId: getEvents
+      servers:
+        - url: http://localhost:8080
+          description: Event Indexer (local dev)
+      parameters:
+        - name: player_address
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by player1 or player2 address.
+          example: "GAHJJJKMOKYE4RVPZEWZTKH5FVI4PA3VL7GK2LFNUBSGBV3BDTPCNLM"
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/MatchStatusIndexer'
+          description: Filter by match status.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+          description: Maximum results to return.
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+          description: Number of results to skip (pagination).
+      responses:
+        '200':
+          description: Events found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseEvents'
+        '400':
+          description: Invalid query parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '404':
+          description: No events found matching filters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /indexer/events/{match_id}:
+    get:
+      tags: [Event Indexer]
+      summary: Get all events for a specific match
+      description: |
+        Returns events for a match, cache-first (bypasses cache when explicit
+        pagination params are supplied).
+
+        **curl example:**
+        ```bash
+        curl http://localhost:8080/events/42
+        ```
+      operationId: getMatchEvents
+      servers:
+        - url: http://localhost:8080
+          description: Event Indexer (local dev)
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 42
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Events for the match.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseEvents'
+        '404':
+          description: No events found for this match.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /indexer/matches:
+    get:
+      tags: [Event Indexer]
+      summary: List matches, optionally filtered by status
+      description: |
+        Returns match summaries. Defaults to all statuses if no filter given.
+
+        **curl example:**
+        ```bash
+        curl "http://localhost:8080/matches?status=active"
+        ```
+      operationId: getMatches
+      servers:
+        - url: http://localhost:8080
+          description: Event Indexer (local dev)
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/MatchStatusIndexer'
+      responses:
+        '200':
+          description: List of matches.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseMatches'
+        '500':
+          description: Database error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /indexer/match/{match_id}:
+    get:
+      tags: [Event Indexer]
+      summary: Get full match summary with all events
+      description: |
+        Returns the complete match record including all indexed events.
+
+        **curl example:**
+        ```bash
+        curl http://localhost:8080/match/42
+        ```
+      operationId: getMatchInfo
+      servers:
+        - url: http://localhost:8080
+          description: Event Indexer (local dev)
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+          example: 42
+      responses:
+        '200':
+          description: Full match info with events.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseMatchInfo'
+        '404':
+          description: Match not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /indexer/stats:
+    get:
+      tags: [Event Indexer]
+      summary: Get service-level statistics
+      description: |
+        Returns total indexed event count and in-memory cache size.
+
+        **curl example:**
+        ```bash
+        curl http://localhost:8080/stats
+        ```
+      operationId: indexerStats
+      servers:
+        - url: http://localhost:8080
+          description: Event Indexer (local dev)
+      responses:
+        '200':
+          description: Service statistics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiResponseStats'
+              example:
+                success: true
+                data:
+                  total_events: 15000
+                  cache_size: 342
