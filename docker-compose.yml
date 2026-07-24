@@ -114,6 +114,34 @@ services:
     profiles:
       - testing
 
+  # ── WebSocket server (real-time match events) ────────────────────────────
+  websocket-server:
+    build:
+      context: services/websocket-server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      event-indexer-1:
+        condition: service_healthy
+    ports:
+      - "8090:8090"
+    environment:
+      WS_PORT: 8090
+      WS_HOST: 0.0.0.0
+      EVENT_INDEXER_URL: http://event-indexer-1:8080
+      WS_POLL_INTERVAL_MS: ${WS_POLL_INTERVAL_MS:-5000}
+      WS_HEARTBEAT_INTERVAL_MS: ${WS_HEARTBEAT_INTERVAL_MS:-30000}
+      WS_HEARTBEAT_TIMEOUT_MS: ${WS_HEARTBEAT_TIMEOUT_MS:-60000}
+      WS_RATE_LIMIT_MAX_SUBSCRIBES: ${WS_RATE_LIMIT_MAX_SUBSCRIBES:-20}
+      WS_RATE_LIMIT_WINDOW_MS: ${WS_RATE_LIMIT_WINDOW_MS:-60000}
+      WS_MAX_SUBSCRIPTIONS_PER_CLIENT: ${WS_MAX_SUBSCRIPTIONS_PER_CLIENT:-50}
+      LOG_LEVEL: ${WS_LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').createConnection(8090,'localhost').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
 volumes:
   postgres-data:
     driver: local
