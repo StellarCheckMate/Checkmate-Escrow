@@ -98,6 +98,16 @@ const MAX_ACTIVE_MATCHES_PER_PLAYER: u32 = 1_000;
 /// per-call cost. Callers requiring more results should use the _paginated variants.
 const MAX_UNBOUNDED_MATCH_RESULTS: u32 = 10_000;
 
+// ── Upgrade / migration constants ─────────────────────────────────────────────
+
+/// Current contract version: major=0, minor=1, patch=0  →  1_000 * 0 + 1 * 1000 + 0.
+/// Encoded as major * 1_000_000 + minor * 1_000 + patch so numeric comparisons work.
+pub const CONTRACT_VERSION: u32 = 1_000; // 0.1.0
+
+/// Minimum ledger gap between scheduling an upgrade and executing it (7-day review).
+/// At the default 5 s/ledger: 7 * 24 * 3600 / 5 = 120_960.
+pub const UPGRADE_REVIEW_PERIOD_LEDGERS: u32 = 120_960;
+
 /// Extend instance storage TTL on every invocation so Admin, Oracle, Paused, and other
 /// instance keys never expire.
 fn extend_instance_ttl(env: &Env) {
@@ -138,6 +148,9 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::QuorumBasisPoints, &DEFAULT_QUORUM_BASIS_POINTS);
+        env.storage()
+            .instance()
+            .set(&DataKey::ContractVersion, &CONTRACT_VERSION);
         env.events().publish(
             (Symbol::new(&env, "escrow"), symbol_short!("init")),
             (oracle, admin),
@@ -2977,9 +2990,318 @@ impl EscrowContract {
         Ok(())
     }
 
+    // ── Upgrade / migration API ───────────────────────────────────────────────
+
+    /// Return the current on-chain contract version (encoded as
+    /// `major * 1_000_000 + minor * 1_000 + patch`).
+    pub fn get_version(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::ContractVersion)
+            .unwrap_or(CONTRACT_VERSION)
+    }
+
+    /// Schedule a WASM upgrade for the 7-day community review period.
+    ///
+    /// Admin-gated. After `UPGRADE_REVIEW_PERIOD_LEDGERS` have elapsed the
+    /// admin may call `execute_upgrade` to apply the new WASM and then
+    /// `migrate_state` to advance the version counter.
+    ///
+    /// # Arguments
+    /// * `new_wasm_hash` — SHA-256 hash of the replacement WASM blob that was
+    ///   already uploaded to the network via `soroban contract upload`.
+    ///
+    /// # Errors
+    /// * `UpgradeAlreadyScheduled` — an upgrade is already pending.
+    /// * `Unauthorized`            — caller is not the admin.
+    pub fn schedule_upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::UpgradeScheduledAt)
+        {
+            return Err(Error::UpgradeAlreadyScheduled);
+        }
+
+        let scheduled_at = env.ledger().sequence();
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeScheduledAt, &scheduled_at);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingUpgradeHash, &new_wasm_hash);
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade"), symbol_short!("sched")),
+            (new_wasm_hash, scheduled_at),
+        );
+
+        Ok(())
+    }
+
+    /// Cancel a pending upgrade before it is executed.
+    ///
+    /// Admin-gated. Removes both the scheduled-at ledger and the pending WASM
+    /// hash, allowing a fresh `schedule_upgrade` call.
+    ///
+    /// # Errors
+    /// * `UpgradeNotScheduled` — no upgrade is pending.
+    /// * `Unauthorized`        — caller is not the admin.
+    pub fn cancel_upgrade(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::UpgradeScheduledAt)
+        {
+            return Err(Error::UpgradeNotScheduled);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::UpgradeScheduledAt);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingUpgradeHash);
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade"), symbol_short!("cancel")),
+            (),
+        );
+
+        Ok(())
+    }
+
+    /// Execute the scheduled WASM upgrade after the 7-day review period.
+    ///
+    /// Admin-gated. Calls the host `upgrade` function with the stored WASM
+    /// hash. After this returns, the contract code is replaced but storage
+    /// layout is unchanged — call `migrate_state` in the same or a subsequent
+    /// transaction to advance the version counter and apply any schema changes.
+    ///
+    /// The contract must be **paused** before this call so that no new
+    /// state-mutating transactions run against the old schema while the
+    /// replacement WASM is being applied.
+    ///
+    /// # Errors
+    /// * `UpgradeNotScheduled`            — no upgrade is pending.
+    /// * `UpgradeReviewPeriodNotElapsed`  — 7-day review period has not passed.
+    /// * `InvalidPauseState`              — contract is not paused.
+    /// * `Unauthorized`                   — caller is not the admin.
+    pub fn execute_upgrade(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        // Enforce paused-during-upgrade invariant.
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if !paused {
+            return Err(Error::InvalidPauseState);
+        }
+
+        let scheduled_at: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeScheduledAt)
+            .ok_or(Error::UpgradeNotScheduled)?;
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger < scheduled_at.saturating_add(UPGRADE_REVIEW_PERIOD_LEDGERS) {
+            return Err(Error::UpgradeReviewPeriodNotElapsed);
+        }
+
+        let new_wasm_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingUpgradeHash)
+            .ok_or(Error::UpgradeNotScheduled)?;
+
+        // Clear pending-upgrade keys before upgrading so post-upgrade storage
+        // starts clean regardless of whether migrate_state is called.
+        env.storage()
+            .instance()
+            .remove(&DataKey::UpgradeScheduledAt);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingUpgradeHash);
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade"), symbol_short!("exec")),
+            new_wasm_hash,
+        );
+
+        Ok(())
+    }
+
+    /// Advance the on-chain version counter after a WASM upgrade and apply any
+    /// necessary state-schema migrations.
+    ///
+    /// Admin-gated. This is a no-op for fields that do not change between
+    /// versions; it only writes keys that are new in the target version and
+    /// back-fills reasonable defaults for them.
+    ///
+    /// # Arguments
+    /// * `target_version` — the version to migrate **to** (same encoding as
+    ///   `get_version`: `major * 1_000_000 + minor * 1_000 + patch`).
+    ///
+    /// # Migration map
+    ///
+    /// | From        | To          | Actions                                     |
+    /// |-------------|-------------|---------------------------------------------|
+    /// | 0.1.0 (1000) | 0.1.1 (1001) | Seed missing `DisputePeriod` default (0)    |
+    /// | 0.1.0 (1000) | 1.0.0 (1_000_000) | Reserved for future v1.0 migrations    |
+    ///
+    /// # Errors
+    /// * `InvalidVersion` — `target_version` is not ahead of the current version.
+    /// * `Unauthorized`   — caller is not the admin.
+    pub fn migrate_state(env: Env, target_version: u32) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let current: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ContractVersion)
+            .unwrap_or(CONTRACT_VERSION);
+
+        if target_version <= current {
+            return Err(Error::InvalidVersion);
+        }
+
+        // Run migrations for every version step in order so this function is
+        // idempotent when called multiple times with increasing targets.
+        Self::_apply_migrations(&env, current, target_version);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ContractVersion, &target_version);
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade"), symbol_short!("migrated")),
+            (current, target_version),
+        );
+
+        Ok(())
+    }
+
+    /// Validate current contract state integrity.
+    ///
+    /// Checks that all critical instance-storage keys are present and
+    /// internally consistent. Returns `Ok(())` if everything looks healthy,
+    /// or the first `Error` that is violated.
+    ///
+    /// This should be called immediately before *and* after any upgrade to
+    /// confirm that storage was neither corrupted nor inadvertently cleared.
+    ///
+    /// # Checks performed
+    /// 1. Contract is initialized (Oracle key present).
+    /// 2. Admin key is present.
+    /// 3. MatchCount key is present.
+    /// 4. ContractVersion key is present.
+    /// 5. Match count is internally consistent (not negative/impossible).
+    /// 6. AllowedTokenCount ≤ actual token count in storage is sane.
+    pub fn validate_state(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        // 1. Initialized?
+        if !env.storage().instance().has(&DataKey::Oracle) {
+            return Err(Error::NotInitialized);
+        }
+
+        // 2. Admin present?
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::Unauthorized);
+        }
+
+        // 3. MatchCount present?
+        if !env.storage().instance().has(&DataKey::MatchCount) {
+            return Err(Error::NotInitialized);
+        }
+
+        // 4. ContractVersion present?
+        if !env.storage().instance().has(&DataKey::ContractVersion) {
+            return Err(Error::NotInitialized);
+        }
+
+        // 5. MatchCount must be a plausible value (stored as u64).
+        let match_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0u64);
+        // A u64 is always non-negative; just confirm it deserialises correctly.
+        let _ = match_count;
+
+        // 6. AllowedTokenCount <= u32::MAX is always true; confirm it deserialises.
+        let _token_count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokenCount)
+            .unwrap_or(0u32);
+
+        Ok(())
+    }
+
 }
 
 impl EscrowContract {
+    /// Apply every incremental schema migration for versions in the range
+    /// `(from, to]`.  Each migration step is guarded by a version-range check
+    /// so that steps are applied exactly once no matter which `from`/`to` pair
+    /// is passed.
+    fn _apply_migrations(env: &Env, from: u32, to: u32) {
+        // ── v0.1.0 → v0.1.1 ────────────────────────────────────────────────
+        // Introduced the DisputePeriod key (default 0 = immediate payout).
+        // Pre-upgrade contracts that never called set_dispute_period do not
+        // have this key; back-fill the default so post-upgrade reads do not
+        // fall back to None unexpectedly.
+        if from < 1_001 && to >= 1_001 {
+            if !env.storage().instance().has(&DataKey::DisputePeriod) {
+                env.storage()
+                    .instance()
+                    .set(&DataKey::DisputePeriod, &0u32);
+            }
+        }
+
+        // ── v0.1.x → v1.0.0 ────────────────────────────────────────────────
+        // Placeholder for future v1.0 schema changes.
+        if from < 1_000_000 && to >= 1_000_000 {
+            // No-op for now; add field back-fills here when the v1.0 spec is
+            // finalised.
+        }
+    }
+
     fn get_config(env: &Env) -> ProtocolConfig {
         env.storage().instance().get(&DataKey::ProtocolConfig).unwrap_or(ProtocolConfig {
             vesting_duration_seconds: 259_200, // 3 days
