@@ -1,12 +1,14 @@
-use soroban_sdk::{contracttype, Address, String};
+use soroban_sdk::{contracttype, Address, BytesN, String};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MatchState {
-    Pending,   // created, awaiting deposits
-    Active,    // both players deposited, game in progress
-    Completed, // result submitted, payout executed
-    Cancelled, // cancelled before activation
+    Pending,       // created, awaiting deposits
+    Active,        // both players deposited, game in progress
+    PendingResult, // oracle submitted result, awaiting dispute window or finalization
+    Completed,     // payout executed
+    Cancelled,     // cancelled before activation
+    Paused,        // match paused by player
 }
 
 #[contracttype]
@@ -19,9 +21,28 @@ pub enum Platform {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Winner {
+    /// No winner determined yet (match still in progress).
+    None,
     Player1,
     Player2,
     Draw,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlayerTier {
+    Bronze,
+    Silver,
+    Gold,
+    Platinum,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolConfig {
+    pub vesting_duration_seconds: u64,
+    pub cancellation_fee_basis_points: u32,
+    pub treasury: Address,
 }
 
 #[contracttype]
@@ -41,6 +62,20 @@ pub struct Match {
     pub created_ledger: u32,
     /// Ledger sequence number when match reached terminal state (Completed or Cancelled).
     pub completed_ledger: Option<u32>,
+    pub winner: Winner,
+    pub vested_at: Option<u64>,
+    pub player1_claimed: bool,
+    pub player2_claimed: bool,
+    /// Optional conversion rate for multi-token matches.
+    pub conversion_rate: Option<i128>,
+    /// Optional second token for multi-token matches.
+    pub token_b: Option<Address>,
+    /// Ledger sequence when conversion_rate was validated against oracle price.
+    pub conversion_rate_ledger: Option<u32>,
+    /// Ledger when pause started (if any).
+    pub paused_ledger: Option<u32>,
+    /// Total pause duration in ledgers.
+    pub total_pause_duration: u32,
 }
 
 #[contracttype]
@@ -65,6 +100,41 @@ pub enum DataKey {
     Snapshot(u64, u32),
     /// Total number of snapshots ever recorded for a match (monotonic, never reset).
     SnapshotCount(u64),
+    ProtocolConfig,
+    /// Dispute period in ledger blocks (0 = immediate payout).
+    DisputePeriod,
+    /// Pending result winner for a match awaiting dispute resolution.
+    PendingWinner(u64),
+    /// Deadline ledger for dispute voting on a match.
+    ResultDeadline(u64),
+    /// Dispute record for a match.
+    Dispute(u64),
+    /// Dispute vote by voter on a match.
+    DisputeVote(u64, Address),
+    /// Global dispute count.
+    DisputeCount,
+    /// Match dispute ID.
+    MatchDispute(u64),
+    /// Player balance snapshot: (player, index % MAX_PLAYER_SNAPSHOTS).
+    PlayerBalanceSnapshot(Address, u64),
+    /// Total count of player balance snapshots (monotonic).
+    PlayerBalanceSnapshotCount(Address),
+    /// Vote weight snapshot for a dispute voter at dispute-creation time.
+    DisputeVoteWeight(u64, Address),
+    /// Minimum bond amount required to open a dispute (basis points of match stake).
+    DisputeBondBasisPoints,
+    /// Minimum ledger hold duration required for vote eligibility.
+    MinimumHoldDuration,
+    /// Quorum threshold as percentage of dispute snapshot weight (basis points).
+    QuorumBasisPoints,
+    /// Oracle address implicated by a dispute result (used for automatic slashing).
+    DisputeOracle(u64),
+    /// Active match for a player: indexed O(1) removal. Replaces the single ActiveMatches vector.
+    ActiveMatch(Address, u64),
+    /// Count of currently-active matches for a player, capped at MAX_ACTIVE_MATCHES_PER_PLAYER.
+    PlayerActiveMatchCount(Address),
+    /// Cached count of completed matches for a player, updated atomically at completion.
+    PlayerCompletedMatchCount(Address),
 }
 
 /// The lifecycle event that triggered a balance snapshot.
@@ -73,8 +143,48 @@ pub enum DataKey {
 pub enum SnapshotReason {
     Created,
     Deposit,
+    Paused,
+    Resumed,
     Completed,
     Cancelled,
+    ResultSubmitted,
+    Finalized,
+}
+
+/// Dispute state for contested match results.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DisputeState {
+    Active,
+    Upheld,
+    Overturned,
+    ResolvedUpheld,
+    ResolvedOverturned,
+}
+
+/// Dispute record for a contested match result.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dispute {
+    pub id: u64,
+    pub match_id: u64,
+    pub disputer: Address,
+    pub created_ledger: u32,
+    pub voting_deadline: u32,
+    pub state: DisputeState,
+    pub evidence_hash: String,
+    pub uphold_votes: u32,
+    pub overturn_votes: u32,
+    pub yes_votes: u32,
+    pub no_votes: u32,
+    /// Bonded stake required to open dispute; refunded on overturn, forfeited on upheld.
+    pub dispute_bond: i128,
+    /// Snapshot ledger for vote weight calculation; prevents flash-loan acquisition attacks.
+    pub snapshot_ledger: u32,
+    /// Total participating weight at vote snapshot; used for quorum calculation.
+    pub snapshot_total_weight: i128,
+    /// Minimum participation weight required for resolution.
+    pub quorum_threshold: i128,
 }
 
 /// A point-in-time record of a match's escrowed balance, taken at key
@@ -84,6 +194,12 @@ pub enum SnapshotReason {
 /// `MAX_SNAPSHOTS_PER_MATCH`); `index` identifies the snapshot's position in
 /// the full chronological sequence so callers can detect gaps caused by
 /// pruning of older entries.
+///
+/// `commitment` is a SHA-256 hash-commitment to `(stake_amount,
+/// escrow_balance, nonce)`, computed once when the snapshot is recorded. It
+/// lets a non-admin caller (see `redact_snapshot`) hold a value that is
+/// verifiable against a later admin disclosure without ever seeing
+/// `stake_amount`/`escrow_balance` themselves. See `docs/privacy-model.md`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct BalanceSnapshot {
@@ -100,4 +216,64 @@ pub struct BalanceSnapshot {
     pub escrow_balance: i128,
     pub player1_deposited: bool,
     pub player2_deposited: bool,
+    /// Random salt the commitment is bound to. Only ever populated in the
+    /// admin's full-access view — redacted to zero elsewhere so it cannot be
+    /// used to re-derive or brute-force `commitment` ahead of an intentional
+    /// admin disclosure.
+    pub nonce: BytesN<32>,
+    /// `sha256(stake_amount || escrow_balance || nonce)`. Present in both the
+    /// full and redacted views so a non-admin caller still has something
+    /// verifiable in place of the zeroed-out amounts.
+    pub commitment: BytesN<32>,
+}
+
+/// A point-in-time record of a player's aggregate escrow balance across all
+/// of that player's deposit-eligible positions.
+///
+/// Recorded on every deposit, payout, refund (cancel_match), and timeout
+/// (expire_match) so callers can ask "what was this player's escrow balance
+/// at ledger X?". The balance field sums `stake_amount` over every non-
+/// terminal match in which the player is `player1` (with `player1_deposited`)
+/// or `player2` (with `player2_deposited`), i.e. the player's current
+/// attributable escrow position.
+///
+/// Stored in a fixed-size ring buffer per player keyed by
+/// `DataKey::PlayerBalanceSnapshot(player, slot)` where `slot = index %
+/// MAX_PLAYER_SNAPSHOTS` (see lib.rs). Older entries are silently
+/// overwritten once the buffer fills, so `index` (monotonic) lets callers
+/// detect gaps caused by pruning.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayerBalanceSnapshot {
+    pub player: Address,
+    /// Monotonically increasing position in the player's snapshot history.
+    pub index: u64,
+    /// Ledger sequence number at the time of the snapshot. Stored as `u64`
+    /// so callers can pass arbitrary ledger sequences to
+    /// `get_balance_at_timestamp` (the spec'd type).
+    pub ledger: u64,
+    /// Aggregate escrow balance captured at this point in time.
+    pub balance: i128,
+}
+
+/// Result of `get_balance_at_timestamp`, distinguishing a genuine zero
+/// balance from data the ring buffer has pruned away.
+///
+/// Returning a bare `i128` made these two cases indistinguishable: a
+/// caller had no way to tell "this player had 0 escrowed at that ledger"
+/// from "the answer might be nonzero but the snapshot that would prove it
+/// has been overwritten". See `docs/privacy-model.md`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BalanceAtTimestamp {
+    /// A snapshot at or before the requested ledger was found and retained;
+    /// this is the player's aggregate escrow balance at that point.
+    Known(i128),
+    /// The player has no snapshot at or before the requested ledger, and no
+    /// pruning has occurred — this is a genuine absence of history, not a
+    /// blind spot.
+    NoHistory,
+    /// The ring buffer has overwritten every snapshot old enough to answer
+    /// this query. The true balance at that point is unknown, not zero.
+    Pruned,
 }

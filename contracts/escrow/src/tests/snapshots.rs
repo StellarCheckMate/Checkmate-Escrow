@@ -200,7 +200,7 @@ fn test_admin_sees_exact_amounts_in_snapshots() {
     let id = client.create_match(
         &player1,
         &player2,
-        &250,
+        &100,
         &token,
         &String::from_str(&env, "snap_admin_view"),
         &Platform::Lichess,
@@ -208,8 +208,8 @@ fn test_admin_sees_exact_amounts_in_snapshots() {
     client.deposit(&id, &player1);
 
     let latest = client.get_latest_snapshot(&admin, &id);
-    assert_eq!(latest.stake_amount, 250);
-    assert_eq!(latest.escrow_balance, 250);
+    assert_eq!(latest.stake_amount, 100);
+    assert_eq!(latest.escrow_balance, 100);
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn test_player_sees_redacted_amounts_in_snapshots() {
     let id = client.create_match(
         &player1,
         &player2,
-        &250,
+        &100,
         &token,
         &String::from_str(&env, "snap_player_view"),
         &Platform::Lichess,
@@ -239,7 +239,19 @@ fn test_player_sees_redacted_amounts_in_snapshots() {
     );
     // Non-sensitive fields remain visible.
     assert_eq!(latest.reason, SnapshotReason::Deposit);
-    assert!(latest.player1_deposited);
+    // Deposit-timing fields are also redacted now: combined with `ledger`
+    // and `token`, they were themselves a side channel for reconstructing
+    // amounts against the token contract's public balance history.
+    assert!(
+        !latest.player1_deposited,
+        "player1_deposited must be redacted for non-admin callers"
+    );
+    assert!(
+        !latest.player2_deposited,
+        "player2_deposited must be redacted for non-admin callers"
+    );
+    // A verifiable commitment replaces the zeroed-out amounts.
+    assert_ne!(latest.commitment, BytesN::from_array(&env, &[0u8; 32]));
 
     // player2 (the other participant) also gets partial data.
     let latest_p2 = client.get_latest_snapshot(&player2, &id);

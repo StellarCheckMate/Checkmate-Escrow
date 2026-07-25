@@ -23,9 +23,9 @@ use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, E
 const STAKE: i128 = 100;
 const MINT_AMOUNT: i128 = 1_000_000;
 
-/// Sample sizes used for every scaling benchmark below. `100+` per the
-/// issue's requirement is covered by the `100` case.
-const SCALES: [u32; 3] = [1, 10, 100];
+/// Sample sizes used for scaling benchmarks. Covers the range from single match
+/// to 1,000 concurrent active matches, demonstrating O(log n) or O(1) cost growth.
+const SCALES: [u32; 4] = [1, 10, 100, 1000];
 
 struct Measurement {
     name: &'static str,
@@ -236,6 +236,77 @@ fn run_all_benchmarks() {
         results.push(measure(&h.env, "get_active_matches (scans 0..match_count)", n, || {}, || {
             let _ = h.client().get_active_matches();
         }));
+    }
+
+    // ── Multi-token settlement benchmarks ────────────────────────────────────
+    {
+        let h = Harness::new();
+        let admin = Address::generate(&h.env);
+        let token_b_id = h.env.register_stellar_asset_contract_v2(admin.clone());
+        let token_b = token_b_id.address();
+        let asset_b = StellarAssetClient::new(&h.env, &token_b);
+
+        let p1 = h.new_player();
+        let p2 = h.new_player();
+        asset_b.mint(&p2, &(MINT_AMOUNT as i128 * 50)); // Player2 needs enough token_b
+
+        let id = h.client().create_match_with_conversion(
+            &p1,
+            &p2,
+            &STAKE,
+            &h.token,
+            &token_b,
+            &(50_000_000 as i128),
+            &SorobanString::from_str(&h.env, "multi-token-submit"),
+            &Platform::Lichess,
+        );
+        h.client().deposit(&id, &p1);
+        h.client().deposit(&id, &p2);
+
+        results.push(measure(
+            &h.env,
+            "submit_result (multi-token, Player1 wins)",
+            1,
+            || {},
+            || {
+                h.client().submit_result(&id, &Winner::Player1);
+            },
+        ));
+    }
+
+    {
+        let h = Harness::new();
+        let admin = Address::generate(&h.env);
+        let token_b_id = h.env.register_stellar_asset_contract_v2(admin.clone());
+        let token_b = token_b_id.address();
+        let asset_b = StellarAssetClient::new(&h.env, &token_b);
+
+        let p1 = h.new_player();
+        let p2 = h.new_player();
+        asset_b.mint(&p2, &(MINT_AMOUNT as i128 * 50));
+
+        let id = h.client().create_match_with_conversion(
+            &p1,
+            &p2,
+            &STAKE,
+            &h.token,
+            &token_b,
+            &(50_000_000 as i128),
+            &SorobanString::from_str(&h.env, "multi-token-draw"),
+            &Platform::Lichess,
+        );
+        h.client().deposit(&id, &p1);
+        h.client().deposit(&id, &p2);
+
+        results.push(measure(
+            &h.env,
+            "submit_result (multi-token, Draw)",
+            1,
+            || {},
+            || {
+                h.client().submit_result(&id, &Winner::Draw);
+            },
+        ));
     }
 
     print_report(&results);

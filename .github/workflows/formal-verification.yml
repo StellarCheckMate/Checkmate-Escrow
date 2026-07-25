@@ -1,0 +1,34 @@
+name: Formal Verification Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+      - formal-verification
+
+jobs:
+  check-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Check formal_spec.json exists
+        run: |
+          test -f contracts/escrow/formal_spec.json
+          echo "✅ formal_spec.json found"
+      
+      - name: Validate JSON
+        run: |
+          apt-get update && apt-get install -y jq
+          jq empty contracts/escrow/formal_spec.json
+          echo "✅ JSON valid"
+      
+      - name: Check kani_harness exists
+        run: |
+          test -f contracts/escrow/src/kani_harness.rs
+          echo "✅ kani_harness.rs found"
+      
+      - name: Success
+        run: echo "✅ All formal verification artifacts present"

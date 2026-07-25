@@ -1,4 +1,72 @@
-# React + TypeScript + Vite
+# Checkmate-Escrow Frontend
+
+React + TypeScript + Vite frontend for the Checkmate-Escrow platform.
+
+## Local Development
+
+### Prerequisites
+
+- Node.js 18+
+- npm
+
+### Setup
+
+```bash
+cd frontend
+npm install
+```
+
+### Running the dev server
+
+```bash
+npm run dev
+```
+
+The dev server starts on `http://localhost:5173` by default.
+
+#### API proxy (CORS)
+
+During local development, requests to `/api` are automatically proxied to the event-indexer at `http://localhost:8080`, avoiding CORS errors. Start the event-indexer on port 8080 before running the frontend.
+
+### Running tests
+
+```bash
+npm test
+```
+
+### Running tests with coverage
+
+To run tests with coverage reporting:
+
+```bash
+npm run test:coverage
+```
+
+Or using the longer form:
+
+```bash
+npm test -- --coverage
+```
+
+This will generate:
+- Console output showing coverage percentages
+- HTML coverage report in the `coverage/` directory
+- JSON coverage data for CI/CD integration
+
+The project enforces minimum coverage thresholds:
+- Lines: 70%
+- Functions: 70%
+- Branches: 60%
+
+Tests will fail if coverage falls below these thresholds.
+
+### Building for production
+
+```bash
+npm run build
+```
+
+---
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 

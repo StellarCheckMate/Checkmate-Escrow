@@ -5,6 +5,7 @@ This document outlines the security considerations, trust assumptions, and risk 
 ## Table of Contents
 
 - [Oracle Trust Assumptions](#oracle-trust-assumptions)
+- [Oracle Compromise](#oracle-compromise)
 - [Admin Key Risks](#admin-key-risks)
 - [Re-initialization Protection](#re-initialization-protection)
 - [Pause Mechanism](#pause-mechanism)
@@ -15,6 +16,7 @@ This document outlines the security considerations, trust assumptions, and risk 
 ## Oracle Trust Assumptions
 
 The oracle system is a critical component that bridges off-chain chess game results to on-chain payouts. The following trust assumptions and mitigations apply:
+
 
 ### Trust Model
 
@@ -40,6 +42,24 @@ The oracle system is a critical component that bridges off-chain chess game resu
 | Oracle submits before deposits complete | State validation (`NotFunded` error) |
 | Oracle key compromise | Admin can pause contract, rotate oracle address |
 | Front-running result submission | Atomic result submission with proper sequencing |
+
+## Oracle Compromise
+
+### Attack Vector
+If an attacker compromises the private key of the authorized oracle, they gain the ability to call the `submit_result` function as the oracle. The attacker can bypass the off-chain platform API verification checks entirely and submit fraudulent or manipulated match outcomes.
+
+### Impact
+By submitting malicious results, the attacker can force the escrow contract to release locked funds to an arbitrary address, causing a fraudulent payout. This allows them to drain active escrows for matches that are currently funded but not yet settled.
+
+### Current Mitigations
+1. **Contract Pausing**: The escrow admin can immediately call `pause` to halt match resolution and prevent the malicious oracle from submitting further results.
+2. **Oracle Rotation**: The escrow admin can rotate the compromised oracle key to a secure new address by calling the `update_oracle` admin function in the escrow contract.
+3. **Audit Trail / Event Emission**: The `update_oracle` function emits an `oracle_up` event (with the topic `admin`) containing the `old_oracle` and `new_oracle` addresses as data. This provides a clear, verifiable on-chain history of oracle rotation for indexing and alerting services.
+
+### Recommended Hardening
+To prevent and mitigate oracle compromise in production environments, the following hardening measures are recommended:
+1. **Hardware Security Modules (HSM)**: Store the oracle private key in an HSM (e.g., AWS KMS or similar secure enclave) to prevent key extraction.
+2. **Multi-signature Oracle**: Transition from a single-key oracle to a multi-signature oracle or a consensus of multiple independent oracles, requiring multiple signatures before a result is considered valid on-chain.
 
 ## Admin Key Risks
 
@@ -164,12 +184,20 @@ Both contracts implement emergency pause functionality for rapid response to sec
 
 ## Known Limitations
 
+<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=41 sha256=0c23a067e8485bb2d30c198995a18b78f9591bc66506f988f1e1399cab01f590 -->
+<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=44 sha256=bbaa55f15d653c0614ce3d2f144a8394ca8a5b59215f0a4d279ed2e9d99e7a15 -->
+<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=47 sha256=fb036554951d87299457f6fd6dd78dd8c6e3b884d5b7785c2f8fc7834225f9a5 -->
+
 ### Smart Contract Limitations
 
-1. **No Native Token Support**: Only supports Stellar assets (XLM, USDC), not native tokens
-2. **Fixed Timeout**: Match expiration timeout is hardcoded (~24 hours)
+1. **Token Support Is Allowlist-Gated, Not "Native"**: The contract accepts any Stellar Asset Contract (SAC) token — including XLM's wrapped SAC and Soroban-native token contracts such as USDC — subject to an optional admin-managed allowlist (`add_allowed_token` / `is_token_allowed`). There is no separate "native XLM" fast-path distinct from the generic token interface; every token, including XLM, is moved via the standard `token::Client` transfer interface. A `create_match_with_conversion` path additionally supports two-token ("multi-token") matches where each player stakes a different token at an oracle-validated conversion rate — see [Roadmap v1.0.1](roadmap.md#v101--multi-token-conversion-rate-hardening-complete) for the settlement-correctness history of that feature.
+2. **Configurable Timeout, Not Fixed**: Match expiration is **not** hardcoded. `set_match_timeout` (admin-only) accepts any value in `[MIN_MATCH_TIMEOUT_LEDGERS, MAX_MATCH_TIMEOUT_LEDGERS]` = `[17,280, 1,555,200]` ledgers (approximately 1 day to 90 days at 5s/ledger). If never set, `DEFAULT_MATCH_TIMEOUT_LEDGERS` (518,400 ledgers, ~30 days) applies. See `contracts/escrow/src/lib.rs:41-47` and `set_match_timeout` (`contracts/escrow/src/lib.rs:1329`).
 3. **No Partial Withdrawals**: Players cannot withdraw partial stakes
-4. **Single Oracle**: Only one oracle address per escrow contract
+4. **Single Oracle (EscrowContract)**: `EscrowContract` still trusts exactly one
+   configured oracle address as the authoritative trigger for payouts (see
+   `submit_result` / `get_oracle`). This is unchanged by the m-of-n consensus
+   feature below, which lives in the separate `OracleContract` and governs its
+   own audit-log finalization, not `EscrowContract`'s payout authorization.
 
 ### Oracle Limitations
 
@@ -177,6 +205,16 @@ Both contracts implement emergency pause functionality for rapid response to sec
 2. **Rate Limiting**: Subject to platform API rate limits
 3. **Game Format**: Only supports standard chess games, not variants
 4. **Real-time Delay**: Results submitted after games complete, not in real-time
+5. **`OracleContract` admin override survives m-of-n**: `OracleContract` now
+   supports genuine m-of-n oracle consensus (`submit_oracle_result`,
+   `set_consensus_threshold`) with load-bearing staking/slashing — see
+   [docs/oracle.md § m-of-n Oracle Consensus](oracle.md#m-of-n-oracle-consensus)
+   for the protocol, its Byzantine-fault-tolerance bound, and the migration
+   path. However, the legacy admin-gated `submit_result` /
+   `submit_batch_results` functions remain callable regardless of the
+   configured threshold, so the admin key retains a standing unilateral
+   override on `OracleContract`'s own result storage even in an otherwise
+   fully-migrated m-of-n deployment.
 
 ### Platform Limitations
 
@@ -187,7 +225,16 @@ Both contracts implement emergency pause functionality for rapid response to sec
 ### Security Limitations
 
 1. **Admin Trust**: Admin keys must be kept secure (no on-chain enforcement)
-2. **Oracle Centralization**: Single point of failure for result verification
+2. **Oracle Centralization**: `EscrowContract` payouts remain gated by a
+   single configured oracle address (see above) regardless of how many
+   independent oracles are registered and voting in `OracleContract`.
+   Within `OracleContract` itself, centralization is now opt-in rather than
+   structural: an admin that configures `set_consensus_threshold(1)` (the
+   default) or continues using `submit_result` keeps a single point of
+   failure for result verification; raising the threshold and registering
+   independent oracles trades that for the Byzantine-fault-tolerance bound
+   documented in [docs/oracle.md](oracle.md#byzantine-fault-tolerance-bound),
+   at the cost of the residual admin override noted above.
 3. **No Upgrade Path**: No built-in contract upgrade mechanism
 4. **Event Monitoring**: Security depends on off-chain monitoring of contract events
 

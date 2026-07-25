@@ -25,10 +25,10 @@ export function WalletConnector({ wallet }: Props) {
 
   return (
     <div role="region" aria-label="Connect wallet">
-      <button type="button" onClick={() => connect('freighter')}>
+      <button type="button" aria-label="Connect with Freighter" onClick={() => connect('freighter')}>
         Connect Freighter
       </button>
-      <button type="button" onClick={() => connect('albedo')}>
+      <button type="button" aria-label="Connect with Albedo" onClick={() => connect('albedo')}>
         Connect Albedo
       </button>
       {error && <p role="alert">{error}</p>}

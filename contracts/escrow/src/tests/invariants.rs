@@ -17,7 +17,9 @@ fn test_balance_conservation_after_player1_wins() {
 
     let total_before = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
 
-    EscrowContractClient::new(&env, &contract_id).submit_result(&match_id, &Winner::Player1);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.submit_result(&match_id, &Winner::Player1);
+    client.claim_vested_payout(&match_id, &player1);
 
     let total_after = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
     assert_eq!(
@@ -35,7 +37,9 @@ fn test_balance_conservation_after_player2_wins() {
 
     let total_before = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
 
-    EscrowContractClient::new(&env, &contract_id).submit_result(&match_id, &Winner::Player2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.submit_result(&match_id, &Winner::Player2);
+    client.claim_vested_payout(&match_id, &player2);
 
     let total_after = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
     assert_eq!(
@@ -53,7 +57,10 @@ fn test_balance_conservation_after_draw() {
 
     let total_before = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
 
-    EscrowContractClient::new(&env, &contract_id).submit_result(&match_id, &Winner::Draw);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.submit_result(&match_id, &Winner::Draw);
+    client.claim_vested_payout(&match_id, &player1);
+    client.claim_vested_payout(&match_id, &player2);
 
     let total_after = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
     assert_eq!(
@@ -357,7 +364,7 @@ fn test_snapshot_count_monotonic() {
         &Platform::Lichess,
     );
 
-    let mut counts = vec![snapshot_count(&env, &contract_id, match_id)];
+    let mut counts: std::vec::Vec<u32> = std::vec![snapshot_count(&env, &contract_id, match_id)];
 
     client.deposit(&match_id, &player1);
     counts.push(snapshot_count(&env, &contract_id, match_id));

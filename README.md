@@ -67,6 +67,8 @@ Pending ──► Active ──► Completed
 
 ## 🛠️ Quick Start
 
+**New to Checkmate-Escrow?** Start with the [Local Development Setup](docs/local-dev.md) guide for step-by-step instructions on building, testing, and running the full stack locally.
+
 ### Prerequisites
 
 - Rust (1.70+)
@@ -152,11 +154,16 @@ Prefer to learn by watching or testing yourself?
 
 ## 📖 Documentation
 
+- [Changelog](CHANGELOG.md) — release history and notable changes
 - [Interactive Tutorial](docs/tutorial-step-by-step.md) — guided, hands-on intro for new users
 - [Tutorial Quiz & Checklist](docs/tutorial-quiz.md) — verify your understanding
+- [FAQ](docs/faq.md) — common questions and answers
+- [Glossary](docs/glossary.md) — key terms (escrow, oracle, match states, Soroban, wave-ready, and more) for new contributors
 - [Architecture Overview](docs/architecture.md)
 - [Oracle Design](docs/oracle.md)
+- [WebSocket API](docs/websocket-api.md) — real-time match event protocol (protocol v1), connection lifecycle, subscription model, React hook
 - [Threat Model & Security](docs/security.md)
+- [Balance-Privacy Model](docs/privacy-model.md) — what the balance-snapshot APIs hide from non-admins, and what they don't
 - [Roadmap](docs/roadmap.md)
 - [Deployment Guide](docs/deployment.md)
 - [Error Codes Reference](docs/error-codes.md) — every contract error code, its cause, and how to recover

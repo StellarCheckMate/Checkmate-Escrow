@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { SorobanRpc, Asset, Horizon } from '@stellar/stellar-sdk';
+import { Horizon } from '@stellar/stellar-sdk';
 
 const HORIZON_URL = import.meta.env.VITE_HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
 
@@ -10,6 +10,7 @@ export function useBalance(publicKey: string | null) {
 
   useEffect(() => {
     if (!publicKey) {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       setBalance(null);
       return;
     }
