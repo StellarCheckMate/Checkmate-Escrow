@@ -722,6 +722,25 @@ fn test_deposit_when_paused() {
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
+// #1132 — create_match is rejected when contract is paused
+#[test]
+fn test_create_match_when_paused() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "create_match_when_paused_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
+
 // #766 — two-step admin transfer: propose_admin + accept_admin happy-path
 #[test]
 fn test_two_step_admin_transfer() {
