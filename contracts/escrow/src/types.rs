@@ -45,6 +45,20 @@ pub struct ProtocolConfig {
     pub treasury: Address,
 }
 
+/// A single fee tier entry: matches with a stake up to `max_stake` are charged
+/// `fee_basis_points` (e.g. 50 = 0.5 %).  Tiers must be stored in ascending
+/// `max_stake` order; the last tier acts as the catch-all for any stake that
+/// exceeds all explicit thresholds.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeTier {
+    /// Maximum stake (inclusive) for this tier.  Use `i128::MAX` for the
+    /// open-ended final tier.
+    pub max_stake: i128,
+    /// Fee charged as basis points of the total pot (1 bp = 0.01 %).
+    pub fee_basis_points: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Match {
@@ -135,6 +149,12 @@ pub enum DataKey {
     PlayerActiveMatchCount(Address),
     /// Cached count of completed matches for a player, updated atomically at completion.
     PlayerCompletedMatchCount(Address),
+    /// Whether a token is blacklisted (instance storage, value is the reason string).
+    BlacklistedToken(Address),
+    /// Ordered list of all blacklisted token addresses (persistent storage).
+    BlacklistedTokens,
+    /// Dynamic fee tiers: Vec<FeeTier> ordered by ascending max_stake.
+    FeeTiers,
 }
 
 /// The lifecycle event that triggered a balance snapshot.

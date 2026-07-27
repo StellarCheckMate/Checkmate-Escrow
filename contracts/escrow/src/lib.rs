@@ -23,7 +23,7 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short, token, Address, Bytes, BytesN, Env, String, Symbol, Vec,
 };
 use types::{
-    BalanceAtTimestamp, BalanceSnapshot, DataKey, Match, MatchState, Platform, ProtocolConfig,
+    BalanceAtTimestamp, BalanceSnapshot, DataKey, FeeTier, Match, MatchState, Platform, ProtocolConfig,
     SnapshotReason, Winner, PlayerTier, Dispute, DisputeState, PlayerBalanceSnapshot,
 };
 
@@ -378,6 +378,215 @@ impl EscrowContract {
         Self::set_allowed_token_list(env, &updated);
     }
 
+    // ── Token Blacklist (issue #962) ─────────────────────────────────────────
+
+    /// Add a token to the blacklist — admin only.
+    ///
+    /// Blacklisted tokens are permanently rejected in `create_match` even when
+    /// the allowlist is not enforced.  The `reason` string (max 256 bytes) is
+    /// stored on-chain for auditability.
+    pub fn add_token_to_blacklist(
+        env: Env,
+        token: Address,
+        reason: String,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let is_new = !env
+            .storage()
+            .instance()
+            .has(&DataKey::BlacklistedToken(token.clone()));
+
+        env.storage()
+            .instance()
+            .set(&DataKey::BlacklistedToken(token.clone()), &reason);
+
+        if is_new {
+            let mut list: soroban_sdk::Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::BlacklistedTokens)
+                .unwrap_or_else(|| soroban_sdk::vec![&env]);
+            list.push_back(token.clone());
+            env.storage()
+                .persistent()
+                .set(&DataKey::BlacklistedTokens, &list);
+            env.storage().persistent().extend_ttl(
+                &DataKey::BlacklistedTokens,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "tok_blacklist")),
+            token,
+        );
+        Ok(())
+    }
+
+    /// Remove a token from the blacklist — admin only.
+    pub fn remove_token_from_blacklist(env: Env, token: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::BlacklistedToken(token.clone()));
+
+        // Remove from the persistent list.
+        if let Some(list) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, soroban_sdk::Vec<Address>>(&DataKey::BlacklistedTokens)
+        {
+            let mut updated: soroban_sdk::Vec<Address> = soroban_sdk::vec![&env];
+            for existing in list.iter() {
+                if existing != token {
+                    updated.push_back(existing.clone());
+                }
+            }
+            env.storage()
+                .persistent()
+                .set(&DataKey::BlacklistedTokens, &updated);
+            env.storage().persistent().extend_ttl(
+                &DataKey::BlacklistedTokens,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "tok_unblacklist")),
+            token,
+        );
+        Ok(())
+    }
+
+    /// Returns `true` when `token` is on the blacklist.
+    pub fn is_token_blacklisted(env: Env, token: Address) -> bool {
+        env.storage()
+            .instance()
+            .has(&DataKey::BlacklistedToken(token))
+    }
+
+    /// Returns all blacklisted token addresses.
+    pub fn get_blacklist(env: Env) -> soroban_sdk::Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::BlacklistedTokens)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
+    // ── Dynamic Fee Tiers (issue #963) ───────────────────────────────────────
+
+    /// Set the dynamic fee tier schedule — admin only.
+    ///
+    /// `tiers` must be ordered by `max_stake` ascending.  The last entry acts
+    /// as the open-ended catch-all (set `max_stake = i128::MAX`).  Pass an
+    /// empty `Vec` to clear the schedule and fall back to zero protocol fees.
+    pub fn set_fee_tiers(env: Env, tiers: soroban_sdk::Vec<FeeTier>) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        // Validate ordering: each tier's max_stake must be strictly greater
+        // than the previous tier's max_stake.
+        let mut prev_max: i128 = -1;
+        for tier in tiers.iter() {
+            if tier.max_stake <= prev_max {
+                return Err(Error::InvalidAmount);
+            }
+            prev_max = tier.max_stake;
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::FeeTiers, &tiers);
+        env.storage().persistent().extend_ttl(
+            &DataKey::FeeTiers,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "fee_tiers_set")),
+            (),
+        );
+        Ok(())
+    }
+
+    /// Return the current fee tier schedule.
+    pub fn get_fee_tiers(env: Env) -> soroban_sdk::Vec<FeeTier> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::FeeTiers)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
+    /// Calculate the fee in token units for a given `stake_amount` using the
+    /// tiered schedule.  `pot` is `stake_amount * 2`.
+    ///
+    /// Returns `0` when no fee tiers are configured.
+    pub fn calculate_fee_by_tier(env: Env, stake_amount: i128) -> Result<i128, Error> {
+        Self::compute_tiered_fee(&env, stake_amount)
+    }
+
+    /// Internal helper — resolves the basis-point rate for `stake_amount` and
+    /// computes the fee.
+    fn compute_tiered_fee(env: &Env, stake_amount: i128) -> Result<i128, Error> {
+        let tiers: soroban_sdk::Vec<FeeTier> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::FeeTiers)
+            .unwrap_or_else(|| soroban_sdk::vec![env]);
+
+        if tiers.is_empty() {
+            return Ok(0);
+        }
+
+        // Find the first tier whose max_stake >= stake_amount.
+        let mut selected_bps: u32 = 0;
+        let mut found = false;
+        for tier in tiers.iter() {
+            if stake_amount <= tier.max_stake {
+                selected_bps = tier.fee_basis_points;
+                found = true;
+                break;
+            }
+        }
+        // If stake exceeds all explicit thresholds, use the last tier.
+        if !found {
+            if let Some(last) = tiers.get(tiers.len().saturating_sub(1)) {
+                selected_bps = last.fee_basis_points;
+            }
+        }
+
+        // fee = pot * bps / 10_000   where pot = stake * 2
+        let pot = stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+        let fee = pot
+            .checked_mul(selected_bps as i128)
+            .ok_or(Error::Overflow)?
+            .checked_div(10_000)
+            .ok_or(Error::Overflow)?;
+        Ok(fee)
+    }
+
     /// Create a new match. Both players must call `deposit` before the game starts.
     ///
     /// # Parameters
@@ -423,6 +632,11 @@ impl EscrowContract {
             .unwrap_or(false);
         if allowlist_enforced && !Self::is_token_allowed(env.clone(), token.clone()) {
             return Err(Error::TokenNotAllowed);
+        }
+
+        // Blacklist check: always reject blacklisted tokens regardless of allowlist.
+        if Self::is_token_blacklisted(env.clone(), token.clone()) {
+            return Err(Error::TokenBlacklisted);
         }
 
         if stake_amount <= 0 {
@@ -577,6 +791,11 @@ impl EscrowContract {
             if !Self::is_token_allowed(env.clone(), token_a.clone()) || !Self::is_token_allowed(env.clone(), token_b.clone()) {
                 return Err(Error::TokenNotAllowed);
             }
+        }
+
+        // Blacklist check: always reject blacklisted tokens regardless of allowlist.
+        if Self::is_token_blacklisted(env.clone(), token_a.clone()) || Self::is_token_blacklisted(env.clone(), token_b.clone()) {
+            return Err(Error::TokenBlacklisted);
         }
 
         if stake_amount <= 0 || rate <= 0 {
