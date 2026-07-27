@@ -73,6 +73,23 @@ The test suite is organized into logical modules:
   - Overflow protection testing
 - **Invariant Validation**: Token preservation, state consistency
 
+## Mutation Testing
+
+Line coverage does not prove assertions catch bugs. Use `cargo-mutants` to verify
+test quality against deliberate source mutations.
+
+```bash
+cargo install --locked cargo-mutants
+make mutants-list          # list escrow mutants
+make mutants               # full configured escrow run
+# Critical-path suite (recommended for local iteration):
+CARGO_MUTANTS_JOBS=4 ./scripts/mutation_test.sh escrow \
+  --re 'EscrowContract::(initialize|pause|unpause|is_paused|deposit|submit_result|cancel_match|create_match|claim_vested_payout|add_allowed_token|remove_allowed_token)\b'
+```
+
+See [`docs/mutation-test-report.md`](./mutation-test-report.md) for configuration,
+results, and how missed mutants were fixed.
+
 ## Coverage Reports
 
 ### Generating Coverage Reports

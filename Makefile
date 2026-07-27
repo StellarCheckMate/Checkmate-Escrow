@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-.PHONY: help build test lint fmt deploy-testnet frontend-dev frontend-test doc-conformance doc-conformance-test
+.PHONY: help build test lint fmt deploy-testnet frontend-dev frontend-test doc-conformance doc-conformance-test mutants mutants-list
 
 help:
 	@echo "Usage: make <target>"
@@ -16,6 +16,8 @@ help:
 	@echo "  frontend-test         Run frontend tests"
 	@echo "  doc-conformance       Check docs against contract source (see docs/doc-conformance.md)"
 	@echo "  doc-conformance-test  Run the doc-conformance checker's own self-tests"
+	@echo "  mutants               Run cargo-mutants on escrow (see docs/mutation-test-report.md)"
+	@echo "  mutants-list          List escrow mutants without running tests"
 
 build:
 	bash scripts/build.sh
@@ -43,3 +45,9 @@ doc-conformance:
 
 doc-conformance-test:
 	bash scripts/test_doc_conformance.sh
+
+mutants:
+	bash scripts/mutation_test.sh escrow
+
+mutants-list:
+	bash scripts/mutation_test.sh escrow --list

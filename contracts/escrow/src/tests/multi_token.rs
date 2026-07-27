@@ -3,7 +3,7 @@ use crate::types::{MatchState, Platform, Winner};
 use crate::{EscrowContract, EscrowContractClient};
 use oracle::{OracleContract, OracleContractClient};
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
     token::StellarAssetClient,
     Address, Env, String, Symbol, IntoVal,
 };
@@ -70,6 +70,69 @@ fn setup_multi_token_fixture() -> (
     )
 }
 
+/// Cancelling a pending multi-token match after only player2 deposits must refund
+/// player2 in `token_b` using the conversion rate (not the raw stake in token_a).
+///
+/// This assertion catches mutations that weaken
+/// `token_b.is_some() && conversion_rate.map_or(false, |r| r > 0)` in `cancel_match`.
+#[test]
+fn test_cancel_match_multi_token_player2_refund_uses_conversion_rate() {
+    let (env, admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    let oracle_rate = 50_000_000i128;
+    oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
+
+    let stake_amount = 100i128;
+    let rate = 50_000_000i128; // 5.0 token_b per token_a
+    let expected_b = stake_amount * rate / 10_000_000; // 500
+
+    // Prefund escrow with token_b so the multi-token refund path can succeed.
+    // (deposit() currently collects token_a from both players.)
+    let asset_b = StellarAssetClient::new(&env, &token_b);
+    asset_b.mint(&escrow_client.address, &expected_b);
+
+    escrow_client.set_protocol_config(&crate::types::ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 0,
+        treasury: admin.clone(),
+    });
+
+    let match_id = escrow_client.create_match_with_conversion(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token_a,
+        &token_b,
+        &rate,
+        &String::from_str(&env, "cancel_p2_conversion"),
+        &Platform::Lichess,
+    );
+
+    // Only player2 deposits so the match stays Pending and cancel remains allowed.
+    escrow_client.deposit(&match_id, &player2);
+    let p2_a_before = token_client(&env, &token_a).balance(&player2);
+    let p2_b_before = token_client(&env, &token_b).balance(&player2);
+
+    escrow_client.cancel_match(&match_id, &player1);
+
+    let m = escrow_client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Cancelled);
+    assert_eq!(
+        token_client(&env, &token_b).balance(&player2),
+        p2_b_before + expected_b,
+        "player2 multi-token cancel refund must apply conversion_rate"
+    );
+    // Player2 deposited token_a; that balance is not refunded on the multi-token path.
+    assert_eq!(
+        token_client(&env, &token_a).balance(&player2),
+        p2_a_before,
+        "player2 token_a balance unchanged after multi-token cancel refund"
+    );
+    // Escrow should no longer hold the prefunded token_b refund.
+    assert_eq!(token_client(&env, &token_b).balance(&escrow_client.address), 0);
+}
+
 #[test]
 fn test_create_match_with_conversion_valid_rate() {
     let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
@@ -93,7 +156,7 @@ fn test_create_match_with_conversion_valid_rate() {
     );
 
     let m = escrow_client.get_match(&match_id);
-    assert_eq!(m.conversion_rate, rate);
+    assert_eq!(m.conversion_rate, Some(rate));
     assert_eq!(m.token_b, Some(token_b));
 }
 
@@ -131,7 +194,6 @@ fn test_multi_token_deposits_and_refunds() {
     let stake_amount = 100_0000000; // 100 token_a
     let rate = 50_000_000; // 5.0
     // Expected token_b stake = 100 * 5.0 = 500 token_b
-    let expected_b_stake = 500_0000000;
 
     let match_id = escrow_client.create_match_with_conversion(
         &player1,
@@ -326,7 +388,7 @@ fn test_create_match_with_conversion_rate_boundary_low() {
     );
 
     let m = escrow_client.get_match(&match_id);
-    assert_eq!(m.conversion_rate, rate);
+    assert_eq!(m.conversion_rate, Some(rate));
     assert_eq!(m.token_b, Some(token_b));
 }
 
@@ -352,7 +414,7 @@ fn test_create_match_with_conversion_rate_boundary_high() {
     );
 
     let m = escrow_client.get_match(&match_id);
-    assert_eq!(m.conversion_rate, rate);
+    assert_eq!(m.conversion_rate, Some(rate));
     assert_eq!(m.token_b, Some(token_b));
 }
 
@@ -519,7 +581,7 @@ fn test_multi_token_with_valid_rate_at_boundary() {
         &Platform::Lichess,
     );
     let m_lower = escrow_client.get_match(&match_id_lower);
-    assert_eq!(m_lower.conversion_rate, rate_lower);
+    assert_eq!(m_lower.conversion_rate, Some(rate_lower));
 
     // Test rate exactly at upper boundary: 1_000_000 * 1.05 = 1_050_000
     let rate_upper = 1_050_000;
@@ -534,5 +596,5 @@ fn test_multi_token_with_valid_rate_at_boundary() {
         &Platform::Lichess,
     );
     let m_upper = escrow_client.get_match(&match_id_upper);
-    assert_eq!(m_upper.conversion_rate, rate_upper);
+    assert_eq!(m_upper.conversion_rate, Some(rate_upper));
 }

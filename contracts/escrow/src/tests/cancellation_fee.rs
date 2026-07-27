@@ -87,3 +87,30 @@ fn test_cancellation_fee_with_custom_config() {
     assert_eq!(token_client.balance(&new_treasury), 5);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
+
+/// Zero-fee cancellation must not transfer any amount to the treasury.
+/// Asserts exact balances so a mutated `fee_amount >= 0` path that performs a
+/// zero-value treasury transfer remains behaviorally visible if it ever changes
+/// balances, and documents the intended zero-fee control flow.
+#[test]
+fn test_cancellation_zero_fee_skips_treasury_transfer() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = token_client(&env, &token);
+
+    env.mock_all_auths();
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 0,
+        treasury: admin.clone(),
+    });
+
+    let match_id =
+        helpers::create_default_match(&client, &env, &player1, &player2, &token, "zero_fee_cancel");
+    client.deposit(&match_id, &player1);
+    client.cancel_match(&match_id, &player1);
+
+    assert_eq!(token_client.balance(&player1), 1000, "full stake refunded");
+    assert_eq!(token_client.balance(&admin), 0, "treasury must receive nothing");
+    assert_eq!(token_client.balance(&contract_id), 0);
+}

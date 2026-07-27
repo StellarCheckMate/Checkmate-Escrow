@@ -95,7 +95,7 @@ fn test_active_match_inflation_cap_prevents_dos() {
     // Verify that at least the first ~1000 matches can be activated
     // (enforced by MAX_ACTIVE_MATCHES_PER_PLAYER cap per player)
     // The test verifies no panic occurs and the contract enforces the cap gracefully
-    let active = harness.client().get_active_matches().unwrap();
+    let active = harness.client().get_active_matches();
     assert!(active.len() <= 1000, "Active matches exceeded cap");
 }
 
@@ -166,7 +166,7 @@ fn test_completed_match_count_incremented_atomically() {
     harness.env.budget().reset_default();
     let start = std::time::Instant::now();
 
-    let tier = harness.client().tier_from_match_count(&p1).unwrap();
+    let tier = harness.client().tier_from_match_count(&p1);
 
     let cpu_cost = harness.env.budget().cpu_instruction_cost();
     let elapsed = start.elapsed();
@@ -191,7 +191,7 @@ fn test_unbounded_match_scans_are_capped() {
     }
 
     // get_pending_matches should return at most MAX_UNBOUNDED_MATCH_RESULTS
-    let results = harness.client().get_pending_matches().unwrap();
+    let results = harness.client().get_pending_matches();
 
     // The constant cap should be documented
     // We don't hardcode it here since it's a constant in lib.rs
@@ -224,8 +224,8 @@ fn test_per_player_active_match_cap_enforcement() {
             &Platform::Lichess,
         );
 
-        harness.client().deposit(&id, &player).ok();
-        harness.client().deposit(&id, &opponent).ok();
+        harness.client().deposit(&id, &player);
+        harness.client().deposit(&id, &opponent);
     }
 
     // Try to create one more and activate it — should fail due to cap
@@ -244,6 +244,6 @@ fn test_per_player_active_match_cap_enforcement() {
     println!("Cap enforcement test: attempted deposit after reaching cap");
 
     // Verify active matches don't exceed the cap
-    let active = harness.client().get_active_matches().unwrap();
-    assert!(active.len() <= max_cap as usize, "Active matches exceeded per-player cap");
+    let active = harness.client().get_active_matches();
+    assert!(active.len() <= max_cap, "Active matches exceeded per-player cap");
 }

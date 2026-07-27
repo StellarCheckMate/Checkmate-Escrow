@@ -1302,7 +1302,7 @@ impl OracleContract {
         }
 
         // Look up the exchange rate (token_out per token_in, scaled 1e7).
-        let rate = if let Some(rate) = env
+        let amount_out = if let Some(rate) = env
             .storage()
             .persistent()
             .get::<_, i128>(&DataKey::Rate(token_out.clone(), token_in.clone()))

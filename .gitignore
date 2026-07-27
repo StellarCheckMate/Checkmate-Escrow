@@ -1,6 +1,11 @@
 # Build artifacts
 target/
 
+# cargo-mutants output
+mutants.out/
+mutants-out/
+**/mutants.out/
+
 # Python bytecode (scripts/doc_conformance)
 __pycache__/
 *.pyc
