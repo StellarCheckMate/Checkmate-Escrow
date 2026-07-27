@@ -21,6 +21,7 @@ use deadpool_postgres::{Config as PoolConfig, ManagerConfig, Pool, RecyclingMeth
 use tokio_postgres::NoTls;
 
 use crate::models::{IndexedEvent, MatchInfo, MatchStatus, QueryFilters, Winner};
+use crate::transactions::{TransactionHistoryFilters, TransactionRecord, TransactionType};
 
 // ── Pool helpers ──────────────────────────────────────────────────────────────
 
@@ -425,6 +426,108 @@ impl Database {
         Ok(matches)
     }
 
+    // ── Transaction history ───────────────────────────────────────────────
+
+    /// Query a player's financial transaction history.
+    ///
+    /// Returns the requested page **and** the total number of matching rows so
+    /// the caller can render pagination without a second round trip.
+    ///
+    /// ## Why filtering happens in SQL
+    /// Non-financial events (`match:created`, `match:paused`, …) are excluded by
+    /// the `event_type ILIKE ANY(...)` predicate rather than after the fact.
+    /// Filtering in Rust would make `LIMIT`/`OFFSET` and `total` disagree with
+    /// the rows actually returned, so pages would appear short or repeat rows.
+    ///
+    /// Reorg-invalidated events are excluded: a rolled-back ledger never moved
+    /// funds.
+    pub async fn query_player_transactions(
+        &self,
+        filters: &TransactionHistoryFilters,
+    ) -> Result<(Vec<TransactionRecord>, i64)> {
+        let conn = self
+            .read_pool
+            .get()
+            .await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
+
+        // ── Shared WHERE clause ───────────────────────────────────────────
+        // $1 = player address (matched against both sides of the match)
+        // $2 = event-type ILIKE patterns (text[])
+        let mut where_sql = String::from(
+            " WHERE (player1 = $1 OR player2 = $1)
+                AND event_type ILIKE ANY($2)
+                AND reorg_invalidated_at IS NULL",
+        );
+
+        let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![
+            Box::new(filters.player_address.clone()),
+            Box::new(filters.event_type_patterns()),
+        ];
+        let mut idx = 3usize;
+
+        if let Some(ref token) = filters.token {
+            where_sql.push_str(&format!(" AND token = ${idx}"));
+            params.push(Box::new(token.clone()));
+            idx += 1;
+        }
+
+        if let Some(from) = filters.from_date {
+            where_sql.push_str(&format!(" AND timestamp >= ${idx}"));
+            params.push(Box::new(from));
+            idx += 1;
+        }
+
+        if let Some(to) = filters.to_date {
+            where_sql.push_str(&format!(" AND timestamp <= ${idx}"));
+            params.push(Box::new(to));
+            idx += 1;
+        }
+
+        // ── Total (before pagination) ─────────────────────────────────────
+        let count_sql = format!("SELECT COUNT(*)::BIGINT FROM events{}", where_sql);
+        let count_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+        let total: i64 = conn
+            .query_one(count_sql.as_str(), count_refs.as_slice())
+            .await
+            .map_err(|e| anyhow!("query_player_transactions (count) failed: {}", e))?
+            .get(0);
+
+        // ── Page ──────────────────────────────────────────────────────────
+        // `sort_by` and `sort_order` render to fixed, whitelisted fragments —
+        // no user input is interpolated. `id` breaks ties so paging is stable.
+        let page_sql = format!(
+            "SELECT id, ledger_sequence, match_id, event_type, stake_amount, token, timestamp
+             FROM events{}
+             ORDER BY {} {} NULLS LAST, id ASC
+             LIMIT ${} OFFSET ${}",
+            where_sql,
+            filters.sort_by.sql_expr(),
+            filters.sort_order.sql_keyword(),
+            idx,
+            idx + 1
+        );
+        params.push(Box::new(filters.limit));
+        params.push(Box::new(filters.offset));
+
+        let page_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+
+        let rows = conn
+            .query(page_sql.as_str(), page_refs.as_slice())
+            .await
+            .map_err(|e| anyhow!("query_player_transactions failed: {}", e))?;
+
+        let transactions = rows.iter().filter_map(row_to_transaction).collect();
+
+        Ok((transactions, total))
+    }
+
     // ── Utility ───────────────────────────────────────────────────────────
 
     pub async fn ping(&self) -> Result<()> {
@@ -515,6 +618,38 @@ impl Database {
 }
 
 // ── Row mapping ───────────────────────────────────────────────────────────────
+
+/// Map a history row onto a [`TransactionRecord`].
+///
+/// Returns `None` when the event type does not classify as a financial
+/// transaction.  The SQL predicate already excludes those, so this is a
+/// consistency backstop rather than an expected path — it keeps the projection
+/// honest if the marker sets and the SQL patterns ever drift.
+///
+/// Column order must match the `SELECT` in `query_player_transactions`:
+/// `id, ledger_sequence, match_id, event_type, stake_amount, token, timestamp`.
+fn row_to_transaction(row: &tokio_postgres::Row) -> Option<TransactionRecord> {
+    let event_type: String = row.get(3);
+    let tx_type = TransactionType::from_event_type(&event_type)?;
+
+    let ledger: i32 = row.get(1);
+    let match_id: i64 = row.get(2);
+    let amount: Option<String> = row.get(4);
+    let token: Option<String> = row.get(5);
+
+    Some(TransactionRecord {
+        match_id: match_id as u64,
+        timestamp: row.get::<_, DateTime<Utc>>(6),
+        tx_type,
+        // Events that carry no amount (e.g. a fee event whose value lives in the
+        // match record) report "0" rather than dropping the row.
+        amount: amount.filter(|a| !a.is_empty()).unwrap_or_else(|| "0".to_string()),
+        token: token.unwrap_or_default(),
+        event_id: row.get(0),
+        event_type,
+        ledger_sequence: ledger as u32,
+    })
+}
 
 fn row_to_event(row: &tokio_postgres::Row) -> Result<IndexedEvent> {
     let ledger: i32 = row.get(1);
