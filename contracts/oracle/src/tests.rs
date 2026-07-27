@@ -2331,3 +2331,19 @@ fn test_oracle_get_result_unknown() {
     let result = client.try_get_result(&9999u64);
     assert_eq!(result, Err(Ok(Error::ResultNotFound)));
 }
+
+#[test]
+fn test_oracle_store_result_when_paused() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
