@@ -57,6 +57,9 @@ jobs:
       - name: Run cargo audit
         run: cargo audit
 
+      - name: Run cargo deny
+        run: cargo deny check
+
       - name: Run tests
         run: cargo test
 
