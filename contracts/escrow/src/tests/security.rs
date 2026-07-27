@@ -710,3 +710,25 @@ fn test_transfer_admin_unauthorized() {
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
+/// Test that pause rejects non-admin caller
+#[test]
+fn test_pause_unauthorized() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let non_admin = Address::generate(&env);
+
+    env.mock_auths(&[MockAuth {
+        address: &non_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_pause();
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
