@@ -301,3 +301,42 @@ fn test_get_active_matches_after_deposits() {
     let pending_matches = client.get_pending_matches();
     assert_eq!(pending_matches.len(), 0);
 }
+
+#[test]
+fn test_get_player_matches_returns_ids() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id_1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match_1"),
+        &Platform::Lichess,
+    );
+
+    let match_id_2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match_2"),
+        &Platform::Lichess,
+    );
+
+    let match_id_3 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match_3"),
+        &Platform::Lichess,
+    );
+
+    let player1_matches = client.get_player_matches(&player1);
+    assert_eq!(player1_matches.len(), 3);
+    assert_eq!(player1_matches.get(0).unwrap(), match_id_1);
+    assert_eq!(player1_matches.get(1).unwrap(), match_id_2);
+    assert_eq!(player1_matches.get(2).unwrap(), match_id_3);
+}
