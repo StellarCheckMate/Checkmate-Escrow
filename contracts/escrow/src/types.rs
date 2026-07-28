@@ -135,6 +135,16 @@ pub enum DataKey {
     PlayerActiveMatchCount(Address),
     /// Cached count of completed matches for a player, updated atomically at completion.
     PlayerCompletedMatchCount(Address),
+    // ── Upgrade / migration keys ──────────────────────────────────────────
+    /// Current contract version as a u32 (major * 1_000_000 + minor * 1_000 + patch).
+    /// Set during initialize and bumped by migrate_state.
+    ContractVersion,
+    /// Ledger sequence at which the pending upgrade was scheduled.
+    /// Present only while an upgrade is pending review.
+    UpgradeScheduledAt,
+    /// WASM hash of the new contract code waiting for the review period.
+    /// Present only while an upgrade is pending review.
+    PendingUpgradeHash,
 }
 
 /// The lifecycle event that triggered a balance snapshot.
