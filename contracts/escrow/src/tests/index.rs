@@ -266,6 +266,15 @@ fn test_get_pending_matches_empty() {
 }
 
 #[test]
+fn test_get_pending_matches_empty_on_init() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let pending_matches = client.get_pending_matches();
+    assert_eq!(pending_matches.len(), 0);
+}
+
+#[test]
 fn test_get_active_matches_after_deposits() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
