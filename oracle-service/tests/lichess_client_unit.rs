@@ -208,3 +208,23 @@ async fn test_lichess_rate_limit_retry() {
     assert!(result.is_ok());
     assert_eq!(result.unwrap().winner, contracts_oracle::types::Winner::Player1);
 }
+
+#[tokio::test]
+async fn test_lichess_game_not_found() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/game/export/notfnd1"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let client = LichessClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+
+    let err = client.fetch_result("notfnd1").await.unwrap_err();
+    assert!(matches!(err, LichessError::GameNotFound));
+}
