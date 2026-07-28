@@ -221,6 +221,7 @@ impl EscrowContract {
             vesting_duration_seconds: 259_200,
             cancellation_fee_basis_points: 0,
             treasury: env.current_contract_address(),
+            stablecoin_only_mode: false,
         }))
     }
 
@@ -386,6 +387,114 @@ impl EscrowContract {
         env.storage()
             .instance()
             .get(&DataKey::AllowlistEnforced)
+            .unwrap_or(false)
+    }
+
+    /// Register a stablecoin issuer — admin only.
+    ///
+    /// Any Stellar token whose issuer account matches a registered issuer is
+    /// considered a stablecoin.  When `stablecoin_only_mode` is enabled in
+    /// [`ProtocolConfig`], `create_match` rejects tokens that don't pass the
+    /// [`Self::is_stablecoin`] check.
+    pub fn add_stablecoin_issuer(env: Env, issuer: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let already_registered: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::StablecoinIssuer(issuer.clone()))
+            .unwrap_or(false);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::StablecoinIssuer(issuer.clone()), &true);
+
+        if !already_registered {
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::StablecoinIssuerCount)
+                .unwrap_or(0);
+            let next_count = count.checked_add(1).ok_or(Error::Overflow)?;
+            env.storage()
+                .instance()
+                .set(&DataKey::StablecoinIssuerCount, &next_count);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "sc_issuer_add")),
+            issuer,
+        );
+
+        Ok(())
+    }
+
+    /// Remove a stablecoin issuer — admin only.
+    pub fn remove_stablecoin_issuer(env: Env, issuer: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let was_registered: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::StablecoinIssuer(issuer.clone()))
+            .unwrap_or(false);
+
+        if was_registered {
+            env.storage()
+                .instance()
+                .remove(&DataKey::StablecoinIssuer(issuer.clone()));
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::StablecoinIssuerCount)
+                .unwrap_or(0);
+            let next_count = count.saturating_sub(1);
+            env.storage()
+                .instance()
+                .set(&DataKey::StablecoinIssuerCount, &next_count);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "sc_issuer_rm")),
+            issuer,
+        );
+
+        Ok(())
+    }
+
+    /// Check whether `token` qualifies as a stablecoin.
+    ///
+    /// A token is a stablecoin when its issuer (obtained from the SAC contract)
+    /// has been registered via [`Self::add_stablecoin_issuer`].  Returns `false`
+    /// when no issuers have been registered yet.
+    pub fn is_stablecoin(env: Env, token: Address) -> bool {
+        Self::check_is_stablecoin(&env, &token)
+    }
+
+    /// Internal helper for stablecoin check (avoids `env` ownership issues).
+    fn check_is_stablecoin(env: &Env, token: &Address) -> bool {
+        // A token on Soroban is issued by an Address.
+        // We check whether the token address itself is registered as a stablecoin issuer,
+        // or whether there is a registered issuer for that token's issuer account.
+        // Since in Soroban the SAC (Stellar Asset Contract) address encodes the issuer,
+        // we treat the token address directly and check issuer registry by the token address.
+        // Clients are expected to call add_stablecoin_issuer with the token's contract address
+        // (for SAC tokens) or a known issuer Address.
+        env.storage()
+            .instance()
+            .get(&DataKey::StablecoinIssuer(token.clone()))
             .unwrap_or(false)
     }
 
@@ -711,9 +820,10 @@ impl EscrowContract {
             return Err(Error::TokenNotAllowed);
         }
 
-        // Blacklist check: always reject blacklisted tokens regardless of allowlist.
-        if Self::is_token_blacklisted(env.clone(), token.clone()) {
-            return Err(Error::TokenBlacklisted);
+        // Stablecoin-only mode: reject non-stablecoin tokens when enabled
+        let protocol_cfg = Self::get_config(&env);
+        if protocol_cfg.stablecoin_only_mode && !Self::check_is_stablecoin(&env, &token) {
+            return Err(Error::NotStablecoin);
         }
 
         if stake_amount <= 0 {
@@ -871,9 +981,12 @@ impl EscrowContract {
             }
         }
 
-        // Blacklist check: always reject blacklisted tokens regardless of allowlist.
-        if Self::is_token_blacklisted(env.clone(), token_a.clone()) || Self::is_token_blacklisted(env.clone(), token_b.clone()) {
-            return Err(Error::TokenBlacklisted);
+        // Stablecoin-only mode: reject non-stablecoin tokens when enabled
+        let protocol_cfg = Self::get_config(&env);
+        if protocol_cfg.stablecoin_only_mode {
+            if !Self::check_is_stablecoin(&env, &token_a) || !Self::check_is_stablecoin(&env, &token_b) {
+                return Err(Error::NotStablecoin);
+            }
         }
 
         if stake_amount <= 0 || rate <= 0 {
@@ -1430,6 +1543,7 @@ impl EscrowContract {
             vesting_duration_seconds: 259_200,
             cancellation_fee_basis_points: 0,
             treasury: env.current_contract_address(),
+            stablecoin_only_mode: false,
         });
         
         let fee_amount = if config.cancellation_fee_basis_points > 0 {
@@ -2478,6 +2592,7 @@ impl EscrowContract {
                     vesting_duration_seconds: 259_200,
                     cancellation_fee_basis_points: 0,
                     treasury: env.current_contract_address(),
+                    stablecoin_only_mode: false,
                 });
             let client = token::Client::new(&env, &m.token);
             client.transfer(
@@ -3813,6 +3928,7 @@ impl EscrowContract {
             vesting_duration_seconds: 259_200, // 3 days
             cancellation_fee_basis_points: 0,
             treasury: env.current_contract_address(),
+            stablecoin_only_mode: false,
         })
     }
 

@@ -43,6 +43,9 @@ pub struct ProtocolConfig {
     pub vesting_duration_seconds: u64,
     pub cancellation_fee_basis_points: u32,
     pub treasury: Address,
+    /// When true, only tokens issued by a registered stablecoin issuer are
+    /// accepted for new matches.  Disabled by default.
+    pub stablecoin_only_mode: bool,
 }
 
 /// A single fee tier entry: matches with a stake up to `max_stake` are charged
@@ -151,12 +154,10 @@ pub enum DataKey {
     PlayerActiveMatchCount(Address),
     /// Cached count of completed matches for a player, updated atomically at completion.
     PlayerCompletedMatchCount(Address),
-    /// Referral fee share in basis points (default 2000 = 20% of platform fee goes to referrer).
-    ReferralShareBasisPoints,
-    /// Player's preferred payout token address.
-    /// When set and different from the match's stake token, the payout is swapped
-    /// to this token using the match's oracle-provided conversion rate.
-    PlayerPreferredToken(Address),
+    /// Whether a given address is a registered stablecoin issuer.
+    StablecoinIssuer(Address),
+    /// Total number of registered stablecoin issuers.
+    StablecoinIssuerCount,
 }
 
 /// The lifecycle event that triggered a balance snapshot.

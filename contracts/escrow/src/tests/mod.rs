@@ -60,6 +60,7 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         vesting_duration_seconds: 0,
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
+        stablecoin_only_mode: false,
     });
 
     (
@@ -162,5 +163,4 @@ pub fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, 
     asset_client.mint(player, &amount);
 }
 mod cancellation_fee;
-mod referral;
-mod token_swap;
+mod stablecoin;

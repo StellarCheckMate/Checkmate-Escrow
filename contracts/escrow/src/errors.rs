@@ -48,5 +48,6 @@ pub enum Error {
     InsufficientHoldingDuration = 43,
     OracleSlashFailed = 44,
     TooManyActiveMatches = 45,
-    TokenBlacklisted = 46,
+    /// Token is not issued by a registered stablecoin issuer and stablecoin-only mode is enabled.
+    NotStablecoin = 46,
 }
