@@ -2344,3 +2344,28 @@ fn test_mofn_finalized_event_reports_submitter_count_and_threshold() {
     assert_eq!(ev_count, 2);
     assert_eq!(ev_threshold, 2);
 }
+
+#[test]
+fn test_oracle_get_result_unknown() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let result = client.try_get_result(&9999u64);
+    assert_eq!(result, Err(Ok(Error::ResultNotFound)));
+}
+
+#[test]
+fn test_oracle_store_result_when_paused() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
