@@ -112,6 +112,17 @@ See [docs/repository-health-checklist.md](docs/repository-health-checklist.md) f
 - Respond to review comments promptly
 - Squash commits if requested
 
+### Code Owners and Review Requirements
+
+The repository uses a [`CODEOWNERS`](.github/CODEOWNERS) file to automatically request reviews from designated maintainers when changes touch critical areas:
+
+- **Smart contracts** (`/contracts/escrow/`, `/contracts/oracle/`): Reviewed by @StellarCheckMate/contracts team
+- **CI/CD and build configuration** (`/.github/`, `/scripts/`): Reviewed by @StellarCheckMate/maintainers
+- **Documentation** (`/docs/`): Reviewed by @StellarCheckMate/docs team
+- **Other changes**: Reviewed by @StellarCheckMate/maintainers
+
+When a PR touches files in these paths, GitHub automatically requests review from the designated owners. This ensures that security-critical contract code and infrastructure changes receive appropriate scrutiny. All requested reviews must be approved before merging.
+
 ## Issue Labels
 
 We use a shared label taxonomy to keep issue and PR triage consistent. See [docs/label-taxonomy.md](docs/label-taxonomy.md) for definitions of labels like `good first issue`, `wave-ready`, and `help-wanted`.

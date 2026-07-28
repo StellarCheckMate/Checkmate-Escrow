@@ -163,3 +163,31 @@ async fn fetch_result_invalid_response_errors() {
     assert!(matches!(err, ChessComError::InvalidResponse));
 }
 
+#[tokio::test]
+async fn test_chess_com_503_error() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/pub/game/503"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let client = ChessComClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+
+    let err = client.fetch_result("503").await.unwrap_err();
+    match err {
+        ChessComError::HttpStatus { status } => {
+            assert_eq!(status, reqwest::StatusCode::SERVICE_UNAVAILABLE);
+        }
+        ChessComError::Http(_) => {
+            // network-level error is also acceptable
+        }
+        _ => panic!("expected service unavailable or network error, got: {:?}", err),
+    }
+}
+

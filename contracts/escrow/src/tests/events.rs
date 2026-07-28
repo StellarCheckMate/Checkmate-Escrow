@@ -487,3 +487,43 @@ fn test_expire_match_emits_event() {
     let ev_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_id, id);
 }
+
+#[test]
+fn test_pause_emits_event() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("paused").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "admin/paused event not emitted");
+}
+
+#[test]
+fn test_unpause_emits_event() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Pause first so unpause is valid
+    client.pause();
+    client.unpause();
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("unpaused").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "admin/unpaused event not emitted");
+}
