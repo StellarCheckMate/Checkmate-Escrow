@@ -14,6 +14,7 @@ mod admin;
 mod balance_history_edge_cases;
 mod dispute;
 mod events;
+mod fee_calculation_scenarios;
 mod fuzz;
 mod index;
 mod integration;
