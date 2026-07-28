@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::{Address as _, Ledger as _};
 
 #[test]
 fn test_initialize_emits_event() {
@@ -454,6 +454,11 @@ fn test_expire_match_emits_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
+    // Use the minimum timeout (17_280 ledgers ≈ 1 day) so we can advance
+    // the ledger past it without approaching the 518_400 TTL threshold that
+    // would cause the persistent match entry to expire in the test env.
+    client.set_match_timeout(&17_280);
+
     let id = client.create_match(
         &player1,
         &player2,
@@ -463,8 +468,8 @@ fn test_expire_match_emits_event() {
         &Platform::Lichess,
     );
 
-    // Advance ledger past the timeout so expire_match succeeds.
-    env.ledger().set_sequence_number(100 + 17_280);
+    // Advance ledger past the configured timeout.
+    env.ledger().set_sequence_number(17_281);
     client.expire_match(&id);
 
     let events = env.events().all();

@@ -24,4 +24,12 @@ pub enum Error {
     MatchAlreadyActive = 19,
     InvalidTimeout = 20,
     SnapshotNotFound = 21,
+    /// Oracle has already submitted a confirmation for this match.
+    OracleAlreadyConfirmed = 22,
+    /// Oracle submitted a result that conflicts with a previously recorded majority result.
+    ConflictingResult = 23,
+    /// The required number of oracle confirmations has not been reached yet.
+    NotEnoughConfirmations = 24,
+    /// The caller is not a registered oracle.
+    NotAnOracle = 25,
 }
