@@ -2247,3 +2247,23 @@ fn test_claim_unauthorized_parties() {
     let claim_res = client.try_claim_vested_payout(&id, &player2);
     assert_eq!(claim_res, Err(Ok(Error::Unauthorized)));
 }
+
+#[test]
+fn test_double_deposit_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "double_deposit_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+
+    let result = client.try_deposit(&match_id, &player1);
+    assert_eq!(result, Err(Ok(Error::AlreadyFunded)));
+}
