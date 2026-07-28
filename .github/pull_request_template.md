@@ -26,6 +26,7 @@ Link the issue number or task this PR addresses.
 - [ ] I manually verified the contract or CLI behavior where applicable.
 - [ ] I linked this PR to the related issue.
 - [ ] I included notes on any TTL or storage assumptions affecting contract state.
+- [ ] I added a `CHANGELOG.md` entry under `[Unreleased]` following the [changelog guidelines](../CONTRIBUTING.md#updating-the-changelog).
 
 ## Notes
 
