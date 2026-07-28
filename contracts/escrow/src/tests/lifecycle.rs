@@ -2282,3 +2282,35 @@ fn test_draw_refunds_both_players() {
         "player2 balance must be restored after draw"
     );
 }
+
+#[test]
+fn test_winner_receives_full_pot() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let stake_amount = 100i128;
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token,
+        &String::from_str(&env, "winner_pot_test"),
+        &Platform::Lichess,
+    );
+
+    let player1_balance_before = token_client.balance(&player1);
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1);
+    client.claim_vested_payout(&id, &player1);
+
+    let player1_balance_after = token_client.balance(&player1);
+    let pot_received = player1_balance_after - player1_balance_before + stake_amount;
+
+    assert_eq!(
+        pot_received, stake_amount * 2,
+        "winner must receive exactly 2 × stake_amount"
+    );
+}
