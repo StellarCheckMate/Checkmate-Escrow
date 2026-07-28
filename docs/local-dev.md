@@ -69,6 +69,77 @@ This builds the `event-indexer` service from `services/event-indexer/Dockerfile`
 
 ## Configuration
 
+### environments.toml
+
+`environments.toml` defines the named networks available to the Stellar CLI and all project scripts. Select a network by setting `STELLAR_NETWORK` in your `.env` file or by passing `--network <name>` to any CLI command.
+
+See also the [inline comments in `environments.toml`](../environments.toml) for a quick reference alongside the actual values.
+
+#### Fields
+
+| Field | Required | Description |
+|---|---|---|
+| `rpc_url` | Yes | HTTP(S) endpoint of the Soroban RPC node. Used by the CLI to submit transactions and query contract state. |
+| `network_passphrase` | Yes | Unique string identifying the Stellar network. Every transaction is signed against this value — it must match exactly what the target node expects, or the transaction is rejected. |
+
+#### Built-in networks
+
+**`[testnet]`**
+
+The Stellar public testnet. This is the right choice for development and CI. Test XLM is available for free from [Friendbot](https://friendbot.stellar.org/?addr=<your-address>) so you can deploy and interact with contracts without spending real funds.
+
+```toml
+rpc_url            = "https://soroban-testnet.stellar.org"
+network_passphrase = "Test SDF Network ; September 2015"
+```
+
+**`[mainnet]`**
+
+The Stellar public mainnet. Use only for production deployments. Transactions cost real XLM — always validate contracts thoroughly on testnet first.
+
+```toml
+rpc_url            = "https://soroban-mainnet.stellar.org"
+network_passphrase = "Public Global Stellar Network ; September 2015"
+```
+
+**`[futurenet]`**
+
+A preview network for upcoming Stellar protocol features. May be unstable. Use when you specifically need to test functionality not yet promoted to testnet.
+
+```toml
+rpc_url            = "https://rpc-futurenet.stellar.org"
+network_passphrase = "Test SDF Future Network ; October 2022"
+```
+
+**`[standalone]`**
+
+A fully isolated local node with no external connectivity. Ideal for fast, offline development and deterministic testing. Start it with:
+
+```bash
+stellar network start local
+# or via Docker:
+docker run --rm -it -p 8000:8000 stellar/quickstart:latest --standalone
+```
+
+```toml
+rpc_url            = "http://localhost:8000/soroban/rpc"
+network_passphrase = "Standalone Network ; February 2017"
+```
+
+#### Adding a custom network
+
+Append a new section to `environments.toml` and use it immediately:
+
+```toml
+[my_network]
+rpc_url            = "https://my-rpc-endpoint"
+network_passphrase = "My Custom Network ; YYYY"
+```
+
+```bash
+stellar contract deploy --network my_network ...
+```
+
 ### Environment variables
 
 Copy the example environment file and configure as needed:

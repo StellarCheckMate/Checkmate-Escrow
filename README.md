@@ -115,12 +115,12 @@ VITE_STELLAR_NETWORK=testnet
 VITE_STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 ```
 
-Network configurations are defined in `environments.toml`:
+Network configurations are defined in `environments.toml` — see the [environments.toml reference](docs/local-dev.md#environmentstoml) in the local development guide for a full field-by-field breakdown of each network:
 
-- `testnet` — Stellar testnet
-- `mainnet` — Stellar mainnet
-- `futurenet` — Stellar futurenet
-- `standalone` — Local development
+- `testnet` — Stellar testnet (free funds via Friendbot, recommended for development)
+- `mainnet` — Stellar mainnet (real funds, production only)
+- `futurenet` — Stellar futurenet (preview of upcoming protocol features)
+- `standalone` — Local development node (fully isolated, no external connectivity)
 
 ### Deploy to Testnet
 
