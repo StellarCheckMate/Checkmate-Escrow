@@ -113,7 +113,7 @@ impl ProviderError {
 
 // ── Conversion helpers ────────────────────────────────────────────────────────
 
-use crate::oracle::errors::ChessComError;
+use crate::oracle::errors::{ChessComError, LichessError};
 
 impl From<ChessComError> for ProviderError {
     fn from(e: ChessComError) -> Self {
@@ -158,6 +158,47 @@ impl From<ChessComError> for ProviderError {
             },
             ChessComError::Http(e) => ProviderError::Unavailable {
                 provider: "chess.com",
+                reason: e.to_string(),
+            },
+        }
+    }
+}
+
+impl From<LichessError> for ProviderError {
+    fn from(e: LichessError) -> Self {
+        match e {
+            LichessError::InvalidGameId => {
+                ProviderError::InvalidGameId("lichess".to_string())
+            }
+            LichessError::GameNotFound => ProviderError::GameNotFound,
+            LichessError::GameNotFinished => ProviderError::GameNotFinished,
+            LichessError::InvalidResponse => ProviderError::InvalidResponse {
+                provider: "lichess",
+                detail: "missing or unrecognised result field".to_string(),
+            },
+            LichessError::Timeout => ProviderError::Unavailable {
+                provider: "lichess",
+                reason: "request timed out".to_string(),
+            },
+            LichessError::RateLimited { retry_after } => ProviderError::RateLimited {
+                provider: "lichess",
+                retry_after,
+            },
+            LichessError::ConcurrencyLimitReached => ProviderError::ConcurrencyLimitReached {
+                provider: "lichess",
+            },
+            LichessError::HttpStatus { status } if status.as_u16() == 429 => {
+                ProviderError::RateLimited {
+                    provider: "lichess",
+                    retry_after: std::time::Duration::from_secs(60),
+                }
+            }
+            LichessError::HttpStatus { status } => ProviderError::Unavailable {
+                provider: "lichess",
+                reason: format!("HTTP {status}"),
+            },
+            LichessError::Http(e) => ProviderError::Unavailable {
+                provider: "lichess",
                 reason: e.to_string(),
             },
         }

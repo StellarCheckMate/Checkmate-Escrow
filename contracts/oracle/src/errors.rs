@@ -36,4 +36,10 @@ pub enum Error {
     /// `resolve_disputed_match` was called for a match that is not in a
     /// disputed (deadlocked) consensus state.
     MatchNotDisputed = 16,
+    /// A swap was attempted with an invalid (non-positive) amount.
+    InvalidAmount = 17,
+    /// An arithmetic overflow occurred during a swap calculation.
+    Overflow = 18,
+    /// The computed output amount is below the caller's `min_amount_out` threshold.
+    SlippageExceeded = 19,
 }

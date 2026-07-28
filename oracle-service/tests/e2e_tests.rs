@@ -41,6 +41,7 @@ use oracle_service::{
     config::{OracleConfig, Platform},
     oracle::{
         chess_com_client::{ChessComClient, ChessComClientConfig},
+        errors::ChessComError,
         lichess_client::{LichessClient, LichessClientConfig},
         provider::ProviderRegistry,
         provider_error::ProviderError,
@@ -330,7 +331,7 @@ async fn e2e_chess_com_fetch_completed_game_result() {
                 result.winner
             );
         }
-        Err(ProviderError::GameNotFound) => {
+        Err(ChessComError::GameNotFound) => {
             eprintln!("[e2e] chess_com_fetch_completed_game_result: game not found (game may have been archived differently)");
         }
         Err(e) => {
@@ -518,9 +519,9 @@ async fn e2e_dead_letter_store_round_trip() {
 
     let items = store.load().await.expect("load dead-letter store");
     assert!(!items.is_empty(), "dead-letter store must have at least one entry");
-    let found = items.iter().find(|e| e.match_id == 99);
+    let found = items.iter().find(|e| e.entry.match_id == 99);
     assert!(found.is_some(), "entry for match_id=99 not found in dead-letter store");
-    assert_eq!(found.unwrap().attempts, 5);
+    assert_eq!(found.unwrap().entry.attempts, 5);
 
     println!("[e2e] dead_letter_store_round_trip: OK");
 }

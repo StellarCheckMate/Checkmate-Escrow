@@ -298,10 +298,12 @@ fn classify_lichess_error(e: LichessError) -> FetchError {
     match e {
         LichessError::InvalidGameId => FetchError::Permanent(e.to_string()),
         LichessError::GameNotFound => FetchError::Permanent(e.to_string()),
-        LichessError::GameNotFinished => FetchError::Transient(e.to_string()),
-        LichessError::Http(_)
+        LichessError::GameNotFinished
+        | LichessError::Http(_)
         | LichessError::Timeout
         | LichessError::HttpStatus { .. }
+        | LichessError::RateLimited { .. }
+        | LichessError::ConcurrencyLimitReached
         | LichessError::InvalidResponse => FetchError::Transient(e.to_string()),
     }
 }
@@ -310,10 +312,12 @@ fn classify_chess_com_error(e: ChessComError) -> FetchError {
     match e {
         ChessComError::InvalidGameId => FetchError::Permanent(e.to_string()),
         ChessComError::GameNotFound => FetchError::Permanent(e.to_string()),
-        ChessComError::GameNotFinished => FetchError::Transient(e.to_string()),
-        ChessComError::Http(_)
+        ChessComError::GameNotFinished
+        | ChessComError::Http(_)
         | ChessComError::Timeout
         | ChessComError::HttpStatus { .. }
+        | ChessComError::RateLimited { .. }
+        | ChessComError::ConcurrencyLimitReached
         | ChessComError::InvalidResponse => FetchError::Transient(e.to_string()),
     }
 }
