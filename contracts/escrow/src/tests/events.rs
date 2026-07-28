@@ -171,6 +171,7 @@ fn test_submit_result_emits_event() {
     assert_eq!(decoded, (id, Winner::Player1));
 }
 
+// #1104 — cancel_match emits match/cancelled event
 #[test]
 fn test_cancel_match_emits_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
