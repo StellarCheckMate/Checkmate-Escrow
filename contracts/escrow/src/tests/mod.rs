@@ -26,6 +26,7 @@ mod snapshots;
 mod tier;
 mod token_allowlist;
 mod ttl;
+mod validation;
 
 // ── Base fixture ─────────────────────────────────────────────────────────────
 
@@ -164,3 +165,4 @@ pub fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, 
 }
 mod cancellation_fee;
 mod stablecoin;
+mod dispute_rollback;

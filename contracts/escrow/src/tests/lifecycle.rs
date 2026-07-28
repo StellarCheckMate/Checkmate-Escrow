@@ -136,6 +136,7 @@ fn test_duplicate_game_id_cross_platform_rejected() {
     assert_eq!(result, Err(Ok(Error::DuplicateGameId)));
 }
 
+// Issue #1107: get_escrow_balance returns 0 after payout
 #[test]
 fn test_escrow_balance_zero_after_payout() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -2246,4 +2247,24 @@ fn test_claim_unauthorized_parties() {
     // Player 2 trying to claim (P1 won, so P2 payout is 0) - fails
     let claim_res = client.try_claim_vested_payout(&id, &player2);
     assert_eq!(claim_res, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_double_deposit_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "double_deposit_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+
+    let result = client.try_deposit(&match_id, &player1);
+    assert_eq!(result, Err(Ok(Error::AlreadyFunded)));
 }
