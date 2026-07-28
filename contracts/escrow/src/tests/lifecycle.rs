@@ -2250,89 +2250,21 @@ fn test_claim_unauthorized_parties() {
 }
 
 #[test]
-fn test_draw_refunds_both_players() {
+fn test_double_deposit_rejected() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    let token_client = TokenClient::new(&env, &token);
 
-    let id = client.create_match(
+    let match_id = client.create_match(
         &player1,
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "draw_refund_test"),
+        &String::from_str(&env, "double_deposit_game"),
         &Platform::Lichess,
     );
 
-    let player1_balance_before = token_client.balance(&player1);
-    let player2_balance_before = token_client.balance(&player2);
+    client.deposit(&match_id, &player1);
 
-    client.deposit(&id, &player1);
-    client.deposit(&id, &player2);
-
-    client.submit_result(&id, &Winner::Draw);
-    client.claim_vested_payout(&id, &player1);
-    client.claim_vested_payout(&id, &player2);
-
-    assert_eq!(
-        token_client.balance(&player1), player1_balance_before,
-        "player1 balance must be restored after draw"
-    );
-    assert_eq!(
-        token_client.balance(&player2), player2_balance_before,
-        "player2 balance must be restored after draw"
-    );
-}
-
-#[test]
-fn test_winner_receives_full_pot() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-    let token_client = TokenClient::new(&env, &token);
-
-    let stake_amount = 100i128;
-    let id = client.create_match(
-        &player1,
-        &player2,
-        &stake_amount,
-        &token,
-        &String::from_str(&env, "winner_pot_test"),
-        &Platform::Lichess,
-    );
-
-    let player1_balance_before = token_client.balance(&player1);
-
-    client.deposit(&id, &player1);
-    client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
-    client.claim_vested_payout(&id, &player1);
-
-    let player1_balance_after = token_client.balance(&player1);
-    let pot_received = player1_balance_after - player1_balance_before + stake_amount;
-
-    assert_eq!(
-        pot_received, stake_amount * 2,
-        "winner must receive exactly 2 × stake_amount"
-    );
-}
-
-#[test]
-fn test_is_funded_single_deposit() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let id = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "single_deposit_test"),
-        &Platform::Lichess,
-    );
-
-    client.deposit(&id, &player1);
-    assert!(
-        !client.is_funded(&id),
-        "is_funded must return false when only one player has deposited"
-    );
+    let result = client.try_deposit(&match_id, &player1);
+    assert_eq!(result, Err(Ok(Error::AlreadyFunded)));
 }

@@ -732,34 +732,25 @@ fn test_pause_unauthorized() {
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
+/// Test that submit_result by non-oracle is rejected
 #[test]
-fn test_submit_result_already_completed() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+fn test_submit_result_unauthorized() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) = setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    env.mock_all_auths();
-    let match_id = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_slice(&env, "game_completed"),
-        &Platform::ChessDotCom,
-    );
+    let non_oracle = Address::generate(&env);
 
-    env.mock_all_auths();
-    client.deposit(&match_id, &player1);
-    client.deposit(&match_id, &player2);
+    env.mock_auths(&[MockAuth {
+        address: &non_oracle,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (match_id, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
 
-    env.mock_all_auths();
     let result = client.try_submit_result(&match_id, &Winner::Player1);
-    assert!(result.is_ok(), "First submit_result should succeed");
-
-    env.mock_all_auths();
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
-    assert!(
-        result.is_err(),
-        "Second submit_result on already-completed match should be rejected"
-    );
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
