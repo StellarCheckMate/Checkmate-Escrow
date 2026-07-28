@@ -136,6 +136,7 @@ fn test_duplicate_game_id_cross_platform_rejected() {
     assert_eq!(result, Err(Ok(Error::DuplicateGameId)));
 }
 
+// Issue #1107: get_escrow_balance returns 0 after payout
 #[test]
 fn test_escrow_balance_zero_after_payout() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
