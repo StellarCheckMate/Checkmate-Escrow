@@ -65,6 +65,15 @@ pub enum DataKey {
     Snapshot(u64, u32),
     /// Total number of snapshots ever recorded for a match (monotonic, never reset).
     SnapshotCount(u64),
+    /// Stores the number of oracle confirmations received for a given match.
+    OracleConfirmations(u64),
+    /// Tracks the result (Winner) submitted by a specific oracle for a match.
+    /// Key: (match_id, oracle_address) → Winner
+    OracleVote(u64, Address),
+    /// Stores the approved oracle list (Vec<Address>) used by consensus.
+    ApprovedOracles,
+    /// Stores the required number of confirmations for consensus (u32).
+    RequiredOracleConfirmations,
 }
 
 /// The lifecycle event that triggered a balance snapshot.

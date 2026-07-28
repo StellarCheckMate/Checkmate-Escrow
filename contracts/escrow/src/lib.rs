@@ -503,7 +503,7 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         oracle.require_auth();
 
-        let mut m: Match = env
+        let m: Match = env
             .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
@@ -517,37 +517,7 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
-        let client = token::Client::new(&env, &m.token);
-        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
-
-        match winner {
-            Winner::Player1 => client.transfer(&env.current_contract_address(), &m.player1, &pot),
-            Winner::Player2 => client.transfer(&env.current_contract_address(), &m.player2, &pot),
-            Winner::Draw => {
-                client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
-                client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
-            }
-        }
-
-        Self::remove_active_match(&env, match_id);
-
-        m.state = MatchState::Completed;
-        m.completed_ledger = Some(env.ledger().sequence());
-        env.storage()
-            .persistent()
-            .set(&DataKey::Match(match_id), &m);
-        env.storage().persistent().extend_ttl(
-            &DataKey::Match(match_id),
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
-
-        Self::record_snapshot(&env, &m, SnapshotReason::Completed);
-
-        let topics = (Symbol::new(&env, "match"), symbol_short!("completed"));
-        env.events().publish(topics, (match_id, winner));
-
-        Ok(())
+        Self::execute_payout(&env, match_id, winner)
     }
 
     /// Submit result with oracle record integration.
@@ -1317,6 +1287,326 @@ impl EscrowContract {
     pub fn is_initialized(env: Env) -> bool {
         extend_instance_ttl(&env);
         env.storage().instance().has(&DataKey::Oracle)
+    }
+
+    /// Returns true if the token allowlist is currently enforced.
+    ///
+    /// Allowlist enforcement is automatically enabled when the first token is
+    /// added via `add_allowed_token`, and disabled when the last token is removed.
+    pub fn is_allowlist_enforced(env: Env) -> bool {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::AllowlistEnforced)
+            .unwrap_or(false)
+    }
+
+    // ── Multi-Oracle Consensus ───────────────────────────────────────────────
+
+    /// Add an approved oracle to the consensus oracle list — admin only.
+    ///
+    /// Approved oracles are permitted to call `submit_result_consensus`.
+    pub fn add_approved_oracle(env: Env, oracle: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if oracle == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
+
+        let mut oracles: soroban_sdk::Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedOracles)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        if !oracles.iter().any(|o| o == oracle) {
+            oracles.push_back(oracle.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::ApprovedOracles, &oracles);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("ora_add")),
+            oracle,
+        );
+        Ok(())
+    }
+
+    /// Remove an approved oracle from the consensus oracle list — admin only.
+    pub fn remove_approved_oracle(env: Env, oracle: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let oracles: soroban_sdk::Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedOracles)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        let mut updated = soroban_sdk::vec![&env];
+        for o in oracles.iter() {
+            if o != oracle {
+                updated.push_back(o);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ApprovedOracles, &updated);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("ora_rm")),
+            oracle,
+        );
+        Ok(())
+    }
+
+    /// Return the list of approved oracles for consensus.
+    pub fn get_approved_oracles(env: Env) -> soroban_sdk::Vec<Address> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::ApprovedOracles)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
+    /// Set the number of oracle confirmations required for consensus — admin only.
+    ///
+    /// Default is 2 when not explicitly configured.
+    pub fn set_required_confirmations(env: Env, count: u32) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if count == 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::RequiredOracleConfirmations, &count);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("req_conf")),
+            count,
+        );
+        Ok(())
+    }
+
+    /// Return the currently required number of oracle confirmations (default: 2).
+    pub fn get_required_confirmations(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::RequiredOracleConfirmations)
+            .unwrap_or(2u32)
+    }
+
+    /// Submit a consensus confirmation for a match result.
+    ///
+    /// Any approved oracle can call this function to vote on the match outcome.
+    /// Once the required number of confirmations is reached for a single outcome,
+    /// the payout is automatically executed.
+    ///
+    /// Rules:
+    /// - Caller must be an approved oracle and must require_auth.
+    /// - Each oracle may only vote once per match.
+    /// - All votes must agree on the same winner. A conflicting vote returns `ConflictingResult`.
+    /// - Once the required threshold is reached, payout is executed and the match completes.
+    ///
+    /// # Errors
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::MatchNotFound`] — no match exists for `match_id`.
+    /// - [`Error::InvalidState`] — match is not in `Active` state.
+    /// - [`Error::NotFunded`] — one or both players have not deposited.
+    /// - [`Error::NotAnOracle`] — caller is not in the approved oracle list.
+    /// - [`Error::OracleAlreadyConfirmed`] — this oracle already voted on this match.
+    /// - [`Error::ConflictingResult`] — the submitted winner conflicts with prior votes.
+    pub fn submit_result_consensus(
+        env: Env,
+        match_id: u64,
+        winner: Winner,
+        oracle_address: Address,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        // Require the oracle to authorize this call.
+        oracle_address.require_auth();
+
+        // Verify the caller is in the approved oracle list.
+        let oracles: soroban_sdk::Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedOracles)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        if !oracles.iter().any(|o| o == oracle_address) {
+            return Err(Error::NotAnOracle);
+        }
+
+        // Load and validate match state.
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
+        }
+
+        if !m.player1_deposited || !m.player2_deposited {
+            return Err(Error::NotFunded);
+        }
+
+        // Check if this oracle has already voted on this match.
+        let vote_key = DataKey::OracleVote(match_id, oracle_address.clone());
+        if env.storage().persistent().has(&vote_key) {
+            return Err(Error::OracleAlreadyConfirmed);
+        }
+
+        // Check existing votes for conflict: if any other oracle has voted,
+        // they must agree on the same winner.
+        let confirmations_key = DataKey::OracleConfirmations(match_id);
+        let existing_confirmations: u32 = env
+            .storage()
+            .persistent()
+            .get(&confirmations_key)
+            .unwrap_or(0);
+
+        // If there are existing votes, load the recorded winner and check for conflict.
+        // We store the "leading winner" in a dedicated key once the first vote arrives.
+        let leading_winner_key = DataKey::OracleRecord(match_id);
+        if existing_confirmations > 0 {
+            // There are existing votes — check they all agree.
+            // We repurpose OracleRecord(match_id) to store the first-vote Winner.
+            let existing_winner: Winner = env
+                .storage()
+                .persistent()
+                .get(&leading_winner_key)
+                .ok_or(Error::ConflictingResult)?;
+            if existing_winner != winner {
+                return Err(Error::ConflictingResult);
+            }
+        } else {
+            // First vote — store the winner as the reference.
+            env.storage()
+                .persistent()
+                .set(&leading_winner_key, &winner);
+            env.storage().persistent().extend_ttl(
+                &leading_winner_key,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+
+        // Record this oracle's vote.
+        env.storage().persistent().set(&vote_key, &winner);
+        env.storage()
+            .persistent()
+            .extend_ttl(&vote_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        // Increment confirmation count.
+        let new_confirmations = existing_confirmations.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage()
+            .persistent()
+            .set(&confirmations_key, &new_confirmations);
+        env.storage().persistent().extend_ttl(
+            &confirmations_key,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("ora_vote")),
+            (match_id, oracle_address, new_confirmations),
+        );
+
+        // Check if required threshold has been reached.
+        let required: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RequiredOracleConfirmations)
+            .unwrap_or(2u32);
+
+        if new_confirmations >= required {
+            // Threshold reached — execute payout.
+            Self::execute_payout(&env, match_id, winner)?;
+        }
+
+        Ok(())
+    }
+
+    /// Return the current confirmation count for a given match.
+    pub fn get_oracle_confirmations(env: Env, match_id: u64) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OracleConfirmations(match_id))
+            .unwrap_or(0)
+    }
+
+    /// Internal helper: execute payout after consensus or direct oracle submission.
+    fn execute_payout(env: &Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        let client = token::Client::new(env, &m.token);
+        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+
+        match winner.clone() {
+            Winner::Player1 => client.transfer(&env.current_contract_address(), &m.player1, &pot),
+            Winner::Player2 => client.transfer(&env.current_contract_address(), &m.player2, &pot),
+            Winner::Draw => {
+                client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+                client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+            }
+        }
+
+        Self::remove_active_match(env, match_id);
+
+        m.state = MatchState::Completed;
+        m.completed_ledger = Some(env.ledger().sequence());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(env, &m, SnapshotReason::Completed);
+
+        let topics = (Symbol::new(env, "match"), symbol_short!("completed"));
+        env.events().publish(topics, (match_id, winner));
+
+        Ok(())
     }
 
 }
