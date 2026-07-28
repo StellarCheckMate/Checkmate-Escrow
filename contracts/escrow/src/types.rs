@@ -95,6 +95,11 @@ pub struct Match {
     pub total_pause_duration: u32,
     /// Optional referrer address for referral fee sharing.
     pub referrer: Option<Address>,
+    /// Ledger timestamp (Unix seconds) of the last recorded match activity.
+    /// Initialized at match creation and refreshed on each deposit so that
+    /// `dispute_and_rollback_match` can enforce the 24h dispute window based
+    /// on the most recent in-game activity.
+    pub last_heartbeat: u64,
 }
 
 #[contracttype]

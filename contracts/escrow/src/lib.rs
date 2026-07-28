@@ -54,6 +54,14 @@ pub const MAX_MATCH_TIMEOUT_LEDGERS: u32 = 1_555_200;
 /// Default voting period for disputes: 1 day (17,280 ledgers at 5s/ledger).
 pub const VOTING_PERIOD_LEDGERS: u32 = 17_280;
 
+/// Time window (in seconds, since `last_heartbeat`) within which a player
+/// may invoke `dispute_and_rollback_match` against an Active match to claw
+/// back a stake after claiming the opponent disconnected. 24 hours.
+pub const ROLLBACK_WINDOW_SECONDS: u64 = 24 * 60 * 60; // 86_400
+
+/// Maximum allowed byte length for a `dispute_and_rollback_match` reason.
+const MAX_REASON_LEN: u32 = 256;
+
 /// Default dispute bond as basis points of match stake (1% = 100 basis points).
 /// Set to 100 = 1% of stake required to open a dispute.
 pub const DEFAULT_DISPUTE_BOND_BASIS_POINTS: u32 = 100;
@@ -884,6 +892,7 @@ impl EscrowContract {
             paused_ledger: None,
             total_pause_duration: 0,
             referrer: None,
+            last_heartbeat: env.ledger().timestamp(),
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1066,6 +1075,7 @@ impl EscrowContract {
             paused_ledger: None,
             total_pause_duration: 0,
             referrer: None,
+            last_heartbeat: env.ledger().timestamp(),
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1222,6 +1232,7 @@ impl EscrowContract {
             paused_ledger: None,
             total_pause_duration: 0,
             referrer: Some(referrer.clone()),
+            last_heartbeat: env.ledger().timestamp(),
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1328,6 +1339,10 @@ impl EscrowContract {
         } else {
             m.player2_deposited = true;
         }
+
+        // Refresh the last-activity timestamp so that cancellation-fee /
+        // rollback dispute windows count from the most recent deposit.
+        m.last_heartbeat = env.ledger().timestamp();
 
         if m.player1_deposited && m.player2_deposited {
             m.state = MatchState::Active;
@@ -1776,6 +1791,234 @@ impl EscrowContract {
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("expired")),
             match_id,
+        );
+
+        Ok(())
+    }
+
+    // ── Disconnection-rollback dispute (issue: auto-created from UNSOLVED_ISSUES_40.md) ──
+
+    /// Dispute an in-progress match and roll it back, refunding both players.
+    ///
+    /// Use case: a player disconnects mid-game and the opponent has privately
+    /// (and informally) "claimed victory" outside the contract. Either side can
+    /// invoke this function to claw back their stake while the match is still
+    /// recently active and the loser can be plausibly believed to have been
+    /// disconnected rather than defeated.
+    ///
+    /// Rules:
+    /// - `disputer` must `require_auth` and must be either `Match.player1` or
+    ///   `Match.player2`. Strangers and the oracle cannot roll matches back.
+    /// - The match must be in `MatchState::Active`. Pending / PendingResult /
+    ///   Completed / Cancelled / Paused matches already have their own dispute
+    ///   or cancellation paths.
+    /// - The current ledger timestamp must be within
+    ///   `ROLLBACK_WINDOW_SECONDS` (24 h) of `Match.last_heartbeat`. Outside
+    ///   the window, the match is considered legitimately stalled and the
+    ///   rollback is rejected with `Error::RollbackWindowExpired`.
+    /// - The full stake is refunded to whichever players had deposited — no
+    ///   cancellation fee is applied. This is a player-friendly escape hatch,
+    ///   not a fee-bearing cancel.
+    /// - After refund, the match transitions to `MatchState::Cancelled` and a
+    ///   `("match", "rollback")` event is emitted with `(match_id, disputer,
+    ///   reason)`.
+    ///
+    /// Note: this function intentionally does NOT consult the contract-wide
+    /// `Paused` flag, mirroring `cancel_match` / `expire_match` — admin pause
+    /// gates state-creating operations (create, deposit, submit) and not the
+    /// refund path that exists to recover funds.
+    pub fn dispute_and_rollback_match(
+        env: Env,
+        match_id: u64,
+        disputer: Address,
+        reason: String,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        // Validate reason so it is indexable on-chain and bounded in size.
+        if reason.len() == 0 || reason.len() > MAX_REASON_LEN {
+            return Err(Error::ReasonTooLong);
+        }
+
+        disputer.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        // Player-only access. Either side may invoke, including the player
+        // who is alleged to have disconnected (so they can self-report).
+        let is_p1 = disputer == m.player1;
+        let is_p2 = disputer == m.player2;
+        if !is_p1 && !is_p2 {
+            return Err(Error::Unauthorized);
+        }
+
+        // Only Active matches may be rolled back. Pending matches should use
+        // `cancel_match`; PendingResult/Completed have the oracle dispute path;
+        // Paused matches can be either resumed or expired depending on intent.
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
+        }
+
+        // Enforce the 24-hour heartbeat window. Reject rollback attempts after
+        // the match has shown no activity for longer than the window — by that
+        // point period the result is considered legitimately lost or stalled
+        // and an explicit dispute-by-vote path is the correct remedy.
+        let now: u64 = env.ledger().timestamp();
+        let since_heartbeat: u64 = now.saturating_sub(m.last_heartbeat);
+        if since_heartbeat > ROLLBACK_WINDOW_SECONDS {
+            return Err(Error::RollbackWindowExpired);
+        }
+
+        // Drop the active-match index for both players before mutating state
+        // so future-player/match lookups stay consistent.
+        Self::remove_active_match_indexed(&env, &m.player1, match_id);
+        Self::remove_active_match_indexed(&env, &m.player2, match_id);
+
+        // Refund players. Supports multi-token matches via the same
+        // conversion logic used by cancel_match and expire_match so that a
+        // rollback preserves the original stake denomination for each side.
+        let is_multi_token =
+            m.token_b.is_some() && m.conversion_rate.map_or(false, |r| r > 0);
+
+        if m.player1_deposited {
+            let client_a = token::Client::new(&env, &m.token);
+            client_a.transfer(
+                &env.current_contract_address(),
+                &m.player1,
+                &m.stake_amount,
+            );
+        }
+        if m.player2_deposited {
+            let token_b = m.token_b.clone().unwrap_or_else(|| m.token.clone());
+            let amount_b = if is_multi_token {
+                m.stake_amount
+                    .checked_mul(m.conversion_rate.unwrap_or(0))
+                    .ok_or(Error::Overflow)?
+                    .checked_div(10_000_000)
+                    .ok_or(Error::Overflow)?
+            } else {
+                m.stake_amount
+            };
+            let client_b = token::Client::new(&env, &token_b);
+            client_b.transfer(&env.current_contract_address(), &m.player2, &amount_b);
+        }
+
+        // Finalize the match as cancelled and stamp the completion ledger so
+        // downstream code that reads `completed_ledger` sees a terminal time.
+        m.state = MatchState::Cancelled;
+        m.completed_ledger = Some(env.ledger().sequence());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Cancelled);
+        // Intentionally NOT calling `record_completed_match` here: the post-
+        // rollback state is `Cancelled`, not `Completed`. The completed-match
+        // counter (used for tier thresholds) must reflect only matches that
+        // actually finished, so we leave it untouched on the rollback path.
+        if m.player1_deposited {
+            Self::record_player_snapshot(&env, &m.player1);
+        }
+        if m.player2_deposited {
+            Self::record_player_snapshot(&env, &m.player2);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("rollback")),
+            (match_id, disputer, reason),
+        );
+
+        Ok(())
+    }
+
+    // ── Heartbeat (refreshes `last_heartbeat` to keep the rollback window alive) ──
+
+    /// Refresh the match `last_heartbeat` to the current ledger timestamp.
+    ///
+    /// Use case: a player wants to signal "the game is still progressing, do
+    /// not treat a long idle period as a disconnect-by-default" — used in
+    /// conjunction with `dispute_and_rollback_match`, whose 24-hour enforce-
+    /// ment window counts from `last_heartbeat`. Pausing for dinner or a long
+    /// analysis no longer forfeits the rollback window as long as either side
+    /// periodically calls this.
+    ///
+    /// The hallmark difference from `deposit` is that **no token movement
+    /// happens** — it is purely a timestamp update so players do not need to
+    /// keep funding redundant deposits just to keep the dispute window alive.
+    ///
+    /// Rules:
+    /// - `player` must `require_auth` and must be either `Match.player1` or
+    ///   `Match.player2`. Strangers and the oracle cannot heartbeat matches.
+    /// - The match must be in `MatchState::Active`. Pending matches have no
+    ///   heartbeat yet (no gameplay in progress); PendingResult / Completed
+    ///   are past the rollback-relevant window; Paused matches can be
+    ///   resumed via `resume_match` (which moves state back to Active and
+    ///   naturally allows heartbeats thereafter); Cancelled / Expired are
+    ///   terminal. Reject everywhere to keep the state machine honest.
+    /// - `last_heartbeat` is overwritten with `env.ledger().timestamp()` and
+    ///   the match is persisted back to storage with TTL extended.
+    /// - Emits a `("match", "heartbeat")` event with `(match_id, player,
+    ///   last_heartbeat)` so off-chain indexers / front-ends can observe the
+    ///   rolling window without having to re-read the full match state.
+    pub fn heartbeat_match(
+        env: Env,
+        match_id: u64,
+        player: Address,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        player.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        // Player-only access. Either side may invoke; signalling intent that
+        // the game is still progressing counts equally from either party.
+        let is_p1 = player == m.player1;
+        let is_p2 = player == m.player2;
+        if !is_p1 && !is_p2 {
+            // Intentionally no extend_ttl / storage touch on rejection: an
+            // unauthorized caller must not be able to indefinitely keep a
+            // stale match alive by spamming heartbeats. TTL is only refreshed
+            // on the success path below.
+            return Err(Error::Unauthorized);
+        }
+
+        // Heartbeat is only meaningful while the match is actively being
+        // played out. Refusing other states keeps the state-machine honest:
+        // a heartbeat on a Paused match would mask an unresolved pause, and
+        // a heartbeat on a terminal match would silently rewrite history.
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
+        }
+
+        let now: u64 = env.ledger().timestamp();
+        m.last_heartbeat = now;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("heartbeat")),
+            (match_id, player, now),
         );
 
         Ok(())
