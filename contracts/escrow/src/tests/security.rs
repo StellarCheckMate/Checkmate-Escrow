@@ -686,3 +686,32 @@ fn test_accept_admin_wrong_caller_rejected() {
     let result = client.try_accept_admin();
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
+
+// #1131 — reentrancy guard on deposit prevents double-spend
+#[test]
+fn test_deposit_reentrancy_guard() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100i128,
+        &token,
+        &String::from_slice(&env, "reentrancy_test_game"),
+        &Platform::ChessDotCom,
+    );
+
+    env.mock_all_auths();
+    let result1 = client.try_deposit(&match_id, &player1);
+    assert!(result1.is_ok(), "First deposit should succeed");
+
+    env.mock_all_auths();
+    let result2 = client.try_deposit(&match_id, &player1);
+    assert_eq!(
+        result2,
+        Err(Ok(Error::AlreadyFunded)),
+        "Second reentrant deposit must be rejected with AlreadyFunded"
+    );
+}
