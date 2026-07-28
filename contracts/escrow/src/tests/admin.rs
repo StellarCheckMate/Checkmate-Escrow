@@ -772,3 +772,44 @@ fn test_two_step_admin_transfer() {
     });
     assert!(pending.is_none(), "PendingAdmin key must be cleared after acceptance");
 }
+
+// #959 — temporary oracle rotation with auto-expiry
+#[test]
+fn test_rotate_oracle_temporary_and_auto_expiry() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let temp_oracle = Address::generate(&env);
+
+    // Initial oracle
+    assert_eq!(client.get_oracle(), oracle);
+
+    // Rotate oracle temporarily for 3600 seconds
+    client.rotate_oracle_temporary(&oracle, &temp_oracle, &3600);
+    assert_eq!(client.get_oracle(), temp_oracle);
+
+    // Advance time by 3601 seconds -> auto-revert to old oracle
+    env.ledger().with_mut(|li| {
+        li.timestamp += 3601;
+    });
+
+    assert_eq!(client.get_oracle(), oracle);
+}
+
+// #959 — permanent oracle rotation with proposal requirement
+#[test]
+fn test_rotate_oracle_permanent_requires_proposal() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let new_oracle = Address::generate(&env);
+
+    // Attempting permanent rotation without proposal fails
+    let res = client.try_rotate_oracle_permanent(&oracle, &new_oracle);
+    assert_eq!(res, Err(Ok(Error::InvalidState)));
+
+    // Admin proposes permanent oracle rotation
+    client.propose_oracle_rotation(&oracle, &new_oracle);
+
+    // Permanent rotation succeeds with proposal
+    client.rotate_oracle_permanent(&oracle, &new_oracle);
+    assert_eq!(client.get_oracle(), new_oracle);
+}
