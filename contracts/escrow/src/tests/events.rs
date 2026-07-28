@@ -30,6 +30,7 @@ fn test_initialize_emits_event() {
     assert_eq!(ev_admin, admin);
 }
 
+// #1103 — create_match emits match/created event
 #[test]
 fn test_create_match_emits_event() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
