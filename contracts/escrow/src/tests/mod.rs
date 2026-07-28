@@ -22,6 +22,7 @@ mod invariants;
 mod lifecycle;
 mod match_validation;
 mod multi_token;
+mod oracle_validation;
 mod pagination;
 mod player_balance_history;
 mod security;
