@@ -158,6 +158,14 @@ pub enum DataKey {
     StablecoinIssuer(Address),
     /// Total number of registered stablecoin issuers.
     StablecoinIssuerCount,
+    PendingUpgradeHash,
+    UpgradeScheduledAt,
+    ContractVersion,
+    ReferralShareBasisPoints,
+    BlacklistedToken(Address),
+    BlacklistedTokens,
+    FeeTiers,
+    PlayerPreferredToken(Address),
 }
 
 /// The lifecycle event that triggered a balance snapshot.

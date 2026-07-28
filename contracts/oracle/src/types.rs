@@ -19,7 +19,7 @@ pub enum Platform {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResultEntry {
     pub game_id: String,
     pub platform: Platform,
@@ -46,6 +46,18 @@ pub struct OracleRegistration {
     pub oracle_address: Address,
     pub oracle_stake: i128,
     pub token: Address,
+}
+
+/// Metrics tracking and SLA performance indicators for a registered oracle.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleMetrics {
+    pub last_response_time_ms: u64,
+    pub avg_response_time_ms: u64,
+    pub uptime_percentage: u32,
+    pub total_submissions: u32,
+    pub successful_submissions: u32,
+    pub active: bool,
 }
 
 /// A single registered oracle's vote for a specific match, recorded so a
@@ -105,6 +117,8 @@ pub enum DataKey {
     MatchVotes(u64),
     /// A single oracle's recorded vote for a match, keyed by (match_id, oracle).
     OracleVote(u64, Address),
+    /// Metrics tracking and SLA performance indicators for an oracle.
+    OracleMetrics(Address),
 }
 
 /// Configurable submission limits for a single oracle address.
