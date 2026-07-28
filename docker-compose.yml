@@ -19,6 +19,30 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Redis (shared API response cache) ─────────────────────────────────────
+  # Both replicas share this cache, so an invalidation performed by the leader
+  # after ingesting an event is immediately visible to the follower serving
+  # reads. Without it each replica caches independently and can serve a stale
+  # response for up to one TTL after the other has invalidated.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Cache-only workload: no persistence, and a bounded memory footprint with
+    # LRU eviction so it can never grow into the host's memory.
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # ── Event Indexer Replica #1 (leader-eligible) ───────────────────────────
   event-indexer-1:
     build:
@@ -28,10 +52,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8080:8080"
     environment:
       DATABASE_URL: postgres://event_indexer:event_indexer_pass@postgres:5432/event_indexer
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
       CONTRACT_ESCROW: ${CONTRACT_ESCROW}
       EVENT_INDEXER_INSTANCE_ID: indexer-1
@@ -59,10 +86,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8081:8080"
     environment:
       DATABASE_URL: postgres://event_indexer:event_indexer_pass@postgres:5432/event_indexer
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
       CONTRACT_ESCROW: ${CONTRACT_ESCROW}
       EVENT_INDEXER_INSTANCE_ID: indexer-2
@@ -90,10 +120,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8082:8080"
     environment:
       DATABASE_URL: postgres://event_indexer:event_indexer_pass@postgres:5432/event_indexer
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
       CONTRACT_ESCROW: ${CONTRACT_ESCROW}
       EVENT_INDEXER_INSTANCE_ID: indexer-3

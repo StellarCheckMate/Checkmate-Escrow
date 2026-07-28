@@ -24,6 +24,12 @@ Thumbs.db
 # Logs
 *.log
 
+# TLA+ model checking (scripts/check_tla.sh): cached tools and TLC scratch output
+specs/tla/.tools/
+specs/tla/states/
+specs/tla/*.old
+*.st
+
 # Wasm build output
 *.wasm
 

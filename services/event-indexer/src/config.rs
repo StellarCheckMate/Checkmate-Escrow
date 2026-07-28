@@ -39,6 +39,14 @@ pub struct Config {
 
     // ── Cache ─────────────────────────────────────────────────────────────
     pub cache_size: usize,
+    /// Optional Redis DSN for the shared API response cache
+    /// (e.g. `redis://localhost:6379`).
+    ///
+    /// When unset the service falls back to a process-local response cache with
+    /// the same TTLs, so a single-node deployment needs no Redis.  Multi-replica
+    /// deployments should set it so that one replica's invalidation is seen by
+    /// all of them.
+    pub redis_url: Option<String>,
 
     // ── Polling ───────────────────────────────────────────────────────────
     pub poll_interval_secs: u64,
@@ -129,6 +137,22 @@ impl Config {
             .unwrap_or_else(|_| "10000".to_string())
             .parse::<usize>()?;
 
+        // Blank is treated as unset so `REDIS_URL=` in an env file disables the
+        // shared cache instead of failing to connect on every start-up.
+        let redis_url = env::var("REDIS_URL")
+            .ok()
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty());
+
+        if let Some(ref url) = redis_url {
+            if !(url.starts_with("redis://") || url.starts_with("rediss://")) {
+                return Err(anyhow!(
+                    "REDIS_URL must start with redis:// or rediss://, got {:?}",
+                    url
+                ));
+            }
+        }
+
         // ── Polling ───────────────────────────────────────────────────────
         let poll_interval_secs = env::var("EVENT_INDEXER_POLL_INTERVAL")
             .unwrap_or_else(|_| "5".to_string())
@@ -158,6 +182,7 @@ impl Config {
             bind_addr,
             bind_port,
             cache_size,
+            redis_url,
             poll_interval_secs,
             log_level,
         })
@@ -274,5 +299,54 @@ mod tests {
         let cfg = Config::from_env().unwrap();
         assert_eq!(cfg.database_read_url, "postgres://ro:pass@replica:5432/test");
         env::remove_var("DATABASE_READ_URL");
+    }
+
+    // ── Redis (API response cache) ────────────────────────────────────────
+
+    #[test]
+    fn redis_url_is_optional() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
+        env::remove_var("REDIS_URL");
+        let cfg = Config::from_env().unwrap();
+        assert!(cfg.redis_url.is_none(), "no Redis is a supported setup");
+    }
+
+    #[test]
+    fn valid_redis_url_is_accepted() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
+        env::set_var("REDIS_URL", "redis://localhost:6379");
+        let cfg = Config::from_env().unwrap();
+        assert_eq!(cfg.redis_url.as_deref(), Some("redis://localhost:6379"));
+        env::remove_var("REDIS_URL");
+    }
+
+    #[test]
+    fn tls_redis_url_is_accepted() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
+        env::set_var("REDIS_URL", "rediss://cache.internal:6380");
+        assert!(Config::from_env().unwrap().redis_url.is_some());
+        env::remove_var("REDIS_URL");
+    }
+
+    #[test]
+    fn blank_redis_url_is_treated_as_unset() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
+        env::set_var("REDIS_URL", "   ");
+        let cfg = Config::from_env().unwrap();
+        assert!(cfg.redis_url.is_none());
+        env::remove_var("REDIS_URL");
+    }
+
+    #[test]
+    fn redis_url_with_wrong_scheme_is_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
+        env::set_var("REDIS_URL", "http://localhost:6379");
+        assert!(Config::from_env().is_err());
+        env::remove_var("REDIS_URL");
     }
 }
