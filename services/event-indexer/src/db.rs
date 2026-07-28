@@ -21,6 +21,7 @@ use deadpool_postgres::{Config as PoolConfig, ManagerConfig, Pool, RecyclingMeth
 use tokio_postgres::NoTls;
 
 use crate::models::{IndexedEvent, MatchInfo, MatchStatus, QueryFilters, Winner};
+use crate::transactions::{TransactionHistoryFilters, TransactionRecord, TransactionType};
 
 // ── Pool helpers ──────────────────────────────────────────────────────────────
 
@@ -425,6 +426,108 @@ impl Database {
         Ok(matches)
     }
 
+    // ── Transaction history ───────────────────────────────────────────────
+
+    /// Query a player's financial transaction history.
+    ///
+    /// Returns the requested page **and** the total number of matching rows so
+    /// the caller can render pagination without a second round trip.
+    ///
+    /// ## Why filtering happens in SQL
+    /// Non-financial events (`match:created`, `match:paused`, …) are excluded by
+    /// the `event_type ILIKE ANY(...)` predicate rather than after the fact.
+    /// Filtering in Rust would make `LIMIT`/`OFFSET` and `total` disagree with
+    /// the rows actually returned, so pages would appear short or repeat rows.
+    ///
+    /// Reorg-invalidated events are excluded: a rolled-back ledger never moved
+    /// funds.
+    pub async fn query_player_transactions(
+        &self,
+        filters: &TransactionHistoryFilters,
+    ) -> Result<(Vec<TransactionRecord>, i64)> {
+        let conn = self
+            .read_pool
+            .get()
+            .await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
+
+        // ── Shared WHERE clause ───────────────────────────────────────────
+        // $1 = player address (matched against both sides of the match)
+        // $2 = event-type ILIKE patterns (text[])
+        let mut where_sql = String::from(
+            " WHERE (player1 = $1 OR player2 = $1)
+                AND event_type ILIKE ANY($2)
+                AND reorg_invalidated_at IS NULL",
+        );
+
+        let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = vec![
+            Box::new(filters.player_address.clone()),
+            Box::new(filters.event_type_patterns()),
+        ];
+        let mut idx = 3usize;
+
+        if let Some(ref token) = filters.token {
+            where_sql.push_str(&format!(" AND token = ${idx}"));
+            params.push(Box::new(token.clone()));
+            idx += 1;
+        }
+
+        if let Some(from) = filters.from_date {
+            where_sql.push_str(&format!(" AND timestamp >= ${idx}"));
+            params.push(Box::new(from));
+            idx += 1;
+        }
+
+        if let Some(to) = filters.to_date {
+            where_sql.push_str(&format!(" AND timestamp <= ${idx}"));
+            params.push(Box::new(to));
+            idx += 1;
+        }
+
+        // ── Total (before pagination) ─────────────────────────────────────
+        let count_sql = format!("SELECT COUNT(*)::BIGINT FROM events{}", where_sql);
+        let count_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+        let total: i64 = conn
+            .query_one(count_sql.as_str(), count_refs.as_slice())
+            .await
+            .map_err(|e| anyhow!("query_player_transactions (count) failed: {}", e))?
+            .get(0);
+
+        // ── Page ──────────────────────────────────────────────────────────
+        // `sort_by` and `sort_order` render to fixed, whitelisted fragments —
+        // no user input is interpolated. `id` breaks ties so paging is stable.
+        let page_sql = format!(
+            "SELECT id, ledger_sequence, match_id, event_type, stake_amount, token, timestamp
+             FROM events{}
+             ORDER BY {} {} NULLS LAST, id ASC
+             LIMIT ${} OFFSET ${}",
+            where_sql,
+            filters.sort_by.sql_expr(),
+            filters.sort_order.sql_keyword(),
+            idx,
+            idx + 1
+        );
+        params.push(Box::new(filters.limit));
+        params.push(Box::new(filters.offset));
+
+        let page_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+
+        let rows = conn
+            .query(page_sql.as_str(), page_refs.as_slice())
+            .await
+            .map_err(|e| anyhow!("query_player_transactions failed: {}", e))?;
+
+        let transactions = rows.iter().filter_map(row_to_transaction).collect();
+
+        Ok((transactions, total))
+    }
+
     // ── Utility ───────────────────────────────────────────────────────────
 
     pub async fn ping(&self) -> Result<()> {
@@ -512,9 +615,366 @@ impl Database {
     pub fn write_pool(&self) -> &Pool {
         &self.write_pool
     }
+
+    // ── Analytics ─────────────────────────────────────────────────────────
+
+    /// `GET /analytics/overview` — platform-wide aggregate statistics.
+    ///
+    /// Counts distinct matches created, sums and averages stake amounts, and
+    /// counts completed/cancelled matches.  An optional time range filters by
+    /// the `timestamp` of the `match:created` event.
+    pub async fn analytics_overview(
+        &self,
+        start_date: Option<DateTime<Utc>>,
+        end_date: Option<DateTime<Utc>>,
+    ) -> Result<AnalyticsOverview> {
+        let conn = self.read_pool.get().await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
+
+        let mut query = String::from(
+            r#"
+            SELECT
+                COUNT(DISTINCT match_id)::BIGINT                                     AS total_matches,
+                COALESCE(SUM(stake_amount::NUMERIC), 0)::TEXT                        AS total_volume,
+                COALESCE(ROUND(AVG(stake_amount::NUMERIC), 0), 0)::TEXT              AS average_stake,
+                COUNT(DISTINCT CASE WHEN status = 'completed' THEN match_id END)::BIGINT AS completed_matches,
+                COUNT(DISTINCT CASE WHEN status = 'cancelled' THEN match_id END)::BIGINT AS cancelled_matches
+            FROM events
+            WHERE reorg_invalidated_at IS NULL
+              AND stake_amount IS NOT NULL
+            "#,
+        );
+
+        let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
+        let mut idx = 1usize;
+
+        if let Some(start) = start_date {
+            query.push_str(&format!(" AND timestamp >= ${idx}"));
+            params.push(Box::new(start));
+            idx += 1;
+        }
+        if let Some(end) = end_date {
+            query.push_str(&format!(" AND timestamp <= ${idx}"));
+            params.push(Box::new(end));
+            // idx += 1;
+        }
+
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+
+        let row = conn
+            .query_one(query.as_str(), param_refs.as_slice())
+            .await
+            .map_err(|e| anyhow!("analytics_overview failed: {}", e))?;
+
+        Ok(AnalyticsOverview {
+            total_matches: row.get(0),
+            total_volume: row.get(1),
+            average_stake: row.get(2),
+            completed_matches: row.get(3),
+            cancelled_matches: row.get(4),
+        })
+    }
+
+    /// `GET /analytics/player/:player_address` — per-player statistics.
+    ///
+    /// Returns win/loss/draw counts, win rate, total winnings, and a paginated
+    /// match history for the given player address.
+    pub async fn analytics_player(
+        &self,
+        player_address: &str,
+        limit: i64,
+        offset: i64,
+        start_date: Option<DateTime<Utc>>,
+        end_date: Option<DateTime<Utc>>,
+    ) -> Result<PlayerAnalytics> {
+        let conn = self.read_pool.get().await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
+
+        // Build time-range clause (reused in both queries)
+        let mut time_clause = String::new();
+        let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
+        // $1 = player_address (used twice via parameter push)
+        params.push(Box::new(player_address.to_string()));
+        params.push(Box::new(player_address.to_string()));
+        let mut idx = 3usize;
+
+        if let Some(start) = start_date {
+            time_clause.push_str(&format!(" AND timestamp >= ${idx}"));
+            params.push(Box::new(start));
+            idx += 1;
+        }
+        if let Some(end) = end_date {
+            time_clause.push_str(&format!(" AND timestamp <= ${idx}"));
+            params.push(Box::new(end));
+            idx += 1;
+        }
+
+        let stats_query = format!(
+            r#"
+            SELECT
+                COUNT(DISTINCT match_id)::BIGINT AS total_matches,
+                COUNT(DISTINCT CASE
+                    WHEN winner = 'player1' AND player1 = $1 THEN match_id
+                    WHEN winner = 'player2' AND player2 = $1 THEN match_id
+                END)::BIGINT AS wins,
+                COUNT(DISTINCT CASE
+                    WHEN winner = 'player2' AND player1 = $1 THEN match_id
+                    WHEN winner = 'player1' AND player2 = $1 THEN match_id
+                END)::BIGINT AS losses,
+                COUNT(DISTINCT CASE WHEN winner = 'draw' THEN match_id END)::BIGINT AS draws,
+                COALESCE(SUM(CASE
+                    WHEN winner = 'player1' AND player1 = $1 THEN stake_amount::NUMERIC * 2
+                    WHEN winner = 'player2' AND player2 = $1 THEN stake_amount::NUMERIC * 2
+                    ELSE 0
+                END), 0)::TEXT AS total_winnings
+            FROM events
+            WHERE (player1 = $1 OR player2 = $2)
+              AND reorg_invalidated_at IS NULL
+            {time_clause}
+            "#
+        );
+
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+
+        let stats_row = conn
+            .query_one(stats_query.as_str(), param_refs.as_slice())
+            .await
+            .map_err(|e| anyhow!("analytics_player stats failed: {}", e))?;
+
+        let total_matches: i64 = stats_row.get(0);
+        let wins: i64 = stats_row.get(1);
+        let losses: i64 = stats_row.get(2);
+        let draws: i64 = stats_row.get(3);
+        let total_winnings: String = stats_row.get(4);
+        let played = wins + losses + draws;
+        let win_rate = if played > 0 { wins as f64 / played as f64 * 100.0 } else { 0.0 };
+
+        // Fetch paginated match IDs for this player
+        let mut params2: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
+        params2.push(Box::new(player_address.to_string()));
+        params2.push(Box::new(player_address.to_string()));
+        let mut idx2 = 3usize;
+        let mut time_clause2 = String::new();
+        if let Some(start) = start_date {
+            time_clause2.push_str(&format!(" AND timestamp >= ${idx2}"));
+            params2.push(Box::new(start));
+            idx2 += 1;
+        }
+        if let Some(end) = end_date {
+            time_clause2.push_str(&format!(" AND timestamp <= ${idx2}"));
+            params2.push(Box::new(end));
+            idx2 += 1;
+        }
+        let limit_param_idx = idx2;
+        let offset_param_idx = idx2 + 1;
+        params2.push(Box::new(limit));
+        params2.push(Box::new(offset));
+
+        let match_ids_query = format!(
+            r#"
+            SELECT DISTINCT match_id
+            FROM events
+            WHERE (player1 = $1 OR player2 = $2)
+              AND reorg_invalidated_at IS NULL
+            {time_clause2}
+            ORDER BY match_id DESC
+            LIMIT ${limit_param_idx} OFFSET ${offset_param_idx}
+            "#
+        );
+
+        let _ = idx2; // suppress unused warning
+
+        let param_refs2: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params2
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+
+        let match_id_rows = conn
+            .query(match_ids_query.as_str(), param_refs2.as_slice())
+            .await
+            .map_err(|e| anyhow!("analytics_player match_ids failed: {}", e))?;
+
+        let mut match_history = Vec::new();
+        for row in &match_id_rows {
+            let mid: i64 = row.get(0);
+            if let Some(info) = self.build_match_info(mid as u64).await? {
+                match_history.push(info);
+            }
+        }
+
+        Ok(PlayerAnalytics {
+            player_address: player_address.to_string(),
+            total_matches,
+            wins,
+            losses,
+            draws,
+            win_rate,
+            total_winnings,
+            match_history,
+            total: total_matches,
+        })
+    }
+
+    /// `GET /analytics/token/:token_address` — per-token statistics.
+    ///
+    /// Returns total volume, match count, average stake, and a paginated match
+    /// history for the given token address.
+    pub async fn analytics_token(
+        &self,
+        token_address: &str,
+        limit: i64,
+        offset: i64,
+        start_date: Option<DateTime<Utc>>,
+        end_date: Option<DateTime<Utc>>,
+    ) -> Result<TokenAnalytics> {
+        let conn = self.read_pool.get().await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
+
+        let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
+        params.push(Box::new(token_address.to_string()));
+        let mut idx = 2usize;
+        let mut time_clause = String::new();
+
+        if let Some(start) = start_date {
+            time_clause.push_str(&format!(" AND timestamp >= ${idx}"));
+            params.push(Box::new(start));
+            idx += 1;
+        }
+        if let Some(end) = end_date {
+            time_clause.push_str(&format!(" AND timestamp <= ${idx}"));
+            params.push(Box::new(end));
+            idx += 1;
+        }
+
+        let stats_query = format!(
+            r#"
+            SELECT
+                COUNT(DISTINCT match_id)::BIGINT                                AS match_count,
+                COALESCE(SUM(stake_amount::NUMERIC), 0)::TEXT                   AS total_volume,
+                COALESCE(ROUND(AVG(stake_amount::NUMERIC), 0), 0)::TEXT         AS average_stake
+            FROM events
+            WHERE token = $1
+              AND reorg_invalidated_at IS NULL
+              AND stake_amount IS NOT NULL
+            {time_clause}
+            "#
+        );
+
+        let param_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+
+        let stats_row = conn
+            .query_one(stats_query.as_str(), param_refs.as_slice())
+            .await
+            .map_err(|e| anyhow!("analytics_token stats failed: {}", e))?;
+
+        let match_count: i64 = stats_row.get(0);
+        let total_volume: String = stats_row.get(1);
+        let average_stake: String = stats_row.get(2);
+
+        // Paginated match IDs
+        let mut params2: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
+        params2.push(Box::new(token_address.to_string()));
+        let mut idx2 = 2usize;
+        let mut time_clause2 = String::new();
+        if let Some(start) = start_date {
+            time_clause2.push_str(&format!(" AND timestamp >= ${idx2}"));
+            params2.push(Box::new(start));
+            idx2 += 1;
+        }
+        if let Some(end) = end_date {
+            time_clause2.push_str(&format!(" AND timestamp <= ${idx2}"));
+            params2.push(Box::new(end));
+            idx2 += 1;
+        }
+        let limit_param_idx = idx2;
+        let offset_param_idx = idx2 + 1;
+        params2.push(Box::new(limit));
+        params2.push(Box::new(offset));
+        let _ = idx2;
+
+        let match_ids_query = format!(
+            r#"
+            SELECT DISTINCT match_id
+            FROM events
+            WHERE token = $1
+              AND reorg_invalidated_at IS NULL
+            {time_clause2}
+            ORDER BY match_id DESC
+            LIMIT ${limit_param_idx} OFFSET ${offset_param_idx}
+            "#
+        );
+
+        let param_refs2: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params2
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
+
+        let match_id_rows = conn
+            .query(match_ids_query.as_str(), param_refs2.as_slice())
+            .await
+            .map_err(|e| anyhow!("analytics_token match_ids failed: {}", e))?;
+
+        let mut match_history = Vec::new();
+        for row in &match_id_rows {
+            let mid: i64 = row.get(0);
+            if let Some(info) = self.build_match_info(mid as u64).await? {
+                match_history.push(info);
+            }
+        }
+
+        Ok(TokenAnalytics {
+            token_address: token_address.to_string(),
+            total_volume,
+            match_count,
+            average_stake,
+            match_history,
+            total: match_count,
+        })
+    }
 }
 
 // ── Row mapping ───────────────────────────────────────────────────────────────
+
+/// Map a history row onto a [`TransactionRecord`].
+///
+/// Returns `None` when the event type does not classify as a financial
+/// transaction.  The SQL predicate already excludes those, so this is a
+/// consistency backstop rather than an expected path — it keeps the projection
+/// honest if the marker sets and the SQL patterns ever drift.
+///
+/// Column order must match the `SELECT` in `query_player_transactions`:
+/// `id, ledger_sequence, match_id, event_type, stake_amount, token, timestamp`.
+fn row_to_transaction(row: &tokio_postgres::Row) -> Option<TransactionRecord> {
+    let event_type: String = row.get(3);
+    let tx_type = TransactionType::from_event_type(&event_type)?;
+
+    let ledger: i32 = row.get(1);
+    let match_id: i64 = row.get(2);
+    let amount: Option<String> = row.get(4);
+    let token: Option<String> = row.get(5);
+
+    Some(TransactionRecord {
+        match_id: match_id as u64,
+        timestamp: row.get::<_, DateTime<Utc>>(6),
+        tx_type,
+        // Events that carry no amount (e.g. a fee event whose value lives in the
+        // match record) report "0" rather than dropping the row.
+        amount: amount.filter(|a| !a.is_empty()).unwrap_or_else(|| "0".to_string()),
+        token: token.unwrap_or_default(),
+        event_id: row.get(0),
+        event_type,
+        ledger_sequence: ledger as u32,
+    })
+}
 
 fn row_to_event(row: &tokio_postgres::Row) -> Result<IndexedEvent> {
     let ledger: i32 = row.get(1);

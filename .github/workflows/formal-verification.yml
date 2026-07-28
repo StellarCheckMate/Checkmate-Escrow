@@ -30,5 +30,34 @@ jobs:
           test -f contracts/escrow/src/kani_harness.rs
           echo "✅ kani_harness.rs found"
       
+      - name: Check TLA+ specification exists
+        run: |
+          test -f specs/tla/MatchStateMachine.tla
+          test -f specs/tla/MatchStateMachine.cfg
+          test -f docs/formal-spec.md
+          echo "✅ TLA+ specification found"
+
       - name: Success
         run: echo "✅ All formal verification artifacts present"
+
+  # Exhaustively model-check the match state machine. Both models complete in
+  # well under a minute, so this runs on every PR rather than on a schedule.
+  tla-model-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache tla2tools.jar
+        uses: actions/cache@v4
+        with:
+          path: specs/tla/.tools
+          key: tla2tools-v1.7.4
+
+      - name: Run TLC
+        run: scripts/check_tla.sh

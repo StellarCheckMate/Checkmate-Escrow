@@ -48,6 +48,20 @@ pub struct ProtocolConfig {
     pub stablecoin_only_mode: bool,
 }
 
+/// A single fee tier entry: matches with a stake up to `max_stake` are charged
+/// `fee_basis_points` (e.g. 50 = 0.5 %).  Tiers must be stored in ascending
+/// `max_stake` order; the last tier acts as the catch-all for any stake that
+/// exceeds all explicit thresholds.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeTier {
+    /// Maximum stake (inclusive) for this tier.  Use `i128::MAX` for the
+    /// open-ended final tier.
+    pub max_stake: i128,
+    /// Fee charged as basis points of the total pot (1 bp = 0.01 %).
+    pub fee_basis_points: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Match {
@@ -79,6 +93,8 @@ pub struct Match {
     pub paused_ledger: Option<u32>,
     /// Total pause duration in ledgers.
     pub total_pause_duration: u32,
+    /// Optional referrer address for referral fee sharing.
+    pub referrer: Option<Address>,
 }
 
 #[contracttype]

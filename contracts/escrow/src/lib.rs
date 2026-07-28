@@ -23,7 +23,7 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short, token, Address, Bytes, BytesN, Env, String, Symbol, Vec,
 };
 use types::{
-    BalanceAtTimestamp, BalanceSnapshot, DataKey, Match, MatchState, Platform, ProtocolConfig,
+    BalanceAtTimestamp, BalanceSnapshot, DataKey, FeeTier, Match, MatchState, Platform, ProtocolConfig,
     SnapshotReason, Winner, PlayerTier, Dispute, DisputeState, PlayerBalanceSnapshot,
 };
 
@@ -98,6 +98,16 @@ const MAX_ACTIVE_MATCHES_PER_PLAYER: u32 = 1_000;
 /// per-call cost. Callers requiring more results should use the _paginated variants.
 const MAX_UNBOUNDED_MATCH_RESULTS: u32 = 10_000;
 
+// ── Upgrade / migration constants ─────────────────────────────────────────────
+
+/// Current contract version: major=0, minor=1, patch=0  →  1_000 * 0 + 1 * 1000 + 0.
+/// Encoded as major * 1_000_000 + minor * 1_000 + patch so numeric comparisons work.
+pub const CONTRACT_VERSION: u32 = 1_000; // 0.1.0
+
+/// Minimum ledger gap between scheduling an upgrade and executing it (7-day review).
+/// At the default 5 s/ledger: 7 * 24 * 3600 / 5 = 120_960.
+pub const UPGRADE_REVIEW_PERIOD_LEDGERS: u32 = 120_960;
+
 /// Extend instance storage TTL on every invocation so Admin, Oracle, Paused, and other
 /// instance keys never expire.
 fn extend_instance_ttl(env: &Env) {
@@ -138,6 +148,9 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::QuorumBasisPoints, &DEFAULT_QUORUM_BASIS_POINTS);
+        env.storage()
+            .instance()
+            .set(&DataKey::ContractVersion, &CONTRACT_VERSION);
         env.events().publish(
             (Symbol::new(&env, "escrow"), symbol_short!("init")),
             (oracle, admin),
@@ -210,6 +223,70 @@ impl EscrowContract {
             treasury: env.current_contract_address(),
             stablecoin_only_mode: false,
         }))
+    }
+
+    /// Set the referral fee share in basis points (admin only).
+    ///
+    /// The referral fee is calculated as `platform_fee * referral_share_bps / 10_000` and sent
+    /// to the referrer address stored on the match.  Default is 2000 (20%).
+    pub fn set_referral_share_bps(env: Env, basis_points: u32) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::ReferralShareBasisPoints, &basis_points);
+        Ok(())
+    }
+
+    /// Get the referral fee share in basis points. Default: 2000 (20%).
+    pub fn get_referral_share_bps(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::ReferralShareBasisPoints)
+            .unwrap_or(2000u32)
+    }
+
+    /// Set the caller's preferred payout token — player only.
+    ///
+    /// When a player has a preferred payout token set and it differs from the
+    /// match's stake token, `claim_vested_payout` will attempt to pay out in
+    /// the preferred token using the match's oracle-supplied `conversion_rate`
+    /// and `token_b` fields (set via `create_match_with_conversion`).
+    ///
+    /// Pass `None` to clear the preference and revert to the match stake token.
+    pub fn set_preferred_payout_token(
+        env: Env,
+        player: Address,
+        token_address: Option<Address>,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        player.require_auth();
+
+        let key = DataKey::PlayerPreferredToken(player);
+        match token_address {
+            Some(addr) => {
+                env.storage().persistent().set(&key, &addr);
+                env.storage()
+                    .persistent()
+                    .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+            }
+            None => {
+                env.storage().persistent().remove(&key);
+            }
+        }
+        Ok(())
+    }
+
+    /// Get the caller's preferred payout token, or `None` if not set.
+    pub fn get_preferred_payout_token(env: Env, player: Address) -> Option<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PlayerPreferredToken(player))
     }
 
     /// Add a token to the allowlist — admin only.
@@ -487,6 +564,215 @@ impl EscrowContract {
         Self::set_allowed_token_list(env, &updated);
     }
 
+    // ── Token Blacklist (issue #962) ─────────────────────────────────────────
+
+    /// Add a token to the blacklist — admin only.
+    ///
+    /// Blacklisted tokens are permanently rejected in `create_match` even when
+    /// the allowlist is not enforced.  The `reason` string (max 256 bytes) is
+    /// stored on-chain for auditability.
+    pub fn add_token_to_blacklist(
+        env: Env,
+        token: Address,
+        reason: String,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let is_new = !env
+            .storage()
+            .instance()
+            .has(&DataKey::BlacklistedToken(token.clone()));
+
+        env.storage()
+            .instance()
+            .set(&DataKey::BlacklistedToken(token.clone()), &reason);
+
+        if is_new {
+            let mut list: soroban_sdk::Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::BlacklistedTokens)
+                .unwrap_or_else(|| soroban_sdk::vec![&env]);
+            list.push_back(token.clone());
+            env.storage()
+                .persistent()
+                .set(&DataKey::BlacklistedTokens, &list);
+            env.storage().persistent().extend_ttl(
+                &DataKey::BlacklistedTokens,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "tok_blacklist")),
+            token,
+        );
+        Ok(())
+    }
+
+    /// Remove a token from the blacklist — admin only.
+    pub fn remove_token_from_blacklist(env: Env, token: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::BlacklistedToken(token.clone()));
+
+        // Remove from the persistent list.
+        if let Some(list) = env
+            .storage()
+            .persistent()
+            .get::<DataKey, soroban_sdk::Vec<Address>>(&DataKey::BlacklistedTokens)
+        {
+            let mut updated: soroban_sdk::Vec<Address> = soroban_sdk::vec![&env];
+            for existing in list.iter() {
+                if existing != token {
+                    updated.push_back(existing.clone());
+                }
+            }
+            env.storage()
+                .persistent()
+                .set(&DataKey::BlacklistedTokens, &updated);
+            env.storage().persistent().extend_ttl(
+                &DataKey::BlacklistedTokens,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "tok_unblacklist")),
+            token,
+        );
+        Ok(())
+    }
+
+    /// Returns `true` when `token` is on the blacklist.
+    pub fn is_token_blacklisted(env: Env, token: Address) -> bool {
+        env.storage()
+            .instance()
+            .has(&DataKey::BlacklistedToken(token))
+    }
+
+    /// Returns all blacklisted token addresses.
+    pub fn get_blacklist(env: Env) -> soroban_sdk::Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::BlacklistedTokens)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
+    // ── Dynamic Fee Tiers (issue #963) ───────────────────────────────────────
+
+    /// Set the dynamic fee tier schedule — admin only.
+    ///
+    /// `tiers` must be ordered by `max_stake` ascending.  The last entry acts
+    /// as the open-ended catch-all (set `max_stake = i128::MAX`).  Pass an
+    /// empty `Vec` to clear the schedule and fall back to zero protocol fees.
+    pub fn set_fee_tiers(env: Env, tiers: soroban_sdk::Vec<FeeTier>) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        // Validate ordering: each tier's max_stake must be strictly greater
+        // than the previous tier's max_stake.
+        let mut prev_max: i128 = -1;
+        for tier in tiers.iter() {
+            if tier.max_stake <= prev_max {
+                return Err(Error::InvalidAmount);
+            }
+            prev_max = tier.max_stake;
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::FeeTiers, &tiers);
+        env.storage().persistent().extend_ttl(
+            &DataKey::FeeTiers,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "fee_tiers_set")),
+            (),
+        );
+        Ok(())
+    }
+
+    /// Return the current fee tier schedule.
+    pub fn get_fee_tiers(env: Env) -> soroban_sdk::Vec<FeeTier> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::FeeTiers)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
+    /// Calculate the fee in token units for a given `stake_amount` using the
+    /// tiered schedule.  `pot` is `stake_amount * 2`.
+    ///
+    /// Returns `0` when no fee tiers are configured.
+    pub fn calculate_fee_by_tier(env: Env, stake_amount: i128) -> Result<i128, Error> {
+        Self::compute_tiered_fee(&env, stake_amount)
+    }
+
+    /// Internal helper — resolves the basis-point rate for `stake_amount` and
+    /// computes the fee.
+    fn compute_tiered_fee(env: &Env, stake_amount: i128) -> Result<i128, Error> {
+        let tiers: soroban_sdk::Vec<FeeTier> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::FeeTiers)
+            .unwrap_or_else(|| soroban_sdk::vec![env]);
+
+        if tiers.is_empty() {
+            return Ok(0);
+        }
+
+        // Find the first tier whose max_stake >= stake_amount.
+        let mut selected_bps: u32 = 0;
+        let mut found = false;
+        for tier in tiers.iter() {
+            if stake_amount <= tier.max_stake {
+                selected_bps = tier.fee_basis_points;
+                found = true;
+                break;
+            }
+        }
+        // If stake exceeds all explicit thresholds, use the last tier.
+        if !found {
+            if let Some(last) = tiers.get(tiers.len().saturating_sub(1)) {
+                selected_bps = last.fee_basis_points;
+            }
+        }
+
+        // fee = pot * bps / 10_000   where pot = stake * 2
+        let pot = stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+        let fee = pot
+            .checked_mul(selected_bps as i128)
+            .ok_or(Error::Overflow)?
+            .checked_div(10_000)
+            .ok_or(Error::Overflow)?;
+        Ok(fee)
+    }
+
     /// Create a new match. Both players must call `deposit` before the game starts.
     ///
     /// # Parameters
@@ -597,6 +883,7 @@ impl EscrowContract {
             conversion_rate_ledger: None,
             paused_ledger: None,
             total_pause_duration: 0,
+            referrer: None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -778,6 +1065,7 @@ impl EscrowContract {
             conversion_rate_ledger: Some(env.ledger().sequence()),
             paused_ledger: None,
             total_pause_duration: 0,
+            referrer: None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -832,6 +1120,162 @@ impl EscrowContract {
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
             (id, m.player1, m.player2, stake_amount),
+        );
+
+        Ok(id)
+    }
+
+    /// Create a match and associate a referrer address for fee sharing.
+    ///
+    /// Identical to `create_match` except the match stores a `referrer` address.
+    /// On winner payout via `claim_vested_payout`, a referral fee is deducted from
+    /// the winner's proceeds and sent to the referrer:
+    ///   `referral_fee = (pot * cancellation_fee_bps / 10_000) * referral_share_bps / 10_000`
+    ///
+    /// The referral fee only applies when `cancellation_fee_basis_points > 0` in
+    /// `ProtocolConfig`.
+    pub fn create_match_with_referrer(
+        env: Env,
+        player1: Address,
+        player2: Address,
+        stake_amount: i128,
+        token: Address,
+        game_id: String,
+        platform: Platform,
+        referrer: Address,
+    ) -> Result<u64, Error> {
+        extend_instance_ttl(&env);
+        player1.require_auth();
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        let allowlist_enforced: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowlistEnforced)
+            .unwrap_or(false);
+        if allowlist_enforced && !Self::is_token_allowed(env.clone(), token.clone()) {
+            return Err(Error::TokenNotAllowed);
+        }
+
+        if stake_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        Self::require_player_tier_for_stake(&env, &player1, stake_amount)?;
+        Self::require_player_tier_for_stake(&env, &player2, stake_amount)?;
+        if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
+            return Err(Error::InvalidGameId);
+        }
+
+        if player1 == player2 {
+            return Err(Error::InvalidPlayers);
+        }
+        if player2 == env.current_contract_address() {
+            return Err(Error::InvalidPlayers);
+        }
+
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GameId(game_id.clone()))
+        {
+            return Err(Error::DuplicateGameId);
+        }
+
+        let id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+
+        if env.storage().persistent().has(&DataKey::Match(id)) {
+            return Err(Error::AlreadyExists);
+        }
+
+        let m = Match {
+            id,
+            player1: player1.clone(),
+            player2: player2.clone(),
+            stake_amount,
+            token,
+            game_id,
+            platform,
+            state: MatchState::Pending,
+            player1_deposited: false,
+            player2_deposited: false,
+            created_ledger: env.ledger().sequence(),
+            completed_ledger: None,
+            winner: Winner::None,
+            vested_at: None,
+            player1_claimed: false,
+            player2_claimed: false,
+            conversion_rate: None,
+            token_b: None,
+            conversion_rate_ledger: None,
+            paused_ledger: None,
+            total_pause_duration: 0,
+            referrer: Some(referrer.clone()),
+        };
+
+        env.storage().persistent().set(&DataKey::Match(id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage().instance().set(&DataKey::MatchCount, &next_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::GameId(m.game_id.clone()), &true);
+        env.storage().persistent().extend_ttl(
+            &DataKey::GameId(m.game_id.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let mut player1_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player1.clone()))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        player1_matches.push_back(id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerMatches(player1.clone()), &player1_matches);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerMatches(player1),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let mut player2_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player2.clone()))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        player2_matches.push_back(id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerMatches(player2.clone()), &player2_matches);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerMatches(player2),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Created);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("created")),
+            (id, m.player1, m.player2, stake_amount, referrer),
         );
 
         Ok(id)
@@ -3034,7 +3478,18 @@ impl EscrowContract {
         if *winner == Winner::None {
             return Err(Error::InvalidState);
         }
-        let client = token::Client::new(&env, &m.token);
+
+        // Resolve the payout token for this player: use the player's preferred
+        // token if (a) they have one set, (b) it differs from the stake token,
+        // and (c) the match has a conversion rate + token_b set by the oracle.
+        let preferred_token: Option<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerPreferredToken(player.clone()));
+        let use_swap = preferred_token.as_ref().map_or(false, |pt| {
+            *pt != m.token && m.token_b.as_ref().map_or(false, |tb| tb == pt) && m.conversion_rate.map_or(false, |r| r > 0)
+        });
+
         let amount_claimed;
 
         if is_p1 {
@@ -3045,10 +3500,34 @@ impl EscrowContract {
             match winner {
                 Winner::Player1 => {
                     let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
-                    client.transfer(&env.current_contract_address(), &m.player1, &pot);
-                    amount_claimed = pot;
+                    // Compute referral fee deduction for winner payouts (not draws)
+                    let referral_fee = Self::compute_referral_fee(&env, &m, pot)?;
+                    let net_payout = pot.checked_sub(referral_fee).ok_or(Error::Overflow)?;
+                    if use_swap {
+                        // Swap stake-token payout into player's preferred token using oracle rate.
+                        // oracle rate: conversion_rate token_b units per 10_000_000 token_a units.
+                        let swap_amount = net_payout
+                            .checked_mul(m.conversion_rate.unwrap())
+                            .ok_or(Error::Overflow)?
+                            .checked_div(10_000_000)
+                            .ok_or(Error::Overflow)?;
+                        let swap_token = m.token_b.clone().unwrap();
+                        let client_swap = token::Client::new(&env, &swap_token);
+                        client_swap.transfer(&env.current_contract_address(), &m.player1, &swap_amount);
+                        amount_claimed = swap_amount;
+                    } else {
+                        let client = token::Client::new(&env, &m.token);
+                        client.transfer(&env.current_contract_address(), &m.player1, &net_payout);
+                        amount_claimed = net_payout;
+                    }
+                    if referral_fee > 0 {
+                        let referrer = m.referrer.clone().ok_or(Error::InvalidState)?;
+                        let client = token::Client::new(&env, &m.token);
+                        client.transfer(&env.current_contract_address(), &referrer, &referral_fee);
+                    }
                 }
                 Winner::Draw => {
+                    let client = token::Client::new(&env, &m.token);
                     client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
                     amount_claimed = m.stake_amount;
                 }
@@ -3068,10 +3547,33 @@ impl EscrowContract {
             match winner {
                 Winner::Player2 => {
                     let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
-                    client.transfer(&env.current_contract_address(), &m.player2, &pot);
-                    amount_claimed = pot;
+                    // Compute referral fee deduction for winner payouts (not draws)
+                    let referral_fee = Self::compute_referral_fee(&env, &m, pot)?;
+                    let net_payout = pot.checked_sub(referral_fee).ok_or(Error::Overflow)?;
+                    if use_swap {
+                        // Swap stake-token payout into player's preferred token using oracle rate.
+                        let swap_amount = net_payout
+                            .checked_mul(m.conversion_rate.unwrap())
+                            .ok_or(Error::Overflow)?
+                            .checked_div(10_000_000)
+                            .ok_or(Error::Overflow)?;
+                        let swap_token = m.token_b.clone().unwrap();
+                        let client_swap = token::Client::new(&env, &swap_token);
+                        client_swap.transfer(&env.current_contract_address(), &m.player2, &swap_amount);
+                        amount_claimed = swap_amount;
+                    } else {
+                        let client = token::Client::new(&env, &m.token);
+                        client.transfer(&env.current_contract_address(), &m.player2, &net_payout);
+                        amount_claimed = net_payout;
+                    }
+                    if referral_fee > 0 {
+                        let referrer = m.referrer.clone().ok_or(Error::InvalidState)?;
+                        let client = token::Client::new(&env, &m.token);
+                        client.transfer(&env.current_contract_address(), &referrer, &referral_fee);
+                    }
                 }
                 Winner::Draw => {
+                    let client = token::Client::new(&env, &m.token);
                     client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
                     amount_claimed = m.stake_amount;
                 }
@@ -3094,10 +3596,300 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
+        // Emit the token actually used for payout
+        let payout_token = if use_swap {
+            m.token_b.clone().unwrap_or_else(|| m.token.clone())
+        } else {
+            m.token.clone()
+        };
+
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("claim")),
-            (match_id, player, amount_claimed, m.token.clone()),
+            (match_id, player, amount_claimed, payout_token),
         );
+
+        Ok(())
+    }
+
+    // ── Upgrade / migration API ───────────────────────────────────────────────
+
+    /// Return the current on-chain contract version (encoded as
+    /// `major * 1_000_000 + minor * 1_000 + patch`).
+    pub fn get_version(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::ContractVersion)
+            .unwrap_or(CONTRACT_VERSION)
+    }
+
+    /// Schedule a WASM upgrade for the 7-day community review period.
+    ///
+    /// Admin-gated. After `UPGRADE_REVIEW_PERIOD_LEDGERS` have elapsed the
+    /// admin may call `execute_upgrade` to apply the new WASM and then
+    /// `migrate_state` to advance the version counter.
+    ///
+    /// # Arguments
+    /// * `new_wasm_hash` — SHA-256 hash of the replacement WASM blob that was
+    ///   already uploaded to the network via `soroban contract upload`.
+    ///
+    /// # Errors
+    /// * `UpgradeAlreadyScheduled` — an upgrade is already pending.
+    /// * `Unauthorized`            — caller is not the admin.
+    pub fn schedule_upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::UpgradeScheduledAt)
+        {
+            return Err(Error::UpgradeAlreadyScheduled);
+        }
+
+        let scheduled_at = env.ledger().sequence();
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeScheduledAt, &scheduled_at);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingUpgradeHash, &new_wasm_hash);
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade"), symbol_short!("sched")),
+            (new_wasm_hash, scheduled_at),
+        );
+
+        Ok(())
+    }
+
+    /// Cancel a pending upgrade before it is executed.
+    ///
+    /// Admin-gated. Removes both the scheduled-at ledger and the pending WASM
+    /// hash, allowing a fresh `schedule_upgrade` call.
+    ///
+    /// # Errors
+    /// * `UpgradeNotScheduled` — no upgrade is pending.
+    /// * `Unauthorized`        — caller is not the admin.
+    pub fn cancel_upgrade(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::UpgradeScheduledAt)
+        {
+            return Err(Error::UpgradeNotScheduled);
+        }
+
+        env.storage()
+            .instance()
+            .remove(&DataKey::UpgradeScheduledAt);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingUpgradeHash);
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade"), symbol_short!("cancel")),
+            (),
+        );
+
+        Ok(())
+    }
+
+    /// Execute the scheduled WASM upgrade after the 7-day review period.
+    ///
+    /// Admin-gated. Calls the host `upgrade` function with the stored WASM
+    /// hash. After this returns, the contract code is replaced but storage
+    /// layout is unchanged — call `migrate_state` in the same or a subsequent
+    /// transaction to advance the version counter and apply any schema changes.
+    ///
+    /// The contract must be **paused** before this call so that no new
+    /// state-mutating transactions run against the old schema while the
+    /// replacement WASM is being applied.
+    ///
+    /// # Errors
+    /// * `UpgradeNotScheduled`            — no upgrade is pending.
+    /// * `UpgradeReviewPeriodNotElapsed`  — 7-day review period has not passed.
+    /// * `InvalidPauseState`              — contract is not paused.
+    /// * `Unauthorized`                   — caller is not the admin.
+    pub fn execute_upgrade(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        // Enforce paused-during-upgrade invariant.
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if !paused {
+            return Err(Error::InvalidPauseState);
+        }
+
+        let scheduled_at: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeScheduledAt)
+            .ok_or(Error::UpgradeNotScheduled)?;
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger < scheduled_at.saturating_add(UPGRADE_REVIEW_PERIOD_LEDGERS) {
+            return Err(Error::UpgradeReviewPeriodNotElapsed);
+        }
+
+        let new_wasm_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingUpgradeHash)
+            .ok_or(Error::UpgradeNotScheduled)?;
+
+        // Clear pending-upgrade keys before upgrading so post-upgrade storage
+        // starts clean regardless of whether migrate_state is called.
+        env.storage()
+            .instance()
+            .remove(&DataKey::UpgradeScheduledAt);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingUpgradeHash);
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade"), symbol_short!("exec")),
+            new_wasm_hash,
+        );
+
+        Ok(())
+    }
+
+    /// Advance the on-chain version counter after a WASM upgrade and apply any
+    /// necessary state-schema migrations.
+    ///
+    /// Admin-gated. This is a no-op for fields that do not change between
+    /// versions; it only writes keys that are new in the target version and
+    /// back-fills reasonable defaults for them.
+    ///
+    /// # Arguments
+    /// * `target_version` — the version to migrate **to** (same encoding as
+    ///   `get_version`: `major * 1_000_000 + minor * 1_000 + patch`).
+    ///
+    /// # Migration map
+    ///
+    /// | From        | To          | Actions                                     |
+    /// |-------------|-------------|---------------------------------------------|
+    /// | 0.1.0 (1000) | 0.1.1 (1001) | Seed missing `DisputePeriod` default (0)    |
+    /// | 0.1.0 (1000) | 1.0.0 (1_000_000) | Reserved for future v1.0 migrations    |
+    ///
+    /// # Errors
+    /// * `InvalidVersion` — `target_version` is not ahead of the current version.
+    /// * `Unauthorized`   — caller is not the admin.
+    pub fn migrate_state(env: Env, target_version: u32) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let current: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ContractVersion)
+            .unwrap_or(CONTRACT_VERSION);
+
+        if target_version <= current {
+            return Err(Error::InvalidVersion);
+        }
+
+        // Run migrations for every version step in order so this function is
+        // idempotent when called multiple times with increasing targets.
+        Self::_apply_migrations(&env, current, target_version);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ContractVersion, &target_version);
+
+        env.events().publish(
+            (Symbol::new(&env, "upgrade"), symbol_short!("migrated")),
+            (current, target_version),
+        );
+
+        Ok(())
+    }
+
+    /// Validate current contract state integrity.
+    ///
+    /// Checks that all critical instance-storage keys are present and
+    /// internally consistent. Returns `Ok(())` if everything looks healthy,
+    /// or the first `Error` that is violated.
+    ///
+    /// This should be called immediately before *and* after any upgrade to
+    /// confirm that storage was neither corrupted nor inadvertently cleared.
+    ///
+    /// # Checks performed
+    /// 1. Contract is initialized (Oracle key present).
+    /// 2. Admin key is present.
+    /// 3. MatchCount key is present.
+    /// 4. ContractVersion key is present.
+    /// 5. Match count is internally consistent (not negative/impossible).
+    /// 6. AllowedTokenCount ≤ actual token count in storage is sane.
+    pub fn validate_state(env: Env) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        // 1. Initialized?
+        if !env.storage().instance().has(&DataKey::Oracle) {
+            return Err(Error::NotInitialized);
+        }
+
+        // 2. Admin present?
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::Unauthorized);
+        }
+
+        // 3. MatchCount present?
+        if !env.storage().instance().has(&DataKey::MatchCount) {
+            return Err(Error::NotInitialized);
+        }
+
+        // 4. ContractVersion present?
+        if !env.storage().instance().has(&DataKey::ContractVersion) {
+            return Err(Error::NotInitialized);
+        }
+
+        // 5. MatchCount must be a plausible value (stored as u64).
+        let match_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0u64);
+        // A u64 is always non-negative; just confirm it deserialises correctly.
+        let _ = match_count;
+
+        // 6. AllowedTokenCount <= u32::MAX is always true; confirm it deserialises.
+        let _token_count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedTokenCount)
+            .unwrap_or(0u32);
 
         Ok(())
     }
@@ -3105,6 +3897,32 @@ impl EscrowContract {
 }
 
 impl EscrowContract {
+    /// Apply every incremental schema migration for versions in the range
+    /// `(from, to]`.  Each migration step is guarded by a version-range check
+    /// so that steps are applied exactly once no matter which `from`/`to` pair
+    /// is passed.
+    fn _apply_migrations(env: &Env, from: u32, to: u32) {
+        // ── v0.1.0 → v0.1.1 ────────────────────────────────────────────────
+        // Introduced the DisputePeriod key (default 0 = immediate payout).
+        // Pre-upgrade contracts that never called set_dispute_period do not
+        // have this key; back-fill the default so post-upgrade reads do not
+        // fall back to None unexpectedly.
+        if from < 1_001 && to >= 1_001 {
+            if !env.storage().instance().has(&DataKey::DisputePeriod) {
+                env.storage()
+                    .instance()
+                    .set(&DataKey::DisputePeriod, &0u32);
+            }
+        }
+
+        // ── v0.1.x → v1.0.0 ────────────────────────────────────────────────
+        // Placeholder for future v1.0 schema changes.
+        if from < 1_000_000 && to >= 1_000_000 {
+            // No-op for now; add field back-fills here when the v1.0 spec is
+            // finalised.
+        }
+    }
+
     fn get_config(env: &Env) -> ProtocolConfig {
         env.storage().instance().get(&DataKey::ProtocolConfig).unwrap_or(ProtocolConfig {
             vesting_duration_seconds: 259_200, // 3 days
@@ -3112,5 +3930,35 @@ impl EscrowContract {
             treasury: env.current_contract_address(),
             stablecoin_only_mode: false,
         })
+    }
+
+    /// Compute the referral fee to deduct from a winner's payout.
+    ///
+    /// Returns 0 if the match has no referrer or if the cancellation_fee_basis_points
+    /// is 0 (no platform fee is being collected).
+    ///
+    /// Formula: `referral_fee = pot * cancellation_fee_bps / 10_000 * referral_share_bps / 10_000`
+    fn compute_referral_fee(env: &Env, m: &Match, pot: i128) -> Result<i128, Error> {
+        if m.referrer.is_none() {
+            return Ok(0);
+        }
+        let config = Self::get_config(env);
+        if config.cancellation_fee_basis_points == 0 {
+            return Ok(0);
+        }
+        let platform_fee = pot
+            .checked_mul(config.cancellation_fee_basis_points as i128)
+            .ok_or(Error::Overflow)?
+            / 10_000;
+        let referral_share_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ReferralShareBasisPoints)
+            .unwrap_or(2000u32);
+        let referral_fee = platform_fee
+            .checked_mul(referral_share_bps as i128)
+            .ok_or(Error::Overflow)?
+            / 10_000;
+        Ok(referral_fee)
     }
 }

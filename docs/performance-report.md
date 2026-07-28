@@ -115,6 +115,68 @@ match completion paths: `submit_result`, `finalize_match`, `resolve_dispute_by_v
 across all scales, since they only touch the target match's own storage entry.
 This confirms the optimizations above target the correct hot paths.
 
+---
+
+## Load testing (high match-volume scenarios)
+
+In addition to the per-operation benchmarks above, a dedicated load test suite
+measures contract correctness and cost growth under high match volume: 100,
+1,000, and 10,000 concurrently active matches.
+
+### How to run the load tests
+
+```bash
+cargo test -p escrow --test load_tests -- --nocapture
+```
+
+Results are appended to `reports/performance/load-test-results.json`.
+
+### Scenarios covered
+
+| Test | What it measures |
+|------|-----------------|
+| `load_create_match_at_scale` | `create_match` cost vs. background match count |
+| `load_deposit_activation_at_scale` | 2nd-deposit (activation) cost at each scale |
+| `load_submit_result_at_scale` | `submit_result` cost at each scale |
+| `load_get_active_matches_paginated_at_scale` | Paginated query cost — must stay bounded regardless of total match count |
+| `load_state_size_consistency` | Player match list isolation: a probe player always sees only their own matches |
+| `load_correctness_no_cross_match_contamination` | 1,000 matches resolved selectively — non-resolved matches stay `Active` |
+| `load_draw_refunds_correct_at_scale` | 100 concurrent draw refunds — each player receives exactly `stake_amount` back |
+
+### Key findings
+
+- **`get_active_matches_paginated`** cost stays within 50× of the 100-match
+  baseline even at 10,000 matches, confirming the pagination cap is effective.
+- **`deposit` and `submit_result`** scale sub-linearly due to per-player indexed
+  storage (see resolved DoS vectors above).
+- **Correctness**: Resolving a subset of 1,000 matches leaves all unresolved
+  matches in `Active` state with no cross-match contamination.
+
+### Interpreting the JSON report
+
+```jsonc
+[
+  {
+    "section": "submit_result",
+    "measurements": [
+      {
+        "operation": "submit_result",
+        "n_background_matches": 100,
+        "cpu_instructions": 1730403,
+        "memory_bytes": 752904,
+        "wall_time_micros": 11300
+      }
+    ]
+  }
+]
+```
+
+Compare successive runs to catch regressions: flag any operation whose
+`cpu_instructions` at the same `n_background_matches` increases by more than
+15% between releases.
+
+---
+
 ## CI integration
 
 `scripts/benchmark.sh` is intended to be run on a schedule (or on
