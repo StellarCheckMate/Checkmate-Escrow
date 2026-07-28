@@ -772,3 +772,34 @@ fn test_two_step_admin_transfer() {
     });
     assert!(pending.is_none(), "PendingAdmin key must be cleared after acceptance");
 }
+
+// #1101 — pause blocks create_match and unpause restores it
+#[test]
+fn test_pause_blocks_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "paused_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::ContractPaused)), "create_match must fail when paused");
+
+    client.unpause();
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "unpaused_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id, 0, "create_match must succeed after unpause");
+}
