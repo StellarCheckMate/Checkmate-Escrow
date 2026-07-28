@@ -927,6 +927,28 @@ fn test_transfer_admin_old_rejected_new_accepted() {
 }
 
 #[test]
+fn test_oracle_transfer_admin_unauthorized() {
+    let (env, contract_id, _escrow_id, _old_admin, _player1, _player2, _token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let attacker = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "update_admin",
+            args: (new_admin.clone()).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_update_admin(&new_admin);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
 fn test_update_admin_emits_rotation_event() {
     let (env, contract_id, _escrow_id, old_admin, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
