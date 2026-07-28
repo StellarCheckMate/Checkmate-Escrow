@@ -927,6 +927,28 @@ fn test_transfer_admin_old_rejected_new_accepted() {
 }
 
 #[test]
+fn test_oracle_transfer_admin_unauthorized() {
+    let (env, contract_id, _escrow_id, _old_admin, _player1, _player2, _token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let attacker = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "update_admin",
+            args: (new_admin.clone()).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_update_admin(&new_admin);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
 fn test_update_admin_emits_rotation_event() {
     let (env, contract_id, _escrow_id, old_admin, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
@@ -2321,4 +2343,29 @@ fn test_mofn_finalized_event_reports_submitter_count_and_threshold() {
     assert_eq!(ev_id, 0u64);
     assert_eq!(ev_count, 2);
     assert_eq!(ev_threshold, 2);
+}
+
+#[test]
+fn test_oracle_get_result_unknown() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let result = client.try_get_result(&9999u64);
+    assert_eq!(result, Err(Ok(Error::ResultNotFound)));
+}
+
+#[test]
+fn test_oracle_store_result_when_paused() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let result = client.try_submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }

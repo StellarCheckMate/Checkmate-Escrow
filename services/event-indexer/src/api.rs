@@ -37,7 +37,7 @@ use crate::{
     api_cache::{self, ApiCache},
     cache::EventCache,
     db::Database,
-    models::{IndexedEvent, MatchInfo, MatchStatus, QueryFilters},
+    models::{AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters, TokenAnalytics},
     rpc::SorobanRpcClient,
     transactions::{
         SortOrder, TransactionHistoryFilters, TransactionPage, TransactionSortField,
@@ -583,4 +583,108 @@ async fn get_stats(State(state): State<AppState>) -> Json<ApiResponse<Stats>> {
         data: Some(stats),
         error: None,
     })
+}
+
+// ── Analytics ─────────────────────────────────────────────────────────────────
+
+/// `GET /analytics/overview` — platform-wide aggregate statistics.
+///
+/// Optional query params:
+/// - `start_date` / `end_date` — ISO-8601 timestamps for time-range filtering.
+async fn analytics_overview(
+    State(state): State<AppState>,
+    TypedQuery(query): TypedQuery<AnalyticsQuery>,
+) -> (StatusCode, Json<ApiResponse<AnalyticsOverview>>) {
+    match state.db.analytics_overview(query.start_date, query.end_date).await {
+        Ok(overview) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(overview),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /analytics/player/:player_address` — per-player statistics.
+///
+/// Optional query params:
+/// - `limit` / `offset` — pagination (default limit: 50).
+/// - `start_date` / `end_date` — time-range filter.
+async fn analytics_player(
+    State(state): State<AppState>,
+    Path(player_address): Path<String>,
+    TypedQuery(query): TypedQuery<AnalyticsQuery>,
+) -> (StatusCode, Json<ApiResponse<PlayerAnalytics>>) {
+    let limit = query.limit.unwrap_or(50).min(200);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    match state
+        .db
+        .analytics_player(&player_address, limit, offset, query.start_date, query.end_date)
+        .await
+    {
+        Ok(analytics) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(analytics),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /analytics/token/:token_address` — per-token statistics.
+///
+/// Optional query params:
+/// - `limit` / `offset` — pagination (default limit: 50).
+/// - `start_date` / `end_date` — time-range filter.
+async fn analytics_token(
+    State(state): State<AppState>,
+    Path(token_address): Path<String>,
+    TypedQuery(query): TypedQuery<AnalyticsQuery>,
+) -> (StatusCode, Json<ApiResponse<TokenAnalytics>>) {
+    let limit = query.limit.unwrap_or(50).min(200);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    match state
+        .db
+        .analytics_token(&token_address, limit, offset, query.start_date, query.end_date)
+        .await
+    {
+        Ok(analytics) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(analytics),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
 }

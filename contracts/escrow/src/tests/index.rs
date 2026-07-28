@@ -264,3 +264,31 @@ fn test_get_pending_matches_empty() {
     let pending = client.get_pending_matches();
     assert_eq!(pending.len(), 0);
 }
+
+#[test]
+fn test_get_active_matches_after_deposits() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "active_after_deposits"),
+        &Platform::Lichess,
+    );
+
+    // Both players deposit
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+
+    // Assert it's now active and appears in active matches
+    let active_matches = client.get_active_matches();
+    assert_eq!(active_matches.len(), 1);
+    assert_eq!(active_matches.get(0).unwrap().id, match_id);
+
+    // Pending matches should no longer contain it
+    let pending_matches = client.get_pending_matches();
+    assert_eq!(pending_matches.len(), 0);
+}

@@ -48,4 +48,5 @@ pub enum Error {
     InsufficientHoldingDuration = 43,
     OracleSlashFailed = 44,
     TooManyActiveMatches = 45,
+    TokenBlacklisted = 46,
 }
