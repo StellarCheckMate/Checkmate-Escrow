@@ -46,6 +46,16 @@ pub struct ProtocolConfig {
     /// When true, only tokens issued by a registered stablecoin issuer are
     /// accepted for new matches.  Disabled by default.
     pub stablecoin_only_mode: bool,
+    /// Upper bound on `stake_amount` accepted by `create_match` and friends.
+    /// `None` means unlimited (default).
+    pub maximum_stake: Option<i128>,
+    /// Runtime-configurable match expiration timeout, in seconds.
+    pub match_timeout_seconds: u64,
+    /// Protocol fee charged on winner payouts, in basis points of the pot
+    /// (1 bp = 0.01 %). Draw refunds are never charged this fee. Default 0.
+    pub protocol_fee_bps: u32,
+    /// Recipient of the protocol fee collected on winner payouts.
+    pub fee_recipient: Address,
 }
 
 /// A single fee tier entry: matches with a stake up to `max_stake` are charged
@@ -113,7 +123,6 @@ pub enum DataKey {
     GameId(String),
     ActiveMatches,
     PlayerMatches(Address),
-    MatchTimeout,
     AllowedToken(Address),
     AllowedTokenCount,
     AllowlistEnforced,

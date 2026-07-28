@@ -62,6 +62,10 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
 
     (
