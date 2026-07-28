@@ -732,3 +732,34 @@ fn test_pause_unauthorized() {
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
+#[test]
+fn test_submit_result_already_completed() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_slice(&env, "game_completed"),
+        &Platform::ChessDotCom,
+    );
+
+    env.mock_all_auths();
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+
+    env.mock_all_auths();
+    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    assert!(result.is_ok(), "First submit_result should succeed");
+
+    env.mock_all_auths();
+    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    assert!(
+        result.is_err(),
+        "Second submit_result on already-completed match should be rejected"
+    );
+}
+
