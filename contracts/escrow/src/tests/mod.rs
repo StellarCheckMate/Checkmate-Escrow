@@ -162,5 +162,5 @@ pub fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, 
     asset_client.mint(player, &amount);
 }
 mod cancellation_fee;
-mod token_blacklist;
-mod fee_tiers;
+mod referral;
+mod token_swap;

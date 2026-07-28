@@ -133,6 +133,20 @@ export class ConnectionManager {
       server_time: new Date().toISOString(),
     });
 
+    // Auto-subscribe if the client connected via /ws/match/:match_id
+    const autoMatchId = parseMatchIdFromUrl(req.url ?? '');
+    if (autoMatchId !== null) {
+      const result = this.subscriptions.subscribe(clientId, [autoMatchId], []);
+      if (result.ok) {
+        this.send(ws, {
+          type: 'subscribed',
+          match_ids: [autoMatchId],
+          player_addresses: [],
+        });
+        logger.debug({ clientId, matchId: autoMatchId }, 'Auto-subscribed via URL route');
+      }
+    }
+
     ws.on('message', (data) => {
       state.lastSeenAt = Date.now();
       this.handleMessage(clientId, ws, data.toString());
@@ -298,4 +312,21 @@ export class ConnectionManager {
       if (err) logger.warn({ err }, 'Failed to send message');
     });
   }
+}
+
+// ─── URL helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Extract a match ID from a `/ws/match/:match_id` URL path.
+ *
+ * Returns the numeric match ID if the path matches, or `null` otherwise.
+ * This enables clients to connect to `ws://<host>:<port>/ws/match/42` and be
+ * automatically subscribed to match 42 without sending an explicit `subscribe`
+ * message.
+ */
+export function parseMatchIdFromUrl(url: string): number | null {
+  const match = url.match(/^\/ws\/match\/(\d+)\/?$/);
+  if (!match) return null;
+  const id = parseInt(match[1], 10);
+  return Number.isFinite(id) && id >= 0 ? id : null;
 }

@@ -90,6 +90,8 @@ pub struct Match {
     pub paused_ledger: Option<u32>,
     /// Total pause duration in ledgers.
     pub total_pause_duration: u32,
+    /// Optional referrer address for referral fee sharing.
+    pub referrer: Option<Address>,
 }
 
 #[contracttype]
@@ -149,12 +151,12 @@ pub enum DataKey {
     PlayerActiveMatchCount(Address),
     /// Cached count of completed matches for a player, updated atomically at completion.
     PlayerCompletedMatchCount(Address),
-    /// Whether a token is blacklisted (instance storage, value is the reason string).
-    BlacklistedToken(Address),
-    /// Ordered list of all blacklisted token addresses (persistent storage).
-    BlacklistedTokens,
-    /// Dynamic fee tiers: Vec<FeeTier> ordered by ascending max_stake.
-    FeeTiers,
+    /// Referral fee share in basis points (default 2000 = 20% of platform fee goes to referrer).
+    ReferralShareBasisPoints,
+    /// Player's preferred payout token address.
+    /// When set and different from the match's stake token, the payout is swapped
+    /// to this token using the match's oracle-provided conversion rate.
+    PlayerPreferredToken(Address),
 }
 
 /// The lifecycle event that triggered a balance snapshot.
