@@ -1,0 +1,31 @@
+[advisories]
+# Deny for all vulnerability advisories
+vulnerability = "deny"
+notice = "warn"
+unmaintained = "warn"
+unsound = "warn"
+
+[licenses]
+# Deny all licenses unless they are in the allow list
+default = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 OR MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+]
+
+[bans]
+# Deny multiple versions of the same crate
+multiple-versions = "deny"
+wildcards = "deny"
+
+# List of explicitly allowed duplicate crates
+allow = [
+]
+
+# Certain crates/versions that will be skipped when doing duplicate detection
+skip = [
+]
