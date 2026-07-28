@@ -26,6 +26,7 @@ mod snapshots;
 mod tier;
 mod token_allowlist;
 mod ttl;
+mod validation;
 
 // ── Base fixture ─────────────────────────────────────────────────────────────
 
