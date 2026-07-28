@@ -2369,3 +2369,24 @@ fn test_oracle_store_result_when_paused() {
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
+
+#[test]
+fn test_oracle_store_result_idempotent() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let game_id = String::from_str(&env, "game_idempotent_12345");
+    let winner = Winner::Player1;
+
+    client.submit_result(&0u64, &game_id, &Platform::Lichess, &winner);
+    assert!(client.has_result(&0u64));
+    let first_result = client.get_result(&0u64);
+    assert_eq!(first_result.result, winner);
+
+    client.submit_result(&0u64, &game_id, &Platform::Lichess, &winner);
+    assert!(client.has_result(&0u64));
+    let second_result = client.get_result(&0u64);
+    assert_eq!(second_result.result, winner);
+
+    assert_eq!(first_result.result, second_result.result);
+}
