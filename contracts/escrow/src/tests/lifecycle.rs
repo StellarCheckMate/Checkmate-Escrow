@@ -2247,3 +2247,38 @@ fn test_claim_unauthorized_parties() {
     let claim_res = client.try_claim_vested_payout(&id, &player2);
     assert_eq!(claim_res, Err(Ok(Error::Unauthorized)));
 }
+
+#[test]
+fn test_draw_refunds_both_players() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "draw_refund_test"),
+        &Platform::Lichess,
+    );
+
+    let player1_balance_before = token_client.balance(&player1);
+    let player2_balance_before = token_client.balance(&player2);
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    client.submit_result(&id, &Winner::Draw);
+    client.claim_vested_payout(&id, &player1);
+    client.claim_vested_payout(&id, &player2);
+
+    assert_eq!(
+        token_client.balance(&player1), player1_balance_before,
+        "player1 balance must be restored after draw"
+    );
+    assert_eq!(
+        token_client.balance(&player2), player2_balance_before,
+        "player2 balance must be restored after draw"
+    );
+}
