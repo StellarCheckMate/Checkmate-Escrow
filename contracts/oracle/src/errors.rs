@@ -36,7 +36,11 @@ pub enum Error {
     /// `resolve_disputed_match` was called for a match that is not in a
     /// disputed (deadlocked) consensus state.
     MatchNotDisputed = 16,
-    InvalidAmount = 17,
-    Overflow = 18,
-    SlippageExceeded = 19,
+    /// The oracle has been deactivated due to SLA violations.
+    OracleDeactivated = 17,
+    /// The oracle cannot be deactivated because its average response time is within SLA (<= 5s).
+    OracleNotSlow = 18,
+    InvalidAmount = 19,
+    Overflow = 20,
+    SlippageExceeded = 21,
 }

@@ -48,6 +48,18 @@ pub struct OracleRegistration {
     pub token: Address,
 }
 
+/// Metrics tracking and SLA performance indicators for a registered oracle.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleMetrics {
+    pub last_response_time_ms: u64,
+    pub avg_response_time_ms: u64,
+    pub uptime_percentage: u32,
+    pub total_submissions: u32,
+    pub successful_submissions: u32,
+    pub active: bool,
+}
+
 /// A single registered oracle's vote for a specific match, recorded so a
 /// second, conflicting submission from the same oracle for the same match
 /// can be detected as equivocation.
@@ -105,8 +117,8 @@ pub enum DataKey {
     MatchVotes(u64),
     /// A single oracle's recorded vote for a match, keyed by (match_id, oracle).
     OracleVote(u64, Address),
-    /// Cached result for a game, keyed by (game_id, platform). Stores (Winner, expiry_timestamp).
-    OracleCache(String, Platform),
+    /// Metrics tracking and SLA performance indicators for an oracle.
+    OracleMetrics(Address),
 }
 
 /// Configurable submission limits for a single oracle address.

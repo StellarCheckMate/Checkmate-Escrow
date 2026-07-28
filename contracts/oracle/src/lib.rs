@@ -8,9 +8,12 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec,
 };
 use types::{
-    BatchResultEntry, CandidateTally, ConsensusState, DataKey, OracleRegistration,
+    BatchResultEntry, CandidateTally, ConsensusState, DataKey, OracleMetrics, OracleRegistration,
     OracleVoteRecord, Platform, RateLimitConfig, RateLimitStatus, RateWindow, ResultEntry, Winner,
 };
+
+/// Maximum response time SLA threshold, in milliseconds (5 seconds).
+const SLA_MAX_RESPONSE_TIME_MS: u64 = 5_000;
 
 /// Maximum number of entries accepted in a single batch submission.
 /// Designed for v2.0 tournament use; future versions may raise this limit.
@@ -183,6 +186,7 @@ impl OracleContract {
         game_id: String,
         platform: Platform,
         result: Winner,
+        response_time_ms: u64,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
         // Check if contract is paused first
@@ -213,6 +217,7 @@ impl OracleContract {
         }
 
         Self::check_oracle_rate_limit(&env, &admin, 1)?;
+        Self::update_oracle_metrics(&env, &admin, response_time_ms)?;
 
         if env.storage().persistent().has(&DataKey::Result(match_id)) {
             return Err(Error::AlreadySubmitted);
@@ -430,6 +435,7 @@ impl OracleContract {
         game_id: String,
         platform: Platform,
         result: Winner,
+        response_time_ms: u64,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
 
@@ -466,6 +472,7 @@ impl OracleContract {
         }
 
         Self::check_oracle_rate_limit(&env, &oracle, 1)?;
+        Self::update_oracle_metrics(&env, &oracle, response_time_ms)?;
 
         let vote_key = DataKey::OracleVote(match_id, oracle.clone());
         let vote = OracleVoteRecord {
@@ -798,6 +805,102 @@ impl OracleContract {
             .get(&DataKey::OracleSet)
             .unwrap_or(Vec::new(&env));
         set.len()
+    }
+
+    /// Returns performance metrics and SLA status for a registered oracle.
+    pub fn get_oracle_metrics(env: Env, oracle_address: Address) -> OracleMetrics {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OracleMetrics(oracle_address))
+            .unwrap_or(OracleMetrics {
+                last_response_time_ms: 0,
+                avg_response_time_ms: 0,
+                uptime_percentage: 100,
+                total_submissions: 0,
+                successful_submissions: 0,
+                active: true,
+            })
+    }
+
+    /// Admin-only function to deactivate an oracle whose average response time exceeds the SLA target (> 5s).
+    pub fn deactivate_slow_oracle(env: Env, oracle_address: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let mut metrics: OracleMetrics = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleMetrics(oracle_address.clone()))
+            .ok_or(Error::ResultNotFound)?;
+
+        if metrics.avg_response_time_ms <= SLA_MAX_RESPONSE_TIME_MS {
+            return Err(Error::OracleNotSlow);
+        }
+
+        metrics.active = false;
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleMetrics(oracle_address.clone()), &metrics);
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("deact")),
+            oracle_address,
+        );
+
+        Ok(())
+    }
+
+    fn update_oracle_metrics(
+        env: &Env,
+        oracle: &Address,
+        response_time_ms: u64,
+    ) -> Result<(), Error> {
+        let mut metrics: OracleMetrics = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleMetrics(oracle.clone()))
+            .unwrap_or(OracleMetrics {
+                last_response_time_ms: 0,
+                avg_response_time_ms: 0,
+                uptime_percentage: 100,
+                total_submissions: 0,
+                successful_submissions: 0,
+                active: true,
+            });
+
+        if !metrics.active {
+            return Err(Error::OracleDeactivated);
+        }
+
+        metrics.last_response_time_ms = response_time_ms;
+        let new_total = metrics.total_submissions.saturating_add(1);
+        let prev_sum = (metrics.avg_response_time_ms as u128) * (metrics.total_submissions as u128);
+        let new_sum = prev_sum + (response_time_ms as u128);
+        metrics.avg_response_time_ms = (new_sum / (new_total as u128)) as u64;
+        metrics.total_submissions = new_total;
+
+        if response_time_ms <= SLA_MAX_RESPONSE_TIME_MS {
+            metrics.successful_submissions = metrics.successful_submissions.saturating_add(1);
+        }
+
+        metrics.uptime_percentage =
+            (((metrics.successful_submissions as u64) * 100) / (new_total as u64)) as u32;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleMetrics(oracle.clone()), &metrics);
+        env.storage().persistent().extend_ttl(
+            &DataKey::OracleMetrics(oracle.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Ok(())
     }
 
     /// Return the in-progress consensus tally for a match: every distinct
@@ -1401,30 +1504,30 @@ impl OracleContract {
             .get::<_, i128>(&DataKey::Rate(token_out.clone(), token_in.clone()))
         {
             // Rate is token_out/token_in; compute amount_in * rate / 1e7
-            let amount_out = amount_in
+            let amt = amount_in
                 .checked_mul(rate)
                 .ok_or(Error::Overflow)?
                 .checked_div(10_000_000)
                 .ok_or(Error::Overflow)?;
-            if amount_out < min_amount_out {
+            if amt < min_amount_out {
                 return Err(Error::SlippageExceeded);
             }
-            amount_out
+            amt
         } else if let Some(rate) = env
             .storage()
             .persistent()
             .get::<_, i128>(&DataKey::Rate(token_in.clone(), token_out.clone()))
         {
             // Rate is token_in/token_out; compute amount_in * 1e7 / rate
-            let amount_out = amount_in
+            let amt = amount_in
                 .checked_mul(10_000_000)
                 .ok_or(Error::Overflow)?
                 .checked_div(rate)
                 .ok_or(Error::Overflow)?;
-            if amount_out < min_amount_out {
+            if amt < min_amount_out {
                 return Err(Error::SlippageExceeded);
             }
-            amount_out
+            amt
         } else {
             return Err(Error::ResultNotFound);
         };
