@@ -48,10 +48,5 @@ pub enum Error {
     InsufficientHoldingDuration = 43,
     OracleSlashFailed = 44,
     TooManyActiveMatches = 45,
-    // Upgrade / migration errors (46–50)
-    UpgradeNotScheduled = 46,
-    UpgradeReviewPeriodNotElapsed = 47,
-    UpgradeAlreadyScheduled = 48,
-    ActiveMatchesDuringUpgrade = 49,
-    InvalidVersion = 50,
+    TokenBlacklisted = 46,
 }
