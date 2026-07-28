@@ -2315,3 +2315,24 @@ fn test_winner_receives_full_pot() {
         "winner must receive exactly 2 × stake_amount"
     );
 }
+
+#[test]
+fn test_is_funded_single_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "single_deposit_test"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    assert!(
+        !client.is_funded(&id),
+        "is_funded must return false when only one player has deposited"
+    );
+}
