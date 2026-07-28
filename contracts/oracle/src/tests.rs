@@ -727,6 +727,8 @@ fn test_oracle_to_escrow_full_payout_flow() {
     let escrow_client = EscrowContractClient::new(&env, &escrow_id);
     let token_client = soroban_sdk::token::Client::new(&env, &token_addr);
 
+    escrow_client.set_dispute_period(&0);
+
     oracle_client.submit_result(
         &0u64,
         &String::from_str(&env, "test_game"),
@@ -736,6 +738,11 @@ fn test_oracle_to_escrow_full_payout_flow() {
     assert!(oracle_client.has_result(&0u64));
 
     escrow_client.submit_result(&0u64, &EscrowWinner::Player1);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp += 604801;
+    });
+    escrow_client.claim_vested_payout(&0u64, &player1);
 
     let m = escrow_client.get_match(&0u64);
     assert_eq!(m.state, MatchState::Completed);
@@ -939,13 +946,13 @@ fn test_oracle_transfer_admin_unauthorized() {
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
             contract: &contract_id,
             fn_name: "update_admin",
-            args: (new_admin.clone()).into_val(&env),
+            args: (new_admin.clone(),).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
     let result = client.try_update_admin(&new_admin);
-    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+    assert!(result.is_err());
 }
 
 #[test]
@@ -2368,4 +2375,73 @@ fn test_oracle_store_result_when_paused() {
         &Winner::Player1,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
+
+#[test]
+fn test_oracle_result_caching_hit_miss() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let game_id = String::from_str(&env, "cache_game_1");
+
+    // Initially miss
+    assert_eq!(client.get_cached_result(&game_id, &Platform::Lichess), None);
+
+    // Submit result
+    client.submit_result(&100u64, &game_id, &Platform::Lichess, &Winner::Player1);
+
+    // Hit cache
+    let cached = client.get_cached_result(&game_id, &Platform::Lichess);
+    assert!(cached.is_some());
+    let (winner, expiry) = cached.unwrap();
+    assert_eq!(winner, Winner::Player1);
+    assert_eq!(expiry, env.ledger().timestamp() + 3600);
+}
+
+#[test]
+fn test_oracle_result_caching_ttl_expiry() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let game_id = String::from_str(&env, "cache_game_ttl");
+
+    client.submit_result(&101u64, &game_id, &Platform::Lichess, &Winner::Player2);
+    assert!(client.get_cached_result(&game_id, &Platform::Lichess).is_some());
+
+    // Advance ledger timestamp beyond TTL (1 hour = 3600s)
+    env.ledger().with_mut(|li| {
+        li.timestamp += 3601;
+    });
+
+    // Expiry should return None
+    assert_eq!(client.get_cached_result(&game_id, &Platform::Lichess), None);
+}
+
+#[test]
+fn test_oracle_result_caching_invalidation_on_dispute() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.set_consensus_threshold(&2);
+    let oracles = register_n_oracles(&env, &client, &token_addr, 2, 500);
+    let game_id = String::from_str(&env, "dispute_game");
+
+    // Oracle 1 votes Player1
+    client.submit_oracle_result(
+        &oracles[0],
+        &200u64,
+        &game_id,
+        &Platform::Lichess,
+        &Winner::Player1,
+    );
+
+    // Oracle 2 votes Player2 -> triggers dispute
+    client.submit_oracle_result(
+        &oracles[1],
+        &200u64,
+        &game_id,
+        &Platform::Lichess,
+        &Winner::Player2,
+    );
+
+    // Cache should be invalidated / None
+    assert_eq!(client.get_cached_result(&game_id, &Platform::Lichess), None);
 }

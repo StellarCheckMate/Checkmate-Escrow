@@ -50,4 +50,8 @@ pub enum Error {
     TooManyActiveMatches = 45,
     /// Token is not issued by a registered stablecoin issuer and stablecoin-only mode is enabled.
     NotStablecoin = 46,
+    UpgradeNotScheduled = 47,
+    UpgradeReviewPeriodNotElapsed = 48,
+    InvalidVersion = 49,
+    UpgradeAlreadyScheduled = 50,
 }

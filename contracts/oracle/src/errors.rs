@@ -36,4 +36,7 @@ pub enum Error {
     /// `resolve_disputed_match` was called for a match that is not in a
     /// disputed (deadlocked) consensus state.
     MatchNotDisputed = 16,
+    InvalidAmount = 17,
+    Overflow = 18,
+    SlippageExceeded = 19,
 }

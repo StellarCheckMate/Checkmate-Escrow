@@ -19,7 +19,7 @@ pub enum Platform {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResultEntry {
     pub game_id: String,
     pub platform: Platform,
@@ -105,6 +105,8 @@ pub enum DataKey {
     MatchVotes(u64),
     /// A single oracle's recorded vote for a match, keyed by (match_id, oracle).
     OracleVote(u64, Address),
+    /// Cached result for a game, keyed by (game_id, platform). Stores (Winner, expiry_timestamp).
+    OracleCache(String, Platform),
 }
 
 /// Configurable submission limits for a single oracle address.
