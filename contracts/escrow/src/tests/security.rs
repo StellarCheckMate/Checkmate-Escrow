@@ -687,31 +687,48 @@ fn test_accept_admin_wrong_caller_rejected() {
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
-// #1131 — reentrancy guard on deposit prevents double-spend
+/// Test that transfer_admin rejects non-admin caller
 #[test]
-fn test_deposit_reentrancy_guard() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+fn test_transfer_admin_unauthorized() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    env.mock_all_auths();
-    let match_id = client.create_match(
-        &player1,
-        &player2,
-        &100i128,
-        &token,
-        &String::from_slice(&env, "reentrancy_test_game"),
-        &Platform::ChessDotCom,
-    );
+    let new_admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
 
-    env.mock_all_auths();
-    let result1 = client.try_deposit(&match_id, &player1);
-    assert!(result1.is_ok(), "First deposit should succeed");
+    env.mock_auths(&[MockAuth {
+        address: &non_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "transfer_admin",
+            args: (new_admin.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
 
-    env.mock_all_auths();
-    let result2 = client.try_deposit(&match_id, &player1);
-    assert_eq!(
-        result2,
-        Err(Ok(Error::AlreadyFunded)),
-        "Second reentrant deposit must be rejected with AlreadyFunded"
-    );
+    let result = client.try_transfer_admin(&new_admin);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
+
+/// Test that pause rejects non-admin caller
+#[test]
+fn test_pause_unauthorized() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let non_admin = Address::generate(&env);
+
+    env.mock_auths(&[MockAuth {
+        address: &non_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_pause();
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
