@@ -17,6 +17,7 @@ fn test_cancellation_fee_deduction() {
         cancellation_fee_basis_points: 100, // 1%
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        minimum_stake: 1,
     });
 
     // Initial balances
@@ -71,6 +72,7 @@ fn test_cancellation_fee_with_custom_config() {
         cancellation_fee_basis_points: 500, // 5%
         treasury: new_treasury.clone(),
         stablecoin_only_mode: false,
+        minimum_stake: 1,
     };
     
     env.mock_all_auths();

@@ -20,6 +20,7 @@ fn enable_stablecoin_mode(client: &EscrowContractClient, admin: &Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: true,
+        minimum_stake: 1,
     });
 }
 
@@ -201,6 +202,7 @@ fn test_stablecoin_mode_can_be_toggled_off() {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        minimum_stake: 1,
     });
 
     // Same token should now succeed.

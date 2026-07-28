@@ -46,6 +46,9 @@ pub struct ProtocolConfig {
     /// When true, only tokens issued by a registered stablecoin issuer are
     /// accepted for new matches.  Disabled by default.
     pub stablecoin_only_mode: bool,
+    /// Minimum `stake_amount` accepted by `create_match` and friends. Guards
+    /// against dust stakes where network fees would exceed the pot.
+    pub minimum_stake: i128,
 }
 
 /// A single fee tier entry: matches with a stake up to `max_stake` are charged

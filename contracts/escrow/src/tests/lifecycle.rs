@@ -2139,6 +2139,7 @@ fn test_update_protocol_config() {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        minimum_stake: 1,
     });
 
     let config = client.get_protocol_config();
@@ -2157,6 +2158,7 @@ fn test_vesting_enforced() {
         cancellation_fee_basis_points: 0,
         treasury: _admin.clone(),
         stablecoin_only_mode: false,
+        minimum_stake: 1,
     });
 
     let id = client.create_match(

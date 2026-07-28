@@ -62,6 +62,7 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        minimum_stake: 1,
     });
 
     (
