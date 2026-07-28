@@ -172,6 +172,7 @@ pub fn build_router(
         .route("/events/:match_id", get(get_match_events))
         .route("/matches", get(get_matches))
         .route("/matches/active", get(get_active_matches))
+        .route("/matches/pending", get(get_pending_matches))
         .route("/match/:match_id", get(get_match_info))
         .route(
             "/transactions/player/:player_address",
@@ -399,6 +400,53 @@ async fn get_active_matches(
     }
 
     match state.db.get_matches_by_status(Some(&MatchStatus::Active)).await {
+        Ok(matches) => {
+            state
+                .api_cache
+                .set_json(&cache_key, &matches, api_cache::pending_matches_ttl())
+                .await;
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(matches),
+                    error: None,
+                }),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /matches/pending` – list all pending matches with pagination support.
+///
+/// Accepts `limit` (default 50) and `offset` (default 0) query parameters.
+/// Returns an empty array when no pending matches exist.
+async fn get_pending_matches(
+    State(state): State<AppState>,
+    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
+    let cache_key = api_cache::matches_key(Some(&MatchStatus::Pending));
+
+    if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(cached),
+                error: None,
+            }),
+        );
+    }
+
+    match state.db.get_matches_by_status(Some(&MatchStatus::Pending)).await {
         Ok(matches) => {
             state
                 .api_cache
