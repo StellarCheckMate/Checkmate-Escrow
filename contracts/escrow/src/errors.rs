@@ -50,12 +50,8 @@ pub enum Error {
     TooManyActiveMatches = 45,
     /// Token is not issued by a registered stablecoin issuer and stablecoin-only mode is enabled.
     NotStablecoin = 46,
-    /// `dispute_and_rollback_match` was called after the 24h heartbeat window
-    /// had elapsed — outside the timeframe within which a player may dispute
-    /// a connection-loss result against an active match.
-    RollbackWindowExpired = 47,
-    /// `dispute_and_rollback_match` was called with an empty `reason` or a
-    /// `reason` longer than `MAX_REASON_LEN`. Boundaries exist so every
-    /// rollback is auditable and the on-chain event payload stays bounded.
-    ReasonTooLong = 48,
+    UpgradeNotScheduled = 47,
+    UpgradeReviewPeriodNotElapsed = 48,
+    InvalidVersion = 49,
+    UpgradeAlreadyScheduled = 50,
 }

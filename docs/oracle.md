@@ -248,6 +248,47 @@ to assume could plausibly collude.
 
 ### Migration path from single-oracle
 
+## Oracle Performance Metrics & SLA Enforcement
+
+To provide visibility into Oracle response times and prevent slow Oracles from creating poor user experience during match settlement, the contract tracks performance metrics and enforces SLA targets.
+
+### SLA Target & Metrics
+
+- **Target SLA Response Time**: `5,000 ms` (5 seconds).
+- **OracleMetrics Structure**:
+  - `last_response_time_ms: u64` — Latency of the most recent submission in milliseconds.
+  - `avg_response_time_ms: u64` — Cumulative running average response time.
+  - `uptime_percentage: u32` — Percentage of submissions meeting the <= 5,000ms SLA target.
+  - `total_submissions: u32` — Total count of recorded submissions.
+  - `successful_submissions: u32` — Count of on-time submissions meeting the SLA target.
+  - `active: bool` — Operational status flag (`true` = active, `false` = deactivated).
+
+### Reading Metrics
+
+Retrieve performance metrics for any registered Oracle using `get_oracle_metrics`:
+
+```rust
+let metrics: OracleMetrics = oracle_client.get_oracle_metrics(&oracle_address);
+```
+
+### SLA Enforcement and Deactivation
+
+Administrators can deactivate Oracles whose average response time exceeds the 5-second SLA threshold via `deactivate_slow_oracle`:
+
+```rust
+oracle_client.deactivate_slow_oracle(&oracle_address)?;
+```
+
+- **Requirements**: Admin-only (`admin.require_auth()`).
+- **Condition**: `avg_response_time_ms` must be greater than `5,000 ms` (returns `Error::OracleNotSlow` if average response time is <= 5,000 ms).
+- **Effect**: Sets `metrics.active = false` and emits `oracle / deact` event. Deactivated Oracles are rejected from submitting further results with `Error::OracleDeactivated`.
+
+### Threshold Configuration
+
+The consensus threshold for m-of-n voting is managed via:
+- `set_consensus_threshold`: Set required threshold of matching oracle votes (`m >= 1`).
+- `get_consensus_threshold`: Read the current threshold configuration.
+
 The original single-admin-oracle deployment continues to work unmodified:
 
 | | Legacy (`submit_result`) | Consensus (`submit_oracle_result`) |
