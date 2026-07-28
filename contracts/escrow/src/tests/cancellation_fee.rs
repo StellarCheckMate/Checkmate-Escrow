@@ -16,6 +16,7 @@ fn test_cancellation_fee_deduction() {
         vesting_duration_seconds: 0,
         cancellation_fee_basis_points: 100, // 1%
         treasury: admin.clone(),
+        stablecoin_only_mode: false,
     });
 
     // Initial balances
@@ -69,6 +70,7 @@ fn test_cancellation_fee_with_custom_config() {
         vesting_duration_seconds: 0,
         cancellation_fee_basis_points: 500, // 5%
         treasury: new_treasury.clone(),
+        stablecoin_only_mode: false,
     };
     
     env.mock_all_auths();

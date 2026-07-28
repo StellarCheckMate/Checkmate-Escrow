@@ -43,6 +43,9 @@ pub struct ProtocolConfig {
     pub vesting_duration_seconds: u64,
     pub cancellation_fee_basis_points: u32,
     pub treasury: Address,
+    /// When true, only tokens issued by a registered stablecoin issuer are
+    /// accepted for new matches.  Disabled by default.
+    pub stablecoin_only_mode: bool,
 }
 
 #[contracttype]
@@ -135,6 +138,10 @@ pub enum DataKey {
     PlayerActiveMatchCount(Address),
     /// Cached count of completed matches for a player, updated atomically at completion.
     PlayerCompletedMatchCount(Address),
+    /// Whether a given address is a registered stablecoin issuer.
+    StablecoinIssuer(Address),
+    /// Total number of registered stablecoin issuers.
+    StablecoinIssuerCount,
 }
 
 /// The lifecycle event that triggered a balance snapshot.
