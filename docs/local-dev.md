@@ -59,13 +59,47 @@ The event indexer tracks on-chain events and indexes them for quick queries. Con
 
 #### Using Docker Compose
 
-Alternatively, run the event indexer in a container via Docker Compose. Make sure `.env` is set up first (see [Environment variables](#environment-variables)):
+`docker compose up` runs the full stack — a local Stellar network, the event
+indexer (API server), the oracle service, Postgres/Redis, and the WebSocket
+server — with one command, no manual multi-terminal setup required.
+
+Make sure `.env` is set up first (see [Environment variables](#environment-variables)):
 
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
-This builds the `event-indexer` service from `services/event-indexer/Dockerfile`, persists its SQLite database in a named Docker volume, and exposes the API on `http://localhost:8080`. Environment variables are sourced from `.env` at the repo root, with sensible defaults applied for anything not set (see `docker-compose.yml`).
+Services started:
+
+| Service | Container port | Host port | Purpose |
+|---|---|---|---|
+| `stellar-standalone` | 8000 | 8000 | Local Soroban network + RPC (`stellar/quickstart`) |
+| `postgres` | 5432 | 5432 | Event indexer storage |
+| `redis` | 6379 | 6379 | Shared API response cache |
+| `event-indexer-1` (API server) | 8080 | 8080 | REST API — matches, events, analytics |
+| `event-indexer-2` | 8080 | 8081 | Second leader-eligible replica |
+| `oracle-service` | 8000 | 8095 | Polls Lichess/Chess.com and submits results |
+| `websocket-server` | 8090 | 8090 | Real-time match events |
+
+`event-indexer-3` only starts with `docker compose --profile testing up`, for
+exercising 3+ instance HA locally.
+
+To exercise the full local flow against the contracts:
+
+1. Start the stack: `docker compose up --build -d stellar-standalone`.
+2. Build and deploy the contracts to the running standalone node (see
+   `./scripts/build.sh` and [Using a local Stellar network](#using-a-local-stellar-network)
+   below), using `--network standalone` so the RPC points at
+   `http://localhost:8000/soroban/rpc`.
+3. Set `CONTRACT_ESCROW`, `CONTRACT_ORACLE` and `ORACLE_SIGNING_KEY` in `.env`
+   to the deployed contract IDs and a generated oracle key
+   (`openssl rand -hex 32`).
+4. Start the rest of the stack: `docker compose up --build`. The oracle
+   service and event indexer will pick up the new `.env` values.
+
+Environment variables are sourced from `.env` at the repo root, with sensible
+defaults applied for anything not set (see `docker-compose.yml`).
 
 ## Configuration
 

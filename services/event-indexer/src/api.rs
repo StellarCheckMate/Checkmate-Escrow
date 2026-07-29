@@ -22,14 +22,17 @@
 
 use axum::{
     async_trait,
-    extract::{rejection::QueryRejection, FromRequestParts, Path, Query, State},
+    extract::{rejection::QueryRejection, FromRequestParts, Path, Query, Request, State},
     http::{request::Parts, StatusCode},
+    middleware::Next,
+    response::Response,
     routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -152,6 +155,36 @@ pub struct TransactionHistoryQuery {
     pub sort_order: Option<String>,
 }
 
+// ── Structured request logging ─────────────────────────────────────────────────
+
+/// Logs one structured JSON line per request: `request_id`, `method`, `path`,
+/// `status_code` and `duration_ms`, alongside the `timestamp`/`level` every
+/// `tracing-subscriber` JSON line already carries. Wraps every other layer so
+/// the recorded status and duration reflect what the caller actually saw,
+/// including responses short-circuited by [`validation::validate_request`].
+async fn request_logging_middleware(req: Request, next: Next) -> Response {
+    let start = Instant::now();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+
+    let response = next.run(req).await;
+
+    let duration_ms = start.elapsed().as_millis();
+    let status_code = response.status().as_u16();
+
+    info!(
+        request_id = %request_id,
+        method = %method,
+        path = %path,
+        status_code = status_code,
+        duration_ms = duration_ms,
+        "request completed"
+    );
+
+    response
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 pub fn build_router(
@@ -182,6 +215,9 @@ pub fn build_router(
         // Validation runs before routing dispatches to a handler, so malformed
         // input never reaches the database.
         .layer(axum::middleware::from_fn(validation::validate_request))
+        // Outermost layer: logs every request, including ones rejected by
+        // validation above, with the status and latency the caller observed.
+        .layer(axum::middleware::from_fn(request_logging_middleware))
         .with_state(state)
 }
 
