@@ -11,14 +11,18 @@ pub use std::{format, vec::Vec};
 pub mod helpers;
 
 mod admin;
+mod balance_history_edge_cases;
 mod dispute;
 mod events;
+mod fee_calculation_scenarios;
 mod fuzz;
 mod index;
 mod integration;
 mod invariants;
 mod lifecycle;
+mod match_validation;
 mod multi_token;
+mod oracle_validation;
 mod pagination;
 mod player_balance_history;
 mod security;
