@@ -565,6 +565,66 @@ async fn get_match_info(
     }
 }
 
+/// `GET /matches/:match_id` – single match lookup endpoint for frontends.
+///
+/// Returns the full match object including current state.
+/// Returns 404 with descriptive message if the match does not exist.
+///
+/// Cached for 5 seconds and invalidated eagerly on any contract event for this
+/// match, so the TTL only bounds staleness for matches nothing is happening to.
+/// Only successful lookups are cached — a `404` for a match that is about to be
+/// indexed must not be sticky.
+async fn get_match_by_id(
+    State(state): State<AppState>,
+    Path(match_id): Path<u64>,
+) -> (StatusCode, Json<ApiResponse<MatchInfo>>) {
+    let cache_key = api_cache::match_key(match_id);
+
+    if let Some(cached) = state.api_cache.get_json::<MatchInfo>(&cache_key).await {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(cached),
+                error: None,
+            }),
+        );
+    }
+
+    match state.db.build_match_info(match_id).await {
+        Ok(Some(match_info)) => {
+            state
+                .api_cache
+                .set_json(&cache_key, &match_info, api_cache::match_ttl())
+                .await;
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(match_info),
+                    error: None,
+                }),
+            )
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Match {} not found", match_id)),
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
 // ── Transaction history ───────────────────────────────────────────────────────
 
 /// `GET /transactions/player/:player_address` – a player's financial history.
