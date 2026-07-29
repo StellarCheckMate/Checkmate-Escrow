@@ -62,7 +62,7 @@ The states a [match](#match) moves through, modeled by the `MatchState` enum: [P
 
 ## Oracle
 
-The authorized off-chain service together with its on-chain account that bridges external chess-platform data to the contract. The oracle reads the result of the game identified by [game_id](#game_id) from Lichess/Chess.com and submits the verified outcome with `submit_result`. Only the oracle's authorization is accepted for result submission, which is what makes payouts automatic without a human middleman. The oracle address is set at initialization and can be rotated by the [admin](#admin). See [oracle.md](oracle.md) and `contracts/oracle`.
+The authorized off-chain service together with its on-chain account that bridges external chess-platform data to the contract. The oracle reads the result of the game identified by [game_id](#game_id) from Lichess/Chess.com and submits the verified outcome with `submit_result`. Only the oracle's authorization is accepted for result submission, which is what makes payouts automatic without a human middleman. The oracle address is set at initialization and can be rotated by the [admin](#admin). Use `get_oracle_address` (view function) to query the currently configured oracle address from off-chain clients. See [oracle.md](oracle.md) and `contracts/oracle`.
 
 ## Oracle Rotation
 

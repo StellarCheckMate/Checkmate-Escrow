@@ -225,10 +225,13 @@ get_contract_version() -> String
 ### Oracle & Payouts
 
 ```
+get_oracle_address() -> Address
 submit_result(match_id, winner, caller) -> Result<(), Error>
 submit_result_with_oracle_record(match_id, winner, game_id) -> Result<(), Error>
 submit_result_batch(results: Vec<(match_id, winner)>, caller) -> Result<Vec<Option<Error>>, Error>
 ```
+
+- `get_oracle_address()` returns the oracle address currently configured on the contract. This is a view function that requires no authentication and is intended for off-chain clients, frontends, and monitoring tools to verify oracle configuration without reading raw contract storage. Returns `Error::Unauthorized` if the contract has not been initialized.
 
 - `submit_result_batch` settles multiple matches in a single call, reducing oracle transaction overhead. `caller` must be the configured oracle. Each match is processed independently — a failure on one (e.g. `NotFunded`, `InvalidState`) does not stop the rest from being processed. The returned `Vec` has one entry per input entry, in the same order: `None` on success, `Some(Error)` on failure for that match. (Soroban's contract ABI has no `Result` element type, so `Option<Error>` is the on-chain equivalent of `Result<(), Error>` here.)
 
