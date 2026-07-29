@@ -203,6 +203,161 @@ stellar contract invoke --id $ORACLE_CONTRACT_ID --network <network> \
 
 ---
 
+## Smoke Testing: End-to-End Verification
+
+After deployment, use the smoke test script to verify the entire match lifecycle works correctly on testnet before moving to production.
+
+### Prerequisites
+
+The smoke test requires:
+- Two funded testnet accounts (players)
+- One funded account with oracle admin privileges
+- A token contract address (native XLM or other testnet token)
+- `stellar` CLI and `jq` installed
+
+### Setup
+
+1. **Create or import keypairs** for testing:
+   ```bash
+   # Create test keypairs (or use existing ones)
+   stellar keys generate alice
+   stellar keys generate bob
+   stellar keys generate oracle_admin
+   
+   # Fund them via Friendbot (testnet only)
+   ALICE=$(stellar keys address alice)
+   BOB=$(stellar keys address bob)
+   ORACLE=$(stellar keys address oracle_admin)
+   
+   curl "https://friendbot.stellar.org?addr=$ALICE"
+   curl "https://friendbot.stellar.org?addr=$BOB"
+   curl "https://friendbot.stellar.org?addr=$ORACLE"
+   ```
+
+2. **Get the native XLM token address** on your network:
+   ```bash
+   # On testnet, retrieve the XLM contract ID
+   stellar contract asset info --network testnet --asset native XLM
+   # Output: ContractId: C...
+   ```
+
+3. **Set environment variables** in `.env`:
+   ```bash
+   export PLAYER1_KEYPAIR=alice
+   export PLAYER2_KEYPAIR=bob
+   export ORACLE_ADMIN_KEYPAIR=oracle_admin
+   export TEST_TOKEN=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4  # XLM on testnet
+   ```
+
+### Running the Smoke Test
+
+```bash
+./scripts/smoke_test.sh testnet
+```
+
+**What it tests:**
+1. ✅ Creates a match with both players and a token
+2. ✅ Verifies match is in `Pending` state
+3. ✅ Player 1 deposits their stake
+4. ✅ Player 2 deposits their stake
+5. ✅ Verifies match transitions to `Active` state
+6. ✅ Verifies escrow balance = stake × 2
+7. ✅ Oracle submits result (Player 1 wins)
+8. ✅ Verifies escrow balance drops to 0 (payout complete)
+9. ✅ Verifies match transitions to `Completed` state
+
+**Example output:**
+```
+🔍 Smoke Test: Full Match Lifecycle
+
+Validating environment...
+   ✅ Required env vars present
+
+   Player 1: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4
+   Player 2: GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBSC4
+   Oracle Admin: GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCSC4
+
+🎮 Match Configuration:
+   Network: testnet
+   Escrow: CEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEQZQ
+   Oracle: CFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF2XVA
+   Stake: 100
+   Game ID: smoke_test_1627584000
+
+📋 Step 1: Create Match
+   ✅ create_match (ID: 0)
+
+📋 Step 2: Verify Match State (Pending)
+   ✅ match state is Pending
+
+📋 Step 3: Player 1 Deposits
+   ✅ player 1 deposit
+
+📋 Step 4: Player 2 Deposits
+   ✅ player 2 deposit
+
+📋 Step 5: Verify Match State (Active)
+   ✅ match state is Active
+
+📋 Step 6: Verify Escrow Balance
+   ✅ escrow balance is 200 (correct)
+
+📋 Step 7: Submit Result (Player 1 Wins)
+   ✅ submit_result (Player1)
+
+📋 Step 8: Verify Payout (Escrow Balance = 0)
+   ✅ escrow balance is 0 (payout complete)
+
+📋 Step 9: Verify Match State (Completed)
+   ✅ match state is Completed
+
+✅ Smoke Test Passed!
+
+📊 Summary:
+   Network:         testnet
+   Match ID:        0
+   Game ID:         smoke_test_1627584000
+   Stake:           100
+   Final State:     Completed
+   Winner:          Player 1
+   Escrow Balance:  0 (all funds disbursed)
+
+🎉 Full lifecycle verified: create → deposit → result → payout
+```
+
+### Exit Codes
+
+- `0` — All tests passed; deployment is verified
+- `1` — One or more tests failed; check output to identify which step failed
+
+### Troubleshooting Smoke Test Failures
+
+**"Cannot access keypair: alice"**
+- Ensure the keypair exists: `stellar keys list`
+- Create it if missing: `stellar keys generate alice`
+- Verify it has XLM funds: `stellar account info alice --network testnet`
+
+**"Escrow balance is not 200"**
+- Verify players have sufficient token balance
+- Check that both deposits succeeded in the output
+- Ensure the token contract ID is correct
+
+**"match state is not Active"**
+- Verify both player deposits completed successfully
+- Check that the match exists: `stellar contract invoke --id $CONTRACT_ESCROW --network testnet -- get_match --match_id 0`
+
+**"submit_result failed"**
+- Verify oracle admin keypair has funds for fees
+- Check that the oracle contract ID is correct
+- Ensure oracle admin has been registered with the oracle contract
+
+**"Escrow balance is not 0 after payout"**
+- Oracle result submission may not have been processed yet
+- Verify result was submitted: `stellar contract invoke --id $CONTRACT_ORACLE --network testnet -- has_result --match_id 0`
+- Check match state to ensure it's `Completed`
+
+---
+
 ## Resource Usage Baselines
 
 Soroban charges fees based on CPU instruction count and memory bytes. The
