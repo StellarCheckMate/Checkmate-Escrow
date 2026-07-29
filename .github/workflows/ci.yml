@@ -63,6 +63,9 @@ jobs:
       - name: Run tests
         run: cargo test
 
+      - name: Run upgrade simulation tests
+        run: cargo test -p escrow --test upgrade_simulation_tests
+
   frontend-build:
     name: Frontend Build
     runs-on: ubuntu-latest
