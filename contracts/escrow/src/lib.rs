@@ -3,6 +3,22 @@
 #[cfg(test)]
 extern crate std;
 
+/// Escrow Contract for Checkmate — trustless chess wagering on Stellar.
+///
+/// For a comprehensive reference of all error codes (their numeric values, causes, and recovery
+/// actions), see [`Error Codes Reference`](../../docs/error-codes.md).
+///
+/// # Error Codes Quick Reference
+///
+/// Every function that returns a `Result<T, Error>` surfaces errors as numeric discriminants.
+/// Common errors:
+/// - `#1` — `MatchNotFound` — Invalid or expired match ID
+/// - `#4` — `Unauthorized` — Caller lacks required permissions or contract not initialized
+/// - `#5` — `InvalidState` — Match is in wrong state for this operation
+/// - `#7` — `AlreadyInitialized` — Contract already initialized
+/// - `#9` — `ContractPaused` — Operations blocked during pause
+///
+/// See [`docs/error-codes.md`](../../docs/error-codes.md) for all 50 error codes with causes and recovery actions.
 pub mod errors;
 pub mod types;
 
