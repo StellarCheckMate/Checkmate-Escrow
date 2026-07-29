@@ -166,9 +166,12 @@ Prefer to learn by watching or testing yourself?
   - [Platform Comparison Table](docs/oracle.md#platform-api-comparison-lichess-vs-chessdotcom) — Lichess vs Chess.com API differences
 - [WebSocket API](docs/websocket-api.md) — real-time match event protocol (protocol v1), connection lifecycle, subscription model, React hook
 - [Threat Model & Security](docs/security.md)
+- [Security Policy & Vulnerability Disclosure](SECURITY.md) — how to report vulnerabilities, response SLA, and bug bounty
 - [Balance-Privacy Model](docs/privacy-model.md) — what the balance-snapshot APIs hide from non-admins, and what they don't
 - [Roadmap](docs/roadmap.md)
 - [Deployment Guide](docs/deployment.md)
+- [Mainnet Deployment Checklist](docs/mainnet-deployment-checklist.md) — step-by-step checklist for safe mainnet launches
+- [Monitoring Setup](docs/monitoring-setup.md) — Prometheus metrics, Grafana dashboard, and alerting rules
 - [Error Codes Reference](docs/error-codes.md) — every contract error code, its cause, and how to recover
 
 ## 🎓 Smart Contract API
