@@ -98,12 +98,8 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- deposit \
 | 6 | `AlreadyExists` | [`create_match`](../contracts/escrow/src/lib.rs) | A `Match` already exists at the storage slot for the *next* sequential match ID before `create_match` assigns it. Under normal operation `MatchCount` is the sole source of the next ID, so this should never trigger. | Not client-recoverable. Indicates storage/state corruption or a bug in ID assignment — requires admin/dev investigation; in the worst case, a contract migration. | Would only be observed after manual storage tampering or a contract bug — not reachable via the public API in current code. |
 | 8 | `Overflow` | [`add_allowed_token`](../contracts/escrow/src/lib.rs) (token counter), [`create_match`](../contracts/escrow/src/lib.rs) (match counter), [`submit_result`](../contracts/escrow/src/lib.rs) (`stake_amount * 2`) | An arithmetic guard (`checked_add`/`checked_mul`) tripped: a counter hit `u32`/`u64::MAX`, or `stake_amount` is large enough that doubling it overflows `i128`. | Counter overflow isn't realistically recoverable (would require billions of matches/tokens) short of a contract upgrade. Pot overflow is **fatal for that one match only** — it must be guarded against at `create_match` time by capping `stake_amount` well under `i128::MAX / 2`; once such a match exists, `submit_result` will always revert, so the only path forward is `cancel_match`/`expire_match` to return the deposits. | A match created with `stake_amount` near `i128::MAX / 2` will permanently fail `submit_result` with `#8` — recover player funds via `expire_match` instead. |
 
-### Reserved / currently unused
-
-| Code | Name | Status |
-|------|------|--------|
-| 11 | `MatchCancelled` | Defined in `errors.rs` but not returned by any function in the current `lib.rs`. Reserved for a future explicit "this match is cancelled" check (today, a cancelled match falls through to `InvalidState` instead). |
-| 12 | `MatchCompleted` | Same as above — reserved for a future explicit "this match is already completed" check; today this case also surfaces as `InvalidState`. |
+| 11 | `RollbackWindowExpired` | [`dispute_and_rollback_match`](../contracts/escrow/src/lib.rs) | Called after the 24h heartbeat window (`ROLLBACK_WINDOW_SECONDS`) had already elapsed since `last_heartbeat`. | Use `expire_match`/`cancel_match` instead, or call `heartbeat_match` before the window lapses next time. | Disputing a match 25h after the last heartbeat → `#11`. |
+| 12 | `ReasonTooLong` | [`dispute_and_rollback_match`](../contracts/escrow/src/lib.rs) | `reason` was empty or longer than `MAX_REASON_LEN` (256 bytes). | Resubmit with a non-empty reason under 256 bytes. | Passing a 300-byte reason string → `#12`. |
 
 ---
 

@@ -11,6 +11,7 @@ pub use std::{format, vec::Vec};
 pub mod helpers;
 
 mod admin;
+mod batch_submit;
 mod dispute;
 mod events;
 mod fuzz;

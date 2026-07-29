@@ -610,7 +610,7 @@ fn test_rollback_multi_token_match_refunds_each_player_in_their_token() {
     let m = escrow_client.get_match(&match_id);
     assert_eq!(m.state, MatchState::Active);
     assert_eq!(m.token_b, Some(token_b.clone()));
-    assert_eq!(m.conversion_rate, rate);
+    assert_eq!(m.conversion_rate, Some(rate));
 
     // Cap the timestamp so we're well inside the 24h rollback window.
     env.ledger().set_timestamp(0);
