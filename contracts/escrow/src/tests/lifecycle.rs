@@ -2394,3 +2394,144 @@ fn test_double_deposit_rejected() {
     let result = client.try_deposit(&match_id, &player1);
     assert_eq!(result, Err(Ok(Error::AlreadyFunded)));
 }
+
+// ── Issue #900: combined before/after timeout test ───────────────────────────
+
+/// Verifies that `expire_match` fails before the timeout elapses and succeeds
+/// after it, within a single test scenario.
+///
+/// Steps:
+///   1. Create a match; player1 deposits (match stays `Pending`).
+///   2. Attempt `expire_match` immediately — must return `MatchNotExpired`.
+///   3. Advance ledger past the configured timeout.
+///   4. Call `expire_match` again — must succeed.
+///   5. Assert state is `Cancelled`, escrow balance is 0, and player1's stake
+///      was fully refunded.
+#[test]
+fn test_expire_match_before_and_after_timeout() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = token::Client::new(&env, &token);
+
+    // Use a short timeout so the test does not have to jump 518_400 ledgers.
+    client.set_match_timeout(&17_280);
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_before_and_after"),
+        &Platform::Lichess,
+    );
+
+    // Only player1 deposits so the match remains in Pending state.
+    client.deposit(&id, &player1);
+
+    let p1_balance_before = token_client.balance(&player1);
+
+    // ── Step 2: expire before timeout must fail ───────────────────────────────
+    // Advance to a ledger that is still within the timeout window.
+    env.ledger().set_sequence_number(100 + 100);
+    let early_result = client.try_expire_match(&id);
+    assert_eq!(
+        early_result,
+        Err(Ok(Error::MatchNotExpired)),
+        "expire_match must return MatchNotExpired before timeout elapses"
+    );
+
+    // Match must still be Pending after the failed expire attempt.
+    let m_before = client.get_match(&id);
+    assert_eq!(
+        m_before.state,
+        MatchState::Pending,
+        "match must remain Pending after a failed expire attempt"
+    );
+
+    // ── Step 3: extend TTLs, then jump ledger past timeout ────────────────────
+    env.deployer().extend_ttl_for_contract_instance(
+        contract_id.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.deployer().extend_ttl_for_contract_instance(
+        token.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.as_contract(&contract_id, || {
+        if env.storage().persistent().has(&DataKey::ActiveMatches) {
+            env.storage().persistent().extend_ttl(
+                &DataKey::ActiveMatches,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+    });
+
+    // Jump to exactly the timeout boundary (created_ledger=100, timeout=17_280).
+    env.ledger().set_sequence_number(100 + 17_280);
+
+    env.deployer().extend_ttl_for_contract_instance(
+        contract_id.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.deployer().extend_ttl_for_contract_instance(
+        token.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.as_contract(&contract_id, || {
+        if env.storage().persistent().has(&DataKey::ActiveMatches) {
+            env.storage().persistent().extend_ttl(
+                &DataKey::ActiveMatches,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+    });
+
+    // ── Step 4: expire after timeout must succeed ─────────────────────────────
+    client.expire_match(&id);
+
+    // ── Step 5: verify Cancelled state and full refund ────────────────────────
+    let m_after = client.get_match(&id);
+    assert_eq!(
+        m_after.state,
+        MatchState::Cancelled,
+        "match must be Cancelled after successful expire_match"
+    );
+
+    // Escrow balance must be zero — funds have been returned.
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        0,
+        "escrow balance must be 0 after expiry"
+    );
+
+    // Player1 must have received their stake back.
+    let p1_balance_after = token_client.balance(&player1);
+    assert_eq!(
+        p1_balance_after - p1_balance_before,
+        100,
+        "player1 must be refunded their full stake after expiry"
+    );
+
+    // Player2 never deposited, so their balance should be unchanged.
+    // (Both started with 1000 and player2 made no deposit.)
+    let p2_balance = token_client.balance(&player2);
+    assert_eq!(
+        p2_balance, 1000,
+        "player2's balance must be unchanged (no deposit was made)"
+    );
+}
