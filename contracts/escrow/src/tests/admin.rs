@@ -849,3 +849,31 @@ fn test_pause_blocks_create_match() {
     );
     assert_eq!(id, 0, "create_match must succeed after unpause");
 }
+
+// #1162 — get_contract_version returns the crate's semver string
+#[test]
+fn test_get_contract_version_returns_semver_string() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let version = client.get_contract_version();
+
+    assert!(!version.is_empty(), "contract version must not be empty");
+
+    use std::string::ToString;
+    let version_str = version.to_string();
+    let parts: std::vec::Vec<&str> = version_str.split('.').collect();
+    assert_eq!(
+        parts.len(),
+        3,
+        "contract version must be semver-formatted (major.minor.patch): {}",
+        version_str
+    );
+    for part in parts {
+        assert!(
+            part.chars().all(|c| c.is_ascii_digit()) && !part.is_empty(),
+            "each semver component must be a non-empty numeric string: {}",
+            version_str
+        );
+    }
+}

@@ -61,7 +61,7 @@ Pending ──► Active ──► Completed
 | `admin` / `oracle_up`     | `update_oracle`     | `(old_oracle, new_oracle)`                   |
 | `admin` / `xfer`          | `transfer_admin`    | `(old_admin, new_admin)`                     |
 | `match` / `created`       | `create_match`      | `(match_id, player1, player2, stake_amount)` |
-| `match` / `completed`     | `submit_result`     | `(match_id, winner)`                         |
+| `match` / `completed`     | `submit_result`     | `(match_id, winner, payout_amount)`          |
 | `match` / `cancelled`     | `cancel_match`      | `match_id`                                   |
 | `match` / `expired`       | `expire_match`      | `match_id`                                   |
 
@@ -214,12 +214,23 @@ Examples:
 | Match completed (payout done)         | `true`      | `0`                  |
 | Match cancelled (refunds done)        | `false`     | `0`                  |
 
+### Contract Metadata
+
+```
+get_contract_version() -> String
+```
+
+- Returns the crate version from `Cargo.toml` (e.g. `"0.1.0"`) as a semver-formatted string. Clients can use this to detect version mismatches against a deployed contract.
+
 ### Oracle & Payouts
 
 ```
 submit_result(match_id, winner, caller) -> Result<(), Error>
 submit_result_with_oracle_record(match_id, winner, game_id) -> Result<(), Error>
+submit_result_batch(results: Vec<(match_id, winner)>, caller) -> Result<Vec<Option<Error>>, Error>
 ```
+
+- `submit_result_batch` settles multiple matches in a single call, reducing oracle transaction overhead. `caller` must be the configured oracle. Each match is processed independently — a failure on one (e.g. `NotFunded`, `InvalidState`) does not stop the rest from being processed. The returned `Vec` has one entry per input entry, in the same order: `None` on success, `Some(Error)` on failure for that match. (Soroban's contract ABI has no `Result` element type, so `Option<Error>` is the on-chain equivalent of `Result<(), Error>` here.)
 
 - `submit_result` is called by the configured oracle address and requires oracle authorization.
 - `submit_result_with_oracle_record` is the canonical oracle integration path and stores the verified `game_id` for audit.

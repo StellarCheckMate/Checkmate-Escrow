@@ -1471,6 +1471,16 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         oracle.require_auth();
 
+        Self::settle_result(&env, match_id, winner)
+    }
+
+    /// Core result-settlement logic shared by `submit_result` and
+    /// `submit_result_batch`. Assumes the pause state and oracle
+    /// authorization have already been checked by the caller — this lets
+    /// `submit_result_batch` authorize the oracle once for the whole batch
+    /// instead of once per match (repeated `require_auth` calls for the same
+    /// address within a single invocation are rejected by the host).
+    fn settle_result(env: &Env, match_id: u64, winner: Winner) -> Result<(), Error> {
         let mut m: Match = env
             .storage()
             .persistent()
@@ -1485,16 +1495,16 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
-        Self::remove_active_match_indexed(&env, &m.player1, match_id);
-        Self::remove_active_match_indexed(&env, &m.player2, match_id);
+        Self::remove_active_match_indexed(env, &m.player1, match_id);
+        Self::remove_active_match_indexed(env, &m.player2, match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
         m.winner = winner.clone();
         m.vested_at = Some(env.ledger().timestamp());
 
-        Self::record_completed_match(&env, &m.player1);
-        Self::record_completed_match(&env, &m.player2);
+        Self::record_completed_match(env, &m.player1);
+        Self::record_completed_match(env, &m.player2);
 
         env.storage()
             .persistent()
@@ -1505,14 +1515,20 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
-        let dispute_period = Self::get_dispute_period(&env);
+        let dispute_period = Self::get_dispute_period(env);
 
         if dispute_period == 0 {
             // Immediate payout (no dispute period, but still subject to vesting)
-            Self::record_snapshot(&env, &m, SnapshotReason::Completed);
+            Self::record_snapshot(env, &m, SnapshotReason::Completed);
+            let payout_amount = match winner {
+                Winner::Player1 | Winner::Player2 | Winner::Draw => {
+                    m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?
+                }
+                Winner::None => 0,
+            };
             env.events().publish(
-                (Symbol::new(&env, "match"), Symbol::new(&env, "completed")),
-                (match_id, winner),
+                (Symbol::new(env, "match"), Symbol::new(env, "completed")),
+                (match_id, winner, payout_amount),
             );
             Ok(())
         } else {
@@ -1552,10 +1568,10 @@ impl EscrowContract {
                 MATCH_TTL_LEDGERS,
             );
 
-            Self::record_snapshot(&env, &m, SnapshotReason::ResultSubmitted);
+            Self::record_snapshot(env, &m, SnapshotReason::ResultSubmitted);
 
             env.events().publish(
-                (Symbol::new(&env, "match"), Symbol::new(&env, "pending_result")),
+                (Symbol::new(env, "match"), Symbol::new(env, "pending_result")),
                 (match_id, winner, deadline),
             );
 
@@ -1593,6 +1609,50 @@ impl EscrowContract {
         );
 
         Ok(())
+    }
+
+    /// Batch-submit results for multiple matches in a single call, reducing
+    /// oracle transaction overhead. Caller must be the configured oracle.
+    ///
+    /// Each match is processed independently: a failure on one match (e.g.
+    /// `MatchNotFound`, `InvalidState`, `NotFunded`) does not stop processing
+    /// of the remaining entries. The returned `Vec` has one entry per input
+    /// entry, in the same order — `None` on success, `Some(Error)` on
+    /// failure for that match.
+    ///
+    /// Note: Soroban's contract ABI has no `Result` element type, so
+    /// `Option<Error>` is the on-chain equivalent of `Result<(), Error>` here
+    /// (`None` ~ `Ok(())`, `Some(e)` ~ `Err(e)`).
+    pub fn submit_result_batch(
+        env: Env,
+        results: Vec<(u64, Winner)>,
+        caller: Address,
+    ) -> Result<Vec<Option<Error>>, Error> {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        if caller != oracle {
+            return Err(Error::Unauthorized);
+        }
+        caller.require_auth();
+
+        let mut outcomes = Vec::new(&env);
+        for (match_id, winner) in results.iter() {
+            let outcome = Self::settle_result(&env, match_id, winner);
+            outcomes.push_back(outcome.err());
+        }
+        Ok(outcomes)
     }
 
     /// Cancel a pending match and refund any deposits.
@@ -2096,6 +2156,12 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)
+    }
+
+    /// Return the crate version (from `Cargo.toml`) as a semver string.
+    /// Lets clients detect version mismatches against a deployed contract.
+    pub fn get_contract_version(env: Env) -> String {
+        String::from_str(&env, env!("CARGO_PKG_VERSION"))
     }
 
     /// Return the oracle address currently configured on the contract.

@@ -167,8 +167,8 @@ fn test_submit_result_emits_event() {
     assert!(matched.is_some(), "match completed event not emitted");
 
     let (_, _, data) = matched.unwrap();
-    let decoded: (u64, Winner) = <(u64, Winner)>::try_from_val(&env, &data).unwrap();
-    assert_eq!(decoded, (id, Winner::Player1));
+    let decoded: (u64, Winner, i128) = <(u64, Winner, i128)>::try_from_val(&env, &data).unwrap();
+    assert_eq!(decoded, (id, Winner::Player1, 200));
 }
 
 // #1104 — cancel_match emits match/cancelled event
@@ -311,9 +311,50 @@ fn test_submit_result_emits_completed_event_with_correct_winner() {
     assert!(matched.is_some(), "match completed event not emitted");
 
     let (_, _, data) = matched.unwrap();
-    let (ev_match_id, ev_winner): (u64, Winner) = TryFromVal::try_from_val(&env, &data).unwrap();
+    let (ev_match_id, ev_winner, ev_payout): (u64, Winner, i128) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_match_id, match_id);
     assert_eq!(ev_winner, Winner::Player1);
+    assert_eq!(ev_payout, 200);
+}
+
+// #1161 — submit_result emits match/completed with the payout amount
+#[test]
+fn test_submit_result_event_includes_payout_amount() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let stake_amount = 100;
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token,
+        &String::from_str(&env, "payout_amount_event"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+    client.submit_result(&match_id, &Winner::Player2);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("completed").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "match completed event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_match_id, ev_winner, ev_payout_amount): (u64, Winner, i128) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_match_id, match_id);
+    assert_eq!(ev_winner, Winner::Player2);
+    assert_eq!(ev_payout_amount, stake_amount * 2);
 }
 
 #[test]
