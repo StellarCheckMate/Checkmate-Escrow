@@ -166,7 +166,10 @@ impl Config {
         }
 
         // ── Logging ───────────────────────────────────────────────────────
-        let log_level = env::var("EVENT_INDEXER_LOG_LEVEL")
+        // `LOG_LEVEL` is the standard variable name; `EVENT_INDEXER_LOG_LEVEL`
+        // is kept as a fallback for existing deployments that already set it.
+        let log_level = env::var("LOG_LEVEL")
+            .or_else(|_| env::var("EVENT_INDEXER_LOG_LEVEL"))
             .unwrap_or_else(|_| "info".to_string());
 
         Ok(Config {

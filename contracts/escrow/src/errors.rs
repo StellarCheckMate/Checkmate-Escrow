@@ -13,8 +13,13 @@ pub enum Error {
     Overflow = 8,
     ContractPaused = 9,
     InvalidAmount = 10,
-    MatchCancelled = 11,
-    MatchCompleted = 12,
+    /// `dispute_and_rollback_match` was called after the 24h heartbeat window
+    /// had elapsed — outside the timeframe within which a player may dispute
+    /// a connection-loss result against an active match.
+    RollbackWindowExpired = 11,
+    /// `dispute_and_rollback_match` was called with an empty `reason` or a
+    /// `reason` longer than `MAX_REASON_LEN`.
+    ReasonTooLong = 12,
     DuplicateGameId = 13,
     MatchNotExpired = 14,
     InvalidGameId = 15,

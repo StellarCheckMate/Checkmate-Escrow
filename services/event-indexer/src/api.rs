@@ -22,14 +22,17 @@
 
 use axum::{
     async_trait,
-    extract::{rejection::QueryRejection, FromRequestParts, Path, Query, State},
+    extract::{rejection::QueryRejection, FromRequestParts, Path, Query, Request, State},
     http::{request::Parts, StatusCode},
+    middleware::Next,
+    response::Response,
     routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::info;
 
@@ -118,6 +121,20 @@ pub struct PaginationQuery {
     pub offset: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct ActiveMatchesQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct AnalyticsQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub start_date: Option<chrono::DateTime<chrono::Utc>>,
+    pub end_date: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 /// Transaction-history query parameters.
 ///
 /// Every field is received as a raw string so the validators can produce a
@@ -136,6 +153,36 @@ pub struct TransactionHistoryQuery {
     pub sort_by: Option<String>,
     #[serde(alias = "order")]
     pub sort_order: Option<String>,
+}
+
+// ── Structured request logging ─────────────────────────────────────────────────
+
+/// Logs one structured JSON line per request: `request_id`, `method`, `path`,
+/// `status_code` and `duration_ms`, alongside the `timestamp`/`level` every
+/// `tracing-subscriber` JSON line already carries. Wraps every other layer so
+/// the recorded status and duration reflect what the caller actually saw,
+/// including responses short-circuited by [`validation::validate_request`].
+async fn request_logging_middleware(req: Request, next: Next) -> Response {
+    let start = Instant::now();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+
+    let response = next.run(req).await;
+
+    let duration_ms = start.elapsed().as_millis();
+    let status_code = response.status().as_u16();
+
+    info!(
+        request_id = %request_id,
+        method = %method,
+        path = %path,
+        status_code = status_code,
+        duration_ms = duration_ms,
+        "request completed"
+    );
+
+    response
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -157,7 +204,8 @@ pub fn build_router(
         .route("/events", get(get_events))
         .route("/events/:match_id", get(get_match_events))
         .route("/matches", get(get_matches))
-        .route("/matches/:match_id", get(get_match_by_id))
+        .route("/matches/active", get(get_active_matches))
+        .route("/matches/pending", get(get_pending_matches))
         .route("/match/:match_id", get(get_match_info))
         .route(
             "/transactions/player/:player_address",
@@ -167,6 +215,9 @@ pub fn build_router(
         // Validation runs before routing dispatches to a handler, so malformed
         // input never reaches the database.
         .layer(axum::middleware::from_fn(validation::validate_request))
+        // Outermost layer: logs every request, including ones rejected by
+        // validation above, with the status and latency the caller observed.
+        .layer(axum::middleware::from_fn(request_logging_middleware))
         .with_state(state)
 }
 
@@ -338,6 +389,100 @@ async fn get_matches(
     }
 
     match state.db.get_matches_by_status(status.as_ref()).await {
+        Ok(matches) => {
+            state
+                .api_cache
+                .set_json(&cache_key, &matches, api_cache::pending_matches_ttl())
+                .await;
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(matches),
+                    error: None,
+                }),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /matches/active` – list all active matches with pagination support.
+///
+/// Accepts `limit` (default 50) and `offset` (default 0) query parameters.
+/// Returns an empty array when no active matches exist.
+async fn get_active_matches(
+    State(state): State<AppState>,
+    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
+    let cache_key = api_cache::matches_key(Some(&MatchStatus::Active));
+
+    if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(cached),
+                error: None,
+            }),
+        );
+    }
+
+    match state.db.get_matches_by_status(Some(&MatchStatus::Active)).await {
+        Ok(matches) => {
+            state
+                .api_cache
+                .set_json(&cache_key, &matches, api_cache::pending_matches_ttl())
+                .await;
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(matches),
+                    error: None,
+                }),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /matches/pending` – list all pending matches with pagination support.
+///
+/// Accepts `limit` (default 50) and `offset` (default 0) query parameters.
+/// Returns an empty array when no pending matches exist.
+async fn get_pending_matches(
+    State(state): State<AppState>,
+    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
+    let cache_key = api_cache::matches_key(Some(&MatchStatus::Pending));
+
+    if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(cached),
+                error: None,
+            }),
+        );
+    }
+
+    match state.db.get_matches_by_status(Some(&MatchStatus::Pending)).await {
         Ok(matches) => {
             state
                 .api_cache

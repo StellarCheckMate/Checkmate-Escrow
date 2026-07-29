@@ -537,6 +537,79 @@ fn test_draw_refund_balances() {
     assert_eq!(token_client.balance(&player2), player2_balance_before);
 }
 
+// #1165 - submit_result deducts protocol_fee_bps from the winner's payout
+// and forwards it to fee_recipient
+#[test]
+fn test_payout_deducts_protocol_fee() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let fee_recipient = Address::generate(&env);
+    let mut config = client.get_protocol_config();
+    config.protocol_fee_bps = 500; // 5%
+    config.fee_recipient = fee_recipient.clone();
+    env.mock_all_auths();
+    client.set_protocol_config(&config);
+    let _ = admin;
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "protocol_fee_game"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1);
+    client.claim_vested_payout(&id, &player1);
+
+    let pot: i128 = 200;
+    let protocol_fee = pot * 500 / 10_000;
+    let net_payout = pot - protocol_fee;
+
+    assert_eq!(token_client.balance(&player1), 900 + net_payout);
+    assert_eq!(token_client.balance(&fee_recipient), protocol_fee);
+}
+
+// #1165 - draw refunds never incur the protocol fee
+#[test]
+fn test_draw_refund_no_fee() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let fee_recipient = Address::generate(&env);
+    let mut config = client.get_protocol_config();
+    config.protocol_fee_bps = 500; // 5%
+    config.fee_recipient = fee_recipient.clone();
+    env.mock_all_auths();
+    client.set_protocol_config(&config);
+    let _ = admin;
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "draw_no_fee_game"),
+        &Platform::ChessDotCom,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Draw);
+    client.claim_vested_payout(&id, &player1);
+    client.claim_vested_payout(&id, &player2);
+
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(token_client.balance(&fee_recipient), 0);
+}
+
 #[test]
 fn test_player2_balance_decreases_after_deposit() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -955,6 +1028,51 @@ fn test_create_match_with_negative_stake_returns_invalid_amount() {
     assert_eq!(result, Err(Ok(Error::InvalidAmount)));
 }
 
+// #1159 - create_match rejects stakes above the configured maximum_stake
+#[test]
+fn test_create_match_rejects_stake_above_maximum() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let mut config = client.get_protocol_config();
+    config.maximum_stake = Some(100);
+    env.mock_all_auths();
+    client.set_protocol_config(&config);
+    let _ = admin;
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &101,
+        &token,
+        &String::from_str(&env, "over_max_stake_game"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+// #1159 - create_match accepts a stake exactly at the configured maximum_stake
+#[test]
+fn test_create_match_accepts_stake_at_maximum() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let mut config = client.get_protocol_config();
+    config.maximum_stake = Some(100);
+    env.mock_all_auths();
+    client.set_protocol_config(&config);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "at_max_stake_game"),
+        &Platform::Lichess,
+    );
+    assert!(result.is_ok(), "stake equal to maximum_stake must be accepted");
+}
+
 #[test]
 fn test_create_match_with_empty_game_id_returns_invalid_game_id() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -1367,7 +1485,7 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.set_match_timeout(&17_280);
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
     env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
@@ -1491,7 +1609,7 @@ fn test_get_match_timeout_returns_default() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let timeout = client.try_get_match_timeout().unwrap().unwrap();
-    assert_eq!(timeout, DEFAULT_MATCH_TIMEOUT_LEDGERS);
+    assert_eq!(timeout, DEFAULT_MATCH_TIMEOUT_SECONDS);
 }
 
 #[test]
@@ -1712,7 +1830,7 @@ fn test_get_match_returns_cancelled_after_expire_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.set_match_timeout(&17_280);
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
     env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
@@ -1926,7 +2044,7 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = token::Client::new(&env, &token);
 
-    client.set_match_timeout(&17_280);
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
     env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
@@ -2139,6 +2257,10 @@ fn test_update_protocol_config() {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
 
     let config = client.get_protocol_config();
@@ -2157,6 +2279,10 @@ fn test_vesting_enforced() {
         cancellation_fee_basis_points: 0,
         treasury: _admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: _admin.clone(),
     });
 
     let id = client.create_match(
