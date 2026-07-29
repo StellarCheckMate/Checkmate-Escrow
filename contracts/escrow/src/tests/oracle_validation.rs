@@ -140,3 +140,58 @@ fn test_oracle_can_submit_results_for_different_matches() {
     assert!(result1.is_ok(), "oracle must submit result for first match");
     assert!(result2.is_ok(), "oracle must submit result for second match");
 }
+
+#[test]
+fn test_get_oracle_address_returns_initial_oracle() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.initialize(&oracle, &admin);
+
+    let stored_oracle: Address = client.get_oracle_address();
+    assert_eq!(stored_oracle, oracle, "get_oracle_address must return initial oracle");
+}
+
+#[test]
+fn test_get_oracle_address_after_update_oracle() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle1 = Address::generate(&env);
+    let oracle2 = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.initialize(&oracle1, &admin);
+    client.set_oracle(&oracle2);
+
+    let stored_oracle: Address = client.get_oracle_address();
+    assert_eq!(
+        stored_oracle, oracle2,
+        "get_oracle_address must return updated oracle"
+    );
+}
+
+#[test]
+fn test_get_oracle_address_uninitialized_contract() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Try to get oracle address before initialization
+    let result = client.try_get_oracle_address();
+    assert!(result.is_err(), "get_oracle_address must fail before initialization");
+}

@@ -2188,6 +2188,22 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)
     }
 
+    /// Return the oracle address currently configured on the contract.
+    ///
+    /// This is a view function that returns the oracle address without
+    /// requiring authentication. It is intended for off-chain clients,
+    /// frontends, and monitoring tools to verify oracle configuration
+    /// without reading raw contract storage.
+    ///
+    /// # Errors
+    /// Returns `Error::Unauthorized` if the contract has not been initialized.
+    pub fn get_oracle_address(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)
+    }
+
     /// Configured match timeout expressed in ledgers, derived from
     /// `ProtocolConfig::match_timeout_seconds` for use by `expire_match`
     /// (which compares against ledger-sequence deltas).
