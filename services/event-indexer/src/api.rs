@@ -38,6 +38,7 @@ use crate::{
     cache::EventCache,
     db::Database,
     models::{AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters, TokenAnalytics},
+    request_id,
     rpc::SorobanRpcClient,
     transactions::{
         SortOrder, TransactionHistoryFilters, TransactionPage, TransactionSortField,
@@ -163,6 +164,8 @@ pub fn build_router(
             get(get_player_transactions),
         )
         .route("/stats", get(get_stats))
+        // Request ID middleware must run first (outermost) to capture all requests
+        .layer(axum::middleware::from_fn(request_id::request_id_middleware))
         // Validation runs before routing dispatches to a handler, so malformed
         // input never reaches the database.
         .layer(axum::middleware::from_fn(validation::validate_request))
