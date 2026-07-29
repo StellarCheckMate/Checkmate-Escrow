@@ -11,6 +11,10 @@ async fn main() -> Result<()> {
     let config = Config::from_env()?;
 
     tracing_subscriber::fmt()
+        .json()
+        .flatten_event(true)
+        .with_current_span(false)
+        .with_span_list(false)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(format!("event_indexer={}", config.log_level).parse()?),
