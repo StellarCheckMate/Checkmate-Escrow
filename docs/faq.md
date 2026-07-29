@@ -51,9 +51,64 @@ Resubmit the result once the oracle is back online. As long as the result is sub
 
 No. Only the configured oracle address can call `submit_result` (or `submit_result_with_oracle_record`). Players don't have authorization. This prevents disputes over who won — the oracle is the single source of truth.
 
+### 9. What happens if the oracle goes offline?
+
+If the oracle service is unavailable when a match ends, players are protected by the **match timeout** mechanism. Here's how it works:
+
+#### Short-term outage (oracle comes back online)
+
+- The oracle service can submit the result as long as the Soroban ledger snapshot containing the match is still available (typically a few hours to days, depending on network settings).
+- Once the oracle resubmits the result, the payout executes automatically.
+- **No funds are at risk** — the escrow holds both stakes until a verified result is submitted.
+
+#### Prolonged outage or oracle never comes back
+
+If the oracle remains offline past the match creation timeout (default: 30 days), players can recover their funds:
+
+1. **Anyone can call `expire_match(match_id)`** after the timeout elapses.
+2. The contract refunds each depositor their stake in full (no penalty).
+3. The match transitions to `Cancelled` state.
+
+**Example timeline:**
+```
+Day 0:  Players create match and deposit stakes
+Day 1:  Game finishes, but oracle is offline
+Day 2:  Oracle comes back — submits result, payout executes ✓
+        (or oracle remains offline)
+Day 30: Timeout elapses (default)
+Day 31: Any player (or anyone else) calls expire_match → stakes refunded
+```
+
+#### How to check timeout status
+
+```bash
+# Get the configured timeout (in ledgers; default 17,280 ≈ 30 days)
+stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match_timeout
+
+# Get a specific match's creation time
+stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match --match_id <ID>
+# Look for created_ledger in the response
+
+# Calculate if expire_match is eligible:
+# current_ledger - created_ledger >= timeout
+```
+
+#### For developers running an oracle service
+
+- **Implement exponential backoff** when retrying result submissions.
+- **Monitor your oracle process** for crashes or network connectivity issues.
+- **Test failover scenarios** — the contract's timeout mechanism is your safety net, but users expect results within minutes/hours, not days.
+- See [docs/oracle.md](oracle.md) for detailed rate limiting, retry strategy, and error handling guidance.
+
+#### For match participants
+
+- **If a match stalls:** Contact the oracle operator through the expected channels (GitHub, email, Discord, etc.) and ask for a status update.
+- **If the oracle is permanently down:** After the timeout, call `expire_match` to recover your stake. You'll get your deposit back even if the match never completes.
+- The timeout is a guaranteed **circuit breaker** — your funds cannot remain locked indefinitely.
+
 ## Testnet vs. Mainnet
 
-### 9. How do I test on testnet without real money?
+### 10. How do I test on testnet without real money?
 
 1. Use `stellar keys generate` to create a testnet account.
 2. Fund it with free testnet tokens via the [Stellar Testnet Faucet](https://laboratory.stellar.org/#account-creator?network=testnet).
@@ -62,7 +117,7 @@ No. Only the configured oracle address can call `submit_result` (or `submit_resu
 
 Testnet tokens have zero real value — no financial risk.
 
-### 10. What's the risk difference between testnet and mainnet?
+### 11. What's the risk difference between testnet and mainnet?
 
 - **Testnet**: Tokens are test-only. Contracts are frequently updated. Use for learning and integration testing.
 - **Mainnet**: Real tokens with real value. Contract code is audited and stable. Players risk actual funds. Always verify the contract address before sending real money.
@@ -71,11 +126,11 @@ Check `STELLAR_NETWORK` in `.env` to confirm which network you're on. Testnet RP
 
 ## Tokens & Allowlisting
 
-### 11. Which tokens can I use?
+### 12. Which tokens can I use?
 
 By default, any Stellar token address is accepted. However, once the admin calls `add_allowed_token` with at least one token, the contract **only** accepts tokens on the allowlist. Call `get_allowed_tokens()` to see which tokens are currently allowed.
 
-### 12. What if I try to create a match with a non-allowed token?
+### 13. What if I try to create a match with a non-allowed token?
 
 You'll get [error code #17](error-codes.md#code-17-tokennotallowed). Ask the admin to either:
 - Add your token via `add_allowed_token`, or
@@ -83,7 +138,7 @@ You'll get [error code #17](error-codes.md#code-17-tokennotallowed). Ask the adm
 
 ## Administration
 
-### 13. What can the admin do?
+### 14. What can the admin do?
 
 The admin can:
 - Add/remove allowed tokens
@@ -94,7 +149,7 @@ The admin can:
 
 The admin cannot directly cancel matches or refund stuck stakes — only `expire_match`, `cancel_match`, or player actions do that.
 
-### 14. How do I transfer admin rights safely?
+### 15. How do I transfer admin rights safely?
 
 Use a two-step process:
 1. Current admin calls `propose_admin(new_admin_address)`.
@@ -104,7 +159,7 @@ This prevents mistakes like typos in the new admin address. If the new admin rej
 
 ## Errors & Troubleshooting
 
-### 15. I got error #4 (Unauthorized). What now?
+### 16. I got error #4 (Unauthorized). What now?
 
 Either:
 1. You're signing with the wrong keypair (not the admin, oracle, or depositing player).

@@ -20,7 +20,10 @@ fn enable_stablecoin_mode(client: &EscrowContractClient, admin: &Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: true,
-        minimum_stake: 1,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
 }
 
@@ -202,7 +205,10 @@ fn test_stablecoin_mode_can_be_toggled_off() {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
-        minimum_stake: 1,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
 
     // Same token should now succeed.

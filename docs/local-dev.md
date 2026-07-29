@@ -69,6 +69,77 @@ This builds the `event-indexer` service from `services/event-indexer/Dockerfile`
 
 ## Configuration
 
+### environments.toml
+
+`environments.toml` defines the named networks available to the Stellar CLI and all project scripts. Select a network by setting `STELLAR_NETWORK` in your `.env` file or by passing `--network <name>` to any CLI command.
+
+See also the [inline comments in `environments.toml`](../environments.toml) for a quick reference alongside the actual values.
+
+#### Fields
+
+| Field | Required | Description |
+|---|---|---|
+| `rpc_url` | Yes | HTTP(S) endpoint of the Soroban RPC node. Used by the CLI to submit transactions and query contract state. |
+| `network_passphrase` | Yes | Unique string identifying the Stellar network. Every transaction is signed against this value — it must match exactly what the target node expects, or the transaction is rejected. |
+
+#### Built-in networks
+
+**`[testnet]`**
+
+The Stellar public testnet. This is the right choice for development and CI. Test XLM is available for free from [Friendbot](https://friendbot.stellar.org/?addr=<your-address>) so you can deploy and interact with contracts without spending real funds.
+
+```toml
+rpc_url            = "https://soroban-testnet.stellar.org"
+network_passphrase = "Test SDF Network ; September 2015"
+```
+
+**`[mainnet]`**
+
+The Stellar public mainnet. Use only for production deployments. Transactions cost real XLM — always validate contracts thoroughly on testnet first.
+
+```toml
+rpc_url            = "https://soroban-mainnet.stellar.org"
+network_passphrase = "Public Global Stellar Network ; September 2015"
+```
+
+**`[futurenet]`**
+
+A preview network for upcoming Stellar protocol features. May be unstable. Use when you specifically need to test functionality not yet promoted to testnet.
+
+```toml
+rpc_url            = "https://rpc-futurenet.stellar.org"
+network_passphrase = "Test SDF Future Network ; October 2022"
+```
+
+**`[standalone]`**
+
+A fully isolated local node with no external connectivity. Ideal for fast, offline development and deterministic testing. Start it with:
+
+```bash
+stellar network start local
+# or via Docker:
+docker run --rm -it -p 8000:8000 stellar/quickstart:latest --standalone
+```
+
+```toml
+rpc_url            = "http://localhost:8000/soroban/rpc"
+network_passphrase = "Standalone Network ; February 2017"
+```
+
+#### Adding a custom network
+
+Append a new section to `environments.toml` and use it immediately:
+
+```toml
+[my_network]
+rpc_url            = "https://my-rpc-endpoint"
+network_passphrase = "My Custom Network ; YYYY"
+```
+
+```bash
+stellar contract deploy --network my_network ...
+```
+
 ### Environment variables
 
 Copy the example environment file and configure as needed:
@@ -124,6 +195,68 @@ stellar contract deploy \
   --source deployer \
   --network standalone
 ```
+
+## Running the Oracle Service Locally
+
+The oracle service (`oracle-service/`) polls active matches, checks their result on Lichess/Chess.com, and submits the verified result on-chain via Soroban RPC. It reads all configuration from environment variables (see `oracle-service/src/config.rs`) and, in debug builds, auto-loads a `.env` file from the current directory.
+
+### Required environment variables
+
+| Variable | Required | Description |
+|----------|----------|--------------|
+| `STELLAR_RPC_URL` | yes | Soroban RPC endpoint, e.g. `https://soroban-testnet.stellar.org`. |
+| `STELLAR_NETWORK` | no | `testnet` (default), `mainnet`, `futurenet`, or `standalone` — used to derive the network passphrase. |
+| `STELLAR_NETWORK_PASSPHRASE` | no | Overrides the passphrase derived from `STELLAR_NETWORK`. |
+| `CONTRACT_ESCROW` | yes | Contract ID of the deployed escrow contract. |
+| `CONTRACT_ORACLE` | yes | Contract ID of the deployed oracle contract. |
+| `ORACLE_SIGNING_KEY` | yes | Hex-encoded 32-byte ed25519 seed the oracle signs transactions with. **Never commit a real key** — generate a throwaway keypair for local dev. |
+| `LICHESS_API_TOKEN` | no | Personal Lichess API token; only needed for higher rate limits. |
+| `CHESSDOTCOM_API_KEY` | no | Reserved for future Chess.com API auth. |
+| `ORACLE_POLL_INTERVAL_SECS` | no | Poller wake interval, in seconds (default `30`). |
+| `ORACLE_MAX_RETRIES` | no | Max retry attempts before an entry is dead-lettered (default `5`). |
+| `ORACLE_RETRY_BASE_DELAY_SECS` | no | Base delay before the first retry; doubles each attempt (default `10`). |
+| `ORACLE_QUEUE_DIR` | no | Directory for the pending/dead-letter queue files (default `./oracle-queue`). |
+
+### Sample `.env` for local oracle development
+
+Create `oracle-service/.env`:
+
+```env
+STELLAR_RPC_URL=https://soroban-testnet.stellar.org
+STELLAR_NETWORK=testnet
+CONTRACT_ESCROW=<your-deployed-escrow-contract-id>
+CONTRACT_ORACLE=<your-deployed-oracle-contract-id>
+
+# Throwaway dev seed only — never use a mainnet key here.
+ORACLE_SIGNING_KEY=0101010101010101010101010101010101010101010101010101010101010101
+
+ORACLE_POLL_INTERVAL_SECS=10
+ORACLE_MAX_RETRIES=5
+ORACLE_RETRY_BASE_DELAY_SECS=5
+ORACLE_QUEUE_DIR=./oracle-queue
+```
+
+### Starting the service
+
+```bash
+cd oracle-service
+cargo run
+```
+
+This starts three concurrent tasks: a health/metrics HTTP endpoint on `http://localhost:8000` (`/health`, `/metrics`), a health-check poller, and the pipeline poller that watches pending matches and submits results on-chain.
+
+### Testing against a mock Lichess/Chess.com server
+
+Hitting the real Lichess/Chess.com APIs on every local run is slow and rate-limited. The oracle clients (`LichessClient`, `ChessComClient`) accept a configurable `api_base`, and the test suite already spins up [`wiremock`](https://docs.rs/wiremock) servers that stand in for both APIs — this is the supported way to exercise oracle result-verification logic locally without external network calls:
+
+```bash
+cd oracle-service
+cargo test --test lichess_client_unit
+cargo test --test chess_com_client_unit
+cargo test --test pipeline_integration   # mocks both the chess API and Soroban RPC
+```
+
+Each test starts a `MockServer`, registers expected requests/responses (e.g. a completed game with a known winner), and constructs the client against the mock's local address instead of the real API host. Use these tests as a template if you need to manually reproduce a specific Lichess/Chess.com response shape — copy the `Mock::given(...)` setup from `oracle-service/tests/lichess_client_unit.rs` or `chess_com_client_unit.rs` into a scratch test to iterate against it.
 
 ## Project Structure
 
