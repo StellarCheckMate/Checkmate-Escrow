@@ -435,6 +435,20 @@ impl EscrowContract {
             .unwrap_or(false)
     }
 
+    /// Retrieve all tokens currently on the allowlist.
+    ///
+    /// Returns a vector of token addresses in the order they were added.
+    /// Returns an empty vector if no tokens have been added (open mode).
+    ///
+    /// This function enables frontends and clients to show valid token options
+    /// for match creation without requiring off-chain indexing.
+    pub fn get_allowed_tokens(env: Env) -> soroban_sdk::Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
     /// Register a stablecoin issuer — admin only.
     ///
     /// Any Stellar token whose issuer account matches a registered issuer is
@@ -1024,6 +1038,7 @@ impl EscrowContract {
         );
 
         Self::record_snapshot(&env, &m, SnapshotReason::Created);
+        Self::record_platform_match_created(&env, stake_amount);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -1210,6 +1225,7 @@ impl EscrowContract {
         );
 
         Self::record_snapshot(&env, &m, SnapshotReason::Created);
+        Self::record_platform_match_created(&env, stake_amount);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -1371,6 +1387,7 @@ impl EscrowContract {
         );
 
         Self::record_snapshot(&env, &m, SnapshotReason::Created);
+        Self::record_platform_match_created(&env, stake_amount);
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("created")),
@@ -1518,6 +1535,7 @@ impl EscrowContract {
 
         Self::record_completed_match(env, &m.player1);
         Self::record_completed_match(env, &m.player2);
+        Self::record_platform_payout(env);
 
         env.storage()
             .persistent()
@@ -2215,6 +2233,74 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)
     }
 
+    // ── Platform Statistics (for analytics without full indexing) ─────────────
+
+    /// Retrieve platform-wide aggregated statistics.
+    ///
+    /// Returns cumulative counters for matches created, total volume staked,
+    /// and total successful payouts. These statistics are maintained on-chain
+    /// to enable off-chain analytics without requiring full event indexing.
+    ///
+    /// Returns a `PlatformStats` struct with fields:
+    /// - `total_matches`: Total number of matches created across all time.
+    /// - `total_volume`: Cumulative stake amount (in base token units) across all matches.
+    /// - `total_payouts`: Total number of successful payouts (matches completed with winner determination).
+    pub fn get_platform_stats(env: Env) -> PlatformStats {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Stats)
+            .unwrap_or_else(|| PlatformStats {
+                total_matches: 0,
+                total_volume: 0,
+                total_payouts: 0,
+            })
+    }
+
+    /// Internal helper to increment platform statistics. Called from `create_match`.
+    fn record_platform_match_created(env: &Env, stake_amount: i128) {
+        let mut stats: PlatformStats = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Stats)
+            .unwrap_or_else(|| PlatformStats {
+                total_matches: 0,
+                total_volume: 0,
+                total_payouts: 0,
+            });
+
+        stats.total_matches = stats.total_matches.saturating_add(1);
+        stats.total_volume = stats.total_volume.saturating_add(stake_amount);
+
+        env.storage().persistent().set(&DataKey::Stats, &stats);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Stats,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    }
+
+    /// Internal helper to record a payout in platform statistics. Called from `submit_result`.
+    fn record_platform_payout(env: &Env) {
+        let mut stats: PlatformStats = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Stats)
+            .unwrap_or_else(|| PlatformStats {
+                total_matches: 0,
+                total_volume: 0,
+                total_payouts: 0,
+            });
+
+        stats.total_payouts = stats.total_payouts.saturating_add(1);
+
+        env.storage().persistent().set(&DataKey::Stats, &stats);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Stats,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    }
+
     /// Configured match timeout expressed in ledgers, derived from
     /// `ProtocolConfig::match_timeout_seconds` for use by `expire_match`
     /// (which compares against ledger-sequence deltas).
@@ -2639,6 +2725,7 @@ impl EscrowContract {
 
         Self::record_completed_match(&env, &m.player1);
         Self::record_completed_match(&env, &m.player2);
+        Self::record_platform_payout(&env);
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -3045,6 +3132,7 @@ impl EscrowContract {
 
         Self::record_completed_match(&env, &m.player1);
         Self::record_completed_match(&env, &m.player2);
+        Self::record_platform_payout(&env);
 
         env.storage()
             .persistent()

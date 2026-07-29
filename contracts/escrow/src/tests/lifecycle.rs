@@ -3,6 +3,7 @@ use soroban_sdk::testutils::{
     storage::{Instance as _, Persistent as _},
     Address as _, Ledger as _,
 };
+use crate::tests::helpers::*;
 
 #[test]
 fn test_is_initialized_false_before_initialize_and_true_after() {
@@ -2533,5 +2534,87 @@ fn test_expire_match_before_and_after_timeout() {
     assert_eq!(
         p2_balance, 1000,
         "player2's balance must be unchanged (no deposit was made)"
+    );
+}
+
+// ── Test for expire_match timeout validation ────────────────────────────────
+
+/// Test that expire_match rejects calls made before the configured timeout has elapsed.
+/// This ensures the timeout guard is properly enforced.
+#[test]
+fn test_expire_match_rejects_before_timeout() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create a match in Pending state
+    let match_id = create_default_match(&client, &env, &player1, &player2, &token, "expire_timeout_test");
+
+    // The match is created at the current ledger sequence
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Pending, "match should start in Pending state");
+
+    // Get the current ledger for reference
+    let start_ledger = env.ledger().sequence();
+
+    // Attempt to expire the match immediately (before any time has passed)
+    let result = client.try_expire_match(&match_id);
+
+    // Should fail because the timeout has not elapsed
+    assert!(
+        result.is_err(),
+        "expire_match must reject calls before timeout expires"
+    );
+
+    // Verify the error is MatchNotExpired
+    match result {
+        Err(Ok(err)) => {
+            assert_eq!(
+                err, Error::MatchNotExpired,
+                "expected MatchNotExpired error, got {:?}",
+                err
+            );
+        }
+        other => panic!("unexpected result: {:?}", other),
+    }
+
+    // Verify the match state is still Pending (unchanged)
+    let m_after = client.get_match(&match_id);
+    assert_eq!(
+        m_after.state, MatchState::Pending,
+        "match must remain in Pending state after failed expire_match"
+    );
+}
+
+/// Test that expire_match succeeds once the timeout threshold is reached.
+#[test]
+fn test_expire_match_succeeds_after_timeout() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create a match in Pending state
+    let match_id = create_default_match(&client, &env, &player1, &player2, &token, "expire_success_test");
+
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Pending);
+
+    // Get the match timeout from protocol config
+    let config = client.get_protocol_config();
+    let timeout_seconds = config.match_timeout_seconds;
+    let timeout_ledgers = ((timeout_seconds / 5) as u32) + 1; // SECONDS_PER_LEDGER = 5
+
+    // Advance the ledger beyond the timeout threshold
+    env.ledger().with_sequence(|_| {
+        m.created_ledger + timeout_ledgers + 1
+    });
+
+    // Now expire_match should succeed
+    let result = client.try_expire_match(&match_id);
+    assert!(result.is_ok(), "expire_match should succeed after timeout");
+
+    // Verify the match state is now Cancelled
+    let m_after = client.get_match(&match_id);
+    assert_eq!(
+        m_after.state, MatchState::Cancelled,
+        "match must transition to Cancelled after expire_match"
     );
 }
