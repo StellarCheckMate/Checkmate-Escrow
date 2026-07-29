@@ -39,7 +39,7 @@ rand = "0.8"
 # Base64 for XDR encoding over the wire
 base64 = "0.22"
 # SHA-256 hashing for Stellar transaction signing
-sha2 = "0.10"
+sha2 = "0.11"
 
 contracts-oracle = { package = "oracle", path = "../contracts/oracle" }
 
