@@ -118,6 +118,13 @@ pub struct PaginationQuery {
     pub offset: Option<i64>,
 }
 
+#[derive(Deserialize)]
+pub struct PlayerMatchesQuery {
+    pub status: Option<MatchStatus>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
 /// Transaction-history query parameters.
 ///
 /// Every field is received as a raw string so the validators can produce a
@@ -157,7 +164,9 @@ pub fn build_router(
         .route("/events", get(get_events))
         .route("/events/:match_id", get(get_match_events))
         .route("/matches", get(get_matches))
+        .route("/matches/:match_id", get(get_match_by_id))
         .route("/match/:match_id", get(get_match_info))
+        .route("/players/:address/matches", get(get_player_matches))
         .route(
             "/transactions/player/:player_address",
             get(get_player_transactions),
@@ -419,6 +428,112 @@ async fn get_match_info(
     }
 }
 
+/// `GET /matches/:match_id` – single match lookup endpoint for frontends.
+///
+/// Returns the full match object including current state.
+/// Returns 404 with descriptive message if the match does not exist.
+///
+/// Cached for 5 seconds and invalidated eagerly on any contract event for this
+/// match, so the TTL only bounds staleness for matches nothing is happening to.
+/// Only successful lookups are cached — a `404` for a match that is about to be
+/// indexed must not be sticky.
+async fn get_match_by_id(
+    State(state): State<AppState>,
+    Path(match_id): Path<u64>,
+) -> (StatusCode, Json<ApiResponse<MatchInfo>>) {
+    let cache_key = api_cache::match_key(match_id);
+
+    if let Some(cached) = state.api_cache.get_json::<MatchInfo>(&cache_key).await {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(cached),
+                error: None,
+            }),
+        );
+    }
+
+    match state.db.build_match_info(match_id).await {
+        Ok(Some(match_info)) => {
+            state
+                .api_cache
+                .set_json(&cache_key, &match_info, api_cache::match_ttl())
+                .await;
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(match_info),
+                    error: None,
+                }),
+            )
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Match {} not found", match_id)),
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /players/:address/matches` – player match history with filtering and pagination.
+///
+/// Returns a list of matches the player participated in, optionally filtered by status.
+/// Supports limit and offset for pagination.
+///
+/// Query parameters:
+/// - `status` (optional): Filter by match status (pending, active, completed, cancelled, expired)
+/// - `limit` (optional): Number of matches to return (default: 100, max: 1000)
+/// - `offset` (optional): Pagination offset (default: 0)
+async fn get_player_matches(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+    TypedQuery(query): TypedQuery<PlayerMatchesQuery>,
+) -> (StatusCode, Json<ApiResponse<PlayerMatchesResponse>>) {
+    let limit = query.limit.unwrap_or(100).min(1000).max(1);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    match state
+        .db
+        .get_matches_by_player(&address, query.status.as_ref(), limit, offset)
+        .await
+    {
+        Ok((matches, total)) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(PlayerMatchesResponse {
+                    matches,
+                    total,
+                    limit,
+                    offset,
+                }),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
 // ── Transaction history ───────────────────────────────────────────────────────
 
 /// `GET /transactions/player/:player_address` – a player's financial history.
@@ -543,6 +658,14 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
 pub struct Stats {
     pub total_events: i64,
     pub cache_size: usize,
+}
+
+#[derive(Serialize)]
+pub struct PlayerMatchesResponse {
+    pub matches: Vec<MatchInfo>,
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
 }
 
 /// `GET /stats` – service-level statistics.

@@ -426,6 +426,71 @@ impl Database {
         Ok(matches)
     }
 
+    /// Get matches for a specific player with optional status filter and pagination.
+    ///
+    /// Returns distinct matches where the player participated (as player1 or player2),
+    /// optionally filtered by status, with support for limit and offset pagination.
+    pub async fn get_matches_by_player(
+        &self,
+        player_address: &str,
+        status: Option<&MatchStatus>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<MatchInfo>, i64)> {
+        let conn = self.read_pool.get().await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
+
+        // Build the WHERE clause for status filtering
+        let status_clause = if let Some(s) = status {
+            let status_str = match s {
+                MatchStatus::Pending => "pending",
+                MatchStatus::Active => "active",
+                MatchStatus::Completed => "completed",
+                MatchStatus::Cancelled => "cancelled",
+                MatchStatus::Expired => "expired",
+            };
+            format!(" AND status = '{}'", status_str)
+        } else {
+            String::new()
+        };
+
+        // Get total count
+        let count_query = format!(
+            "SELECT COUNT(DISTINCT match_id) FROM events
+             WHERE (player1 = $1 OR player2 = $1){}",
+            status_clause
+        );
+        let total: i64 = conn
+            .query_one(count_query.as_str(), &[&player_address])
+            .await
+            .map_err(|e| anyhow!("get_matches_by_player (count) failed: {}", e))?
+            .get(0);
+
+        // Get paginated match IDs
+        let query = format!(
+            "SELECT DISTINCT match_id FROM events
+             WHERE (player1 = $1 OR player2 = $1){}
+             ORDER BY match_id DESC
+             LIMIT $2 OFFSET $3",
+            status_clause
+        );
+        let match_ids: Vec<i64> = conn
+            .query(query.as_str(), &[&player_address, &limit, &offset])
+            .await
+            .map_err(|e| anyhow!("get_matches_by_player failed: {}", e))?
+            .iter()
+            .map(|r| r.get::<_, i64>(0))
+            .collect();
+
+        let mut matches = Vec::new();
+        for id in match_ids {
+            if let Some(info) = self.build_match_info(id as u64).await? {
+                matches.push(info);
+            }
+        }
+        Ok((matches, total))
+    }
+
     // ── Transaction history ───────────────────────────────────────────────
 
     /// Query a player's financial transaction history.
