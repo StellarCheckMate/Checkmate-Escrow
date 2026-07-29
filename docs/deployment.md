@@ -152,14 +152,51 @@ Before launching on mainnet, verify each item below. These checks are intended t
 
 ## Verifying Initialization
 
-After initialization, confirm the stored admin and oracle addresses:
+### Automated Verification
+
+After initialization, use the automated verification script to confirm the deployment is functioning correctly:
+
+```bash
+./scripts/verify-deployment.sh <network> <escrow_contract_id> <oracle_contract_id>
+```
+
+**Example:**
+```bash
+./scripts/verify-deployment.sh testnet CBQS4IYHZS5Z7LCLTTQ7RIFTDBZTUCNBCBF7STJEDSTEVEYK2QY5OXS \
+  CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4
+```
+
+**What it checks:**
+- ✅ Escrow contract is deployed and responds to queries
+- ✅ Escrow admin address is set (not null)
+- ✅ Escrow oracle address is set and points to the oracle contract
+- ✅ Escrow match timeout is configured
+- ✅ Escrow can list pending and active matches
+- ✅ Oracle contract is deployed and responds to queries
+- ✅ Oracle admin address is set (not null)
+
+**Exit codes:**
+- `0` — All checks passed; deployment is ready for use
+- `1` — One or more checks failed; see error output and troubleshooting section below
+
+The script will exit with status 1 if any check fails, making it suitable for automated CI/CD pipelines.
+
+### Manual Verification
+
+For granular verification or debugging, manually inspect contract state:
 
 ```bash
 # Escrow: read admin
-stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_admin
+stellar contract invoke --id $ESCROW_CONTRACT_ID --network <network> -- get_admin
+
+# Escrow: read oracle address
+stellar contract invoke --id $ESCROW_CONTRACT_ID --network <network> -- get_oracle
+
+# Oracle: read admin
+stellar contract invoke --id $ORACLE_CONTRACT_ID --network <network> -- get_admin
 
 # Oracle: verify a result can be submitted (requires oracle admin auth)
-stellar contract invoke --id $ORACLE_CONTRACT_ID \
+stellar contract invoke --id $ORACLE_CONTRACT_ID --network <network> \
   --source <ORACLE_ADMIN_KEYPAIR> \
   -- has_result_admin --match_id 0
 ```
