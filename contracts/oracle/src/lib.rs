@@ -1,5 +1,21 @@
 #![no_std]
 
+/// Oracle Contract for Checkmate — verification and consensus for chess match results.
+///
+/// For a comprehensive reference of all error codes (their numeric values, causes, and recovery
+/// actions), see [`Error Codes Reference`](../../docs/error-codes.md).
+///
+/// # Error Codes Quick Reference
+///
+/// Every function that returns a `Result<T, Error>` surfaces errors as numeric discriminants.
+/// Common errors:
+/// - `#1` — `Unauthorized` — Caller is not the configured admin or contract not initialized
+/// - `#2` — `AlreadySubmitted` — Result already recorded for this match
+/// - `#3` — `ResultNotFound` — No result stored for this match
+/// - `#5` — `ContractPaused` — Contract paused; submissions blocked
+/// - `#9` — `RateLimitExceeded` — Oracle exceeded hourly/daily submission quota
+///
+/// See [`docs/error-codes.md`](../../docs/error-codes.md) for all 21 error codes with causes and recovery actions.
 mod errors;
 pub mod types;
 

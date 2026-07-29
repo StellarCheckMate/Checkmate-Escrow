@@ -1,5 +1,15 @@
 use soroban_sdk::contracterror;
 
+/// Escrow contract error codes and variants.
+///
+/// Every error is represented as a small integer (`u32`) discriminant. When a contract call fails,
+/// the CLI/SDK returns something like `Error(Contract, #4)`.
+///
+/// **For the complete error reference with causes, recovery actions, and examples,**
+/// **see [`docs/error-codes.md`](../../../docs/error-codes.md).**
+///
+/// This document is kept in lockstep with this enum — if you add or remove a variant,
+/// update `docs/error-codes.md` in the same PR.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
