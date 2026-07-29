@@ -195,3 +195,33 @@ fn test_get_oracle_address_uninitialized_contract() {
     let result = client.try_get_oracle_address();
     assert!(result.is_err(), "get_oracle_address must fail before initialization");
 }
+
+#[test]
+fn test_submit_result_rejects_non_oracle() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_with_funded_match();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Generate a random address that is NOT the oracle
+    let random_actor = Address::generate(&env);
+    
+    // Verify the random actor is not the oracle
+    let stored_oracle: Address = client.get_oracle_address();
+    assert_ne!(
+        random_actor, stored_oracle,
+        "test setup error: random_actor should not be the oracle"
+    );
+
+    // Attempt to submit result with the non-oracle address
+    let result = client.try_submit_result(&0, &random_actor, &1);
+
+    // Assert the call is rejected with an authorization error
+    assert!(result.is_err(), "submit_result must be rejected for non-oracle caller");
+    
+    // Verify the error is specifically an unauthorized error
+    let err = result.unwrap_err();
+    assert_eq!(
+        err,
+        Error::Unauthorized,
+        "submit_result by non-oracle should return Unauthorized error"
+    );
+}
