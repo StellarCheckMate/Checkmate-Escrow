@@ -1,5 +1,7 @@
 # Checkmate-Escrow — Competitive Chess Betting on Stellar
 
+[![Code Coverage](https://github.com/meetdarc-tech/Checkmate-Escrow/actions/workflows/coverage.yml/badge.svg)](https://github.com/meetdarc-tech/Checkmate-Escrow/actions/workflows/coverage.yml)
+
 A trustless chess wagering platform built on Stellar Soroban smart contracts. Players stake tokens before a match, and the winner is automatically paid out the moment the game ends — no middleman, no delays, no trust required.
 
 
