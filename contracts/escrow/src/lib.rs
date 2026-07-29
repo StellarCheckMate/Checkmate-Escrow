@@ -91,6 +91,20 @@ pub const DEFAULT_QUORUM_BASIS_POINTS: u32 = 2000;
 /// Both formats fit well within this limit.
 const MAX_GAME_ID_LEN: u32 = 64;
 
+/// Exact game ID length required for Lichess (8 alphanumeric characters).
+const LICHESS_GAME_ID_LEN: u32 = 8;
+
+/// Minimum/maximum game ID length accepted for Chess.com (numeric string).
+const CHESS_COM_GAME_ID_MIN_LEN: u32 = 7;
+const CHESS_COM_GAME_ID_MAX_LEN: u32 = 12;
+
+/// Default minimum `stake_amount` accepted by `create_match` and friends
+/// when no admin override has been configured via `set_minimum_stake`.
+/// Kept at `1` (the pre-existing implicit floor from the `stake_amount > 0`
+/// check) so this ships without silently invalidating existing low-stake
+/// matches/tests; admins can raise it with `set_minimum_stake`.
+pub const DEFAULT_MINIMUM_STAKE: i128 = 1;
+
 /// Completed-match thresholds for unlocking progressively higher stake bands.
 const SILVER_MIN_COMPLETED_MATCHES: u32 = 3;
 const GOLD_MIN_COMPLETED_MATCHES: u32 = 6;
@@ -787,22 +801,61 @@ impl EscrowContract {
         Ok(fee)
     }
 
+    /// Validate that `game_id` matches the format expected for `platform`.
+    ///
+    /// - Lichess: exactly 8 ASCII alphanumeric characters.
+    /// - Chess.com: 7–12 ASCII digits.
+    ///
+    /// Also enforces the shared non-empty / `MAX_GAME_ID_LEN` bound before
+    /// applying the platform-specific check.
+    fn validate_game_id_format(game_id: &String, platform: &Platform) -> Result<(), Error> {
+        let len = game_id.len();
+        if len == 0 || len > MAX_GAME_ID_LEN {
+            return Err(Error::InvalidGameId);
+        }
+
+        let mut buf = [0u8; MAX_GAME_ID_LEN as usize];
+        let slice = &mut buf[..len as usize];
+        game_id.copy_into_slice(slice);
+
+        match platform {
+            Platform::Lichess => {
+                if len != LICHESS_GAME_ID_LEN || !slice.iter().all(|b| b.is_ascii_alphanumeric()) {
+                    return Err(Error::InvalidGameId);
+                }
+            }
+            Platform::ChessDotCom => {
+                if len < CHESS_COM_GAME_ID_MIN_LEN
+                    || len > CHESS_COM_GAME_ID_MAX_LEN
+                    || !slice.iter().all(|b| b.is_ascii_digit())
+                {
+                    return Err(Error::InvalidGameId);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create a new match. Both players must call `deposit` before the game starts.
     ///
     /// # Parameters
-    /// - `game_id`: The platform-specific game identifier. Must be ≤ 64 bytes.
-    ///   - **Lichess**: 8-character alphanumeric string (e.g. `"abcd1234"`).
+    /// - `game_id`: The platform-specific game identifier, validated against `platform`.
+    ///   - **Lichess**: exactly 8 alphanumeric characters (e.g. `"abcd1234"`).
     ///     Taken from the game URL: `https://lichess.org/<game_id>`
-    ///   - **Chess.com**: numeric string, typically 7–12 digits (e.g. `"123456789"`).
+    ///   - **Chess.com**: 7–12 numeric digits (e.g. `"123456789"`).
     ///     Taken from the game URL: `https://www.chess.com/game/live/<game_id>`
-    ///   Passing an ID from the wrong platform or a malformed ID will not be
-    ///   rejected on-chain, but the oracle will fail to verify the result.
+    ///   An ID that doesn't match its platform's format is rejected at
+    ///   creation time rather than failing later at oracle result-submission.
     /// - `platform`: Must match the platform the `game_id` was issued by.
     ///   Use `Platform::Lichess` or `Platform::ChessDotCom` accordingly.
     ///
     /// # Errors
-    /// Returns `Error::InvalidGameId` if `game_id` exceeds `MAX_GAME_ID_LEN` (64 bytes).
+    /// Returns `Error::InvalidGameId` if `game_id` is empty, exceeds `MAX_GAME_ID_LEN`
+    /// (64 bytes), or doesn't match the format expected for `platform`.
     /// Returns `Error::DuplicateGameId` if the same `game_id` has already been used.
+    /// Returns `Error::InvalidAmount` if `stake_amount` is below the configured
+    /// `minimum_stake` (see `set_minimum_stake`).
     pub fn create_match(
         env: Env,
         player1: Address,
@@ -840,7 +893,7 @@ impl EscrowContract {
             return Err(Error::NotStablecoin);
         }
 
-        if stake_amount <= 0 {
+        if stake_amount <= 0 || stake_amount < protocol_cfg.minimum_stake {
             return Err(Error::InvalidAmount);
         }
         if let Some(max_stake) = protocol_cfg.maximum_stake {
@@ -850,9 +903,7 @@ impl EscrowContract {
         }
         Self::require_player_tier_for_stake(&env, &player1, stake_amount)?;
         Self::require_player_tier_for_stake(&env, &player2, stake_amount)?;
-        if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
-            return Err(Error::InvalidGameId);
-        }
+        Self::validate_game_id_format(&game_id, &platform)?;
 
         // Reject if either player is invalid
         if player1 == player2 {
@@ -1009,7 +1060,7 @@ impl EscrowContract {
             }
         }
 
-        if stake_amount <= 0 || rate <= 0 {
+        if stake_amount <= 0 || rate <= 0 || stake_amount < protocol_cfg.minimum_stake {
             return Err(Error::InvalidAmount);
         }
         if let Some(max_stake) = protocol_cfg.maximum_stake {
@@ -1191,7 +1242,8 @@ impl EscrowContract {
             return Err(Error::TokenNotAllowed);
         }
 
-        if stake_amount <= 0 {
+        let protocol_cfg = Self::get_config(&env);
+        if stake_amount <= 0 || stake_amount < protocol_cfg.minimum_stake {
             return Err(Error::InvalidAmount);
         }
         if let Some(max_stake) = Self::get_config(&env).maximum_stake {
@@ -1201,9 +1253,7 @@ impl EscrowContract {
         }
         Self::require_player_tier_for_stake(&env, &player1, stake_amount)?;
         Self::require_player_tier_for_stake(&env, &player2, stake_amount)?;
-        if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
-            return Err(Error::InvalidGameId);
-        }
+        Self::validate_game_id_format(&game_id, &platform)?;
 
         if player1 == player2 {
             return Err(Error::InvalidPlayers);
@@ -3679,6 +3729,64 @@ impl EscrowContract {
         }
 
         Ok(page)
+    }
+
+    /// Return a page of completed or cancelled matches, newest first.
+    ///
+    /// Pass `player` to restrict the history to matches involving that
+    /// address (as either `player1` or `player2`); pass `None` for the
+    /// full protocol-wide history. `offset`/`limit` paginate over the
+    /// filtered result set, not over the raw match ID range.
+    pub fn get_match_history(
+        env: Env,
+        player: Option<Address>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        let mut matches = soroban_sdk::vec![&env];
+        if limit == 0 {
+            return Ok(matches);
+        }
+
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+
+        let mut skipped = 0u32;
+        let mut added = 0u32;
+
+        for match_id in (0..count).rev() {
+            let Some(m) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
+            else {
+                continue;
+            };
+
+            if m.state != MatchState::Completed && m.state != MatchState::Cancelled {
+                continue;
+            }
+            if let Some(ref p) = player {
+                if &m.player1 != p && &m.player2 != p {
+                    continue;
+                }
+            }
+
+            if skipped < offset {
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            matches.push_back(m);
+            added = added.saturating_add(1);
+            if added >= limit {
+                break;
+            }
+        }
+
+        Ok(matches)
     }
 
     /// Update the oracle address — admin only.
