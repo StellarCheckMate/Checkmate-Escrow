@@ -160,7 +160,10 @@ Prefer to learn by watching or testing yourself?
 - [FAQ](docs/faq.md) — common questions and answers
 - [Glossary](docs/glossary.md) — key terms (escrow, oracle, match states, Soroban, wave-ready, and more) for new contributors
 - [Architecture Overview](docs/architecture.md)
-- [Oracle Design](docs/oracle.md)
+- [Oracle Design](docs/oracle.md) — comprehensive oracle documentation covering result verification, consensus, and platform integration:
+  - [Lichess Integration](docs/oracle.md#lichess-integration) — API setup, game ID format, result mapping
+  - [Chess.com Integration](docs/oracle.md#chess-com-integration) — API key setup, rate limits, result field mapping, error handling
+  - [Platform Comparison Table](docs/oracle.md#platform-api-comparison-lichess-vs-chessdotcom) — Lichess vs Chess.com API differences
 - [WebSocket API](docs/websocket-api.md) — real-time match event protocol (protocol v1), connection lifecycle, subscription model, React hook
 - [Threat Model & Security](docs/security.md)
 - [Balance-Privacy Model](docs/privacy-model.md) — what the balance-snapshot APIs hide from non-admins, and what they don't
