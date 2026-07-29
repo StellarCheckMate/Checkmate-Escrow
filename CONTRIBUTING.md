@@ -207,6 +207,12 @@ We use a shared label taxonomy to keep issue and PR triage consistent. See [docs
 - Mock external dependencies
 - Verify events are emitted correctly
 
+For a comprehensive guide on writing tests, see [**Testing Guide**](docs/contributing-tests.md) which covers:
+- Soroban test environment setup
+- Mocking addresses and tokens
+- Test organization and patterns
+- Complete annotated example tests
+
 ### Testing Conventions: Prefer `try_` Over `#[should_panic]`
 
 When testing that a contract function returns a specific error, prefer the typed
