@@ -138,6 +138,15 @@ pub struct TransactionHistoryQuery {
     pub sort_order: Option<String>,
 }
 
+// ── Response types ────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+pub struct HealthResponse {
+    pub status: String,
+    pub db_reachable: bool,
+    pub rpc_reachable: bool,
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 pub fn build_router(
@@ -191,11 +200,29 @@ pub async fn start_server(
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> {
-    match state.db.ping().await {
-        Ok(_) => Json(serde_json::json!({"db": "ok"})),
-        Err(e) => Json(serde_json::json!({"db": "error", "detail": e.to_string()})),
-    }
+/// `GET /health` – health check for load balancers and monitoring tools.
+///
+/// Checks both database and RPC connectivity.
+/// Returns 200 OK with status "ok" when healthy.
+/// Returns 503 Service Unavailable with status "degraded" when RPC is unreachable.
+async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    let db_reachable = state.db.ping().await.is_ok();
+    let rpc_reachable = state.rpc.get_ledger().await.is_ok();
+
+    let (status_code, status_str) = if db_reachable && rpc_reachable {
+        (StatusCode::OK, "ok")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "degraded")
+    };
+
+    (
+        status_code,
+        Json(HealthResponse {
+            status: status_str.to_string(),
+            db_reachable,
+            rpc_reachable,
+        }),
+    )
 }
 
 /// `GET /events` – query events with optional filters.
