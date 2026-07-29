@@ -67,7 +67,7 @@ Pending ──► Active ──► Completed
 
 ## 🛠️ Quick Start
 
-**New to Checkmate-Escrow?** Start with the [Local Development Setup](docs/local-dev.md) guide for step-by-step instructions on building, testing, and running the full stack locally.
+**New to Checkmate-Escrow?** Start with the [Local Development Setup](docs/local-dev.md) guide for step-by-step instructions on building, testing, and running the full stack locally — including [running the oracle service locally](docs/local-dev.md#running-the-oracle-service-locally) against a mock Lichess/Chess.com server.
 
 ### Prerequisites
 
@@ -225,6 +225,22 @@ submit_result_with_oracle_record(match_id, winner, game_id) -> Result<(), Error>
 - `submit_result_with_oracle_record` is the canonical oracle integration path and stores the verified `game_id` for audit.
 
 `submit_result` verifies the caller, records the winner, and immediately executes the payout (or refund on draw) in a single transaction. There are no separate `verify_result` or `execute_payout` functions.
+
+### Admin Controls
+
+```
+set_match_timeout(seconds) -> Result<(), Error>
+get_match_timeout() -> Result<u64, Error>
+set_maximum_stake(amount: Option<i128>) -> Result<(), Error>
+set_protocol_config(config: ProtocolConfig) -> Result<(), Error>
+get_protocol_config() -> Result<ProtocolConfig, Error>
+```
+
+All admin-control functions below require authorization from the configured admin address.
+
+- **Match timeout** — `set_match_timeout` sets how long (in seconds) a `Pending` match may wait for both deposits before anyone can call `expire_match` on it. Value must fall within `[MIN_MATCH_TIMEOUT_SECONDS, MAX_MATCH_TIMEOUT_SECONDS]` (1–90 days), enforced with `Error::InvalidTimeout`. `get_match_timeout` returns the current value in seconds. The timeout is stored in `ProtocolConfig::match_timeout_seconds` and defaults to `DEFAULT_MATCH_TIMEOUT_SECONDS` (30 days).
+- **Maximum stake** — `set_maximum_stake` caps the `stake_amount` accepted by `create_match` and its variants. Pass `Some(amount)` to set a cap (rejected with `Error::InvalidAmount` if `amount <= 0`), or `None` to remove the cap (the default). `create_match` rejects any `stake_amount` above the configured cap with `Error::InvalidAmount`. Read the current cap via `get_protocol_config().maximum_stake`.
+- **Protocol fee** — `ProtocolConfig::protocol_fee_bps` (basis points, default `0`) and `ProtocolConfig::fee_recipient` control a platform fee taken out of the winner's payout: `protocol_fee = stake_amount * 2 * protocol_fee_bps / 10_000`, transferred to `fee_recipient` when `submit_result` resolves a winner. Draw refunds are never charged this fee. Set both fields via `set_protocol_config`; `protocol_fee_bps` above `10_000` (100%) is rejected with `Error::InvalidAmount`.
 
 ## 🧪 Testing
 

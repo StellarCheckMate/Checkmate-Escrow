@@ -135,7 +135,7 @@ fn test_expire_match_records_cancelled_snapshot() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.set_match_timeout(&17_280);
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
     env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
