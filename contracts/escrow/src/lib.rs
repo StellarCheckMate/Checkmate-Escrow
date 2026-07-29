@@ -41,6 +41,7 @@ use soroban_sdk::{
 use types::{
     BalanceAtTimestamp, BalanceSnapshot, DataKey, FeeTier, Match, MatchState, Platform, ProtocolConfig,
     SnapshotReason, Winner, PlayerTier, Dispute, DisputeState, PlayerBalanceSnapshot,
+    PendingOracleRotation, TempOracleRotation,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -1480,11 +1481,7 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
-        let oracle: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Oracle)
-            .ok_or(Error::Unauthorized)?;
+        let oracle: Address = Self::effective_oracle(&env)?;
         oracle.require_auth();
 
         Self::settle_result(&env, match_id, winner)
@@ -2174,18 +2171,32 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)
     }
 
-    /// Return the crate version (from `Cargo.toml`) as a semver string.
-    /// Lets clients detect version mismatches against a deployed contract.
-    pub fn get_contract_version(env: Env) -> String {
-        String::from_str(&env, env!("CARGO_PKG_VERSION"))
-    }
-
-    /// Return the oracle address currently configured on the contract.
-    pub fn get_oracle(env: Env) -> Result<Address, Error> {
-        env.storage()
+    fn effective_oracle(env: &Env) -> Result<Address, Error> {
+        let base_oracle: Address = env
+            .storage()
             .instance()
             .get(&DataKey::Oracle)
-            .ok_or(Error::Unauthorized)
+            .ok_or(Error::Unauthorized)?;
+
+        if let Some(rot) = env
+            .storage()
+            .instance()
+            .get::<_, TempOracleRotation>(&DataKey::TempOracleRotation)
+        {
+            let now = env.ledger().timestamp();
+            if now < rot.expiry && rot.old_oracle == base_oracle {
+                return Ok(rot.temp_oracle);
+            } else {
+                env.storage().instance().remove(&DataKey::TempOracleRotation);
+            }
+        }
+
+        Ok(base_oracle)
+    }
+
+    /// Return the oracle address currently configured on the contract (or active temporary rotation).
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        Self::effective_oracle(&env)
     }
 
     /// Return the oracle address currently configured on the contract.
@@ -3905,10 +3916,139 @@ impl EscrowContract {
             .get(&DataKey::Oracle)
             .ok_or(Error::Unauthorized)?;
         env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+        env.storage().instance().remove(&DataKey::TempOracleRotation);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
             (old_oracle, new_oracle),
         );
+        Ok(())
+    }
+
+    /// Temporarily rotate the oracle address for `duration_seconds`. Admin only.
+    /// Returns to `old_oracle` automatically once `duration_seconds` elapses.
+    pub fn rotate_oracle_temporary(
+        env: Env,
+        old_oracle: Address,
+        new_oracle: Address,
+        duration_seconds: u64,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if new_oracle == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
+
+        let current = Self::effective_oracle(&env)?;
+        if old_oracle != current {
+            return Err(Error::Unauthorized);
+        }
+
+        let expiry = env.ledger().timestamp().saturating_add(duration_seconds);
+        let temp = TempOracleRotation {
+            old_oracle: old_oracle.clone(),
+            temp_oracle: new_oracle.clone(),
+            expiry,
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::TempOracleRotation, &temp);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("rot_temp")),
+            (old_oracle, new_oracle, duration_seconds),
+        );
+
+        Ok(())
+    }
+
+    /// Admin proposes a permanent oracle rotation from `old_oracle` to `new_oracle`.
+    pub fn propose_oracle_rotation(
+        env: Env,
+        old_oracle: Address,
+        new_oracle: Address,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if new_oracle == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
+
+        let current = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        if old_oracle != current {
+            return Err(Error::Unauthorized);
+        }
+
+        let proposal = PendingOracleRotation {
+            old_oracle: old_oracle.clone(),
+            new_oracle: new_oracle.clone(),
+        };
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingOracleRotation, &proposal);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("rot_prop")),
+            (old_oracle, new_oracle),
+        );
+
+        Ok(())
+    }
+
+    /// Permanent oracle rotation requiring a prior matching proposal. Admin only.
+    pub fn rotate_oracle_permanent(
+        env: Env,
+        old_oracle: Address,
+        new_oracle: Address,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let proposal: PendingOracleRotation = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingOracleRotation)
+            .ok_or(Error::InvalidState)?;
+
+        if proposal.old_oracle != old_oracle || proposal.new_oracle != new_oracle {
+            return Err(Error::InvalidState);
+        }
+
+        env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingOracleRotation);
+        env.storage()
+            .instance()
+            .remove(&DataKey::TempOracleRotation);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
+            (old_oracle, new_oracle),
+        );
+
         Ok(())
     }
 

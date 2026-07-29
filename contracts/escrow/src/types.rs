@@ -113,6 +113,21 @@ pub struct Match {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TempOracleRotation {
+    pub old_oracle: Address,
+    pub temp_oracle: Address,
+    pub expiry: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingOracleRotation {
+    pub old_oracle: Address,
+    pub new_oracle: Address,
+}
+
+#[contracttype]
 pub enum DataKey {
     Match(u64),
     MatchCount,
