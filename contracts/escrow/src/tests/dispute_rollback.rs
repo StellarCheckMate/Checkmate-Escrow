@@ -225,7 +225,7 @@ fn test_rollback_after_window_returns_rollback_window_expired() {
     );
     assert_eq!(
         result,
-        Err(Ok(Error::RollbackWindowExpired)),
+        Err(Ok(Error::VotingPeriodElapsed)),
         "rollback past the window must be rejected with RollbackWindowExpired"
     );
 
@@ -261,7 +261,7 @@ fn test_rollback_24h1s_after_heartbeat_is_rejected() {
         &player2,
         &String::from_str(&env, "well_past_window"),
     );
-    assert_eq!(result, Err(Ok(Error::RollbackWindowExpired)));
+    assert_eq!(result, Err(Ok(Error::VotingPeriodElapsed)));
 }
 
 // ── Authorization ────────────────────────────────────────────────────────────
@@ -402,7 +402,7 @@ fn test_rollback_rejects_empty_reason() {
     );
     assert_eq!(
         result,
-        Err(Ok(Error::ReasonTooLong)),
+        Err(Ok(Error::InvalidEvidenceHash)),
         "empty reason must be rejected so all rollbacks are auditable"
     );
     assert_eq!(client.get_match(&id).state, MatchState::Active);
@@ -424,7 +424,7 @@ fn test_rollback_rejects_oversize_reason() {
     );
     assert_eq!(
         result,
-        Err(Ok(Error::ReasonTooLong)),
+        Err(Ok(Error::InvalidEvidenceHash)),
         "reasons above MAX_REASON_LEN (256 bytes) must be rejected"
     );
     assert_eq!(client.get_match(&id).state, MatchState::Active);

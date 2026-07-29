@@ -446,8 +446,8 @@ fn test_set_match_timeout_emits_event() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let old_timeout = 518_400u32;
-    let new_timeout = 1_036_800u32;
+    let old_timeout = DEFAULT_MATCH_TIMEOUT_SECONDS;
+    let new_timeout = 5_184_000u64;
 
     client.set_match_timeout(&new_timeout);
 
@@ -463,7 +463,7 @@ fn test_set_match_timeout_emits_event() {
     assert!(matched.is_some(), "timeout event not emitted");
 
     let (_, _, data) = matched.unwrap();
-    let (ev_old, ev_new): (u32, u32) = TryFromVal::try_from_val(&env, &data).unwrap();
+    let (ev_old, ev_new): (u64, u64) = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_old, old_timeout);
     assert_eq!(ev_new, new_timeout);
 }
@@ -499,7 +499,7 @@ fn test_expire_match_emits_event() {
 
     // Use the minimum timeout and create the match at a known ledger so the
     // advance below is guaranteed to clear the expiration threshold.
-    client.set_match_timeout(&17_280);
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
     env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
