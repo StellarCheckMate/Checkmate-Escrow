@@ -763,6 +763,8 @@ fn test_oracle_to_escrow_full_payout_flow() {
     let escrow_client = EscrowContractClient::new(&env, &escrow_id);
     let token_client = soroban_sdk::token::Client::new(&env, &token_addr);
 
+    escrow_client.set_dispute_period(&0);
+
     oracle_client.submit_result(
         &0u64,
         &String::from_str(&env, "test_game"),
@@ -773,6 +775,11 @@ fn test_oracle_to_escrow_full_payout_flow() {
     assert!(oracle_client.has_result(&0u64));
 
     escrow_client.submit_result(&0u64, &EscrowWinner::Player1);
+    escrow_client.claim_vested_payout(&0u64, &player1);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp += 604801;
+    });
     escrow_client.claim_vested_payout(&0u64, &player1);
 
     let m = escrow_client.get_match(&0u64);

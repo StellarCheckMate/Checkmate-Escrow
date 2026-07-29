@@ -11,14 +11,18 @@ pub use std::{format, vec::Vec};
 pub mod helpers;
 
 mod admin;
+mod balance_history_edge_cases;
 mod dispute;
 mod events;
+mod fee_calculation_scenarios;
 mod fuzz;
 mod index;
 mod integration;
 mod invariants;
 mod lifecycle;
+mod match_validation;
 mod multi_token;
+mod oracle_validation;
 mod pagination;
 mod player_balance_history;
 mod security;
@@ -62,6 +66,10 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
 
     (
@@ -166,3 +174,4 @@ pub fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, 
 mod cancellation_fee;
 mod stablecoin;
 mod dispute_rollback;
+mod protocol_config;

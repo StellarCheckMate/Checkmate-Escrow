@@ -17,6 +17,10 @@ fn test_cancellation_fee_deduction() {
         cancellation_fee_basis_points: 100, // 1%
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
 
     // Initial balances
@@ -71,6 +75,10 @@ fn test_cancellation_fee_with_custom_config() {
         cancellation_fee_basis_points: 500, // 5%
         treasury: new_treasury.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: new_treasury.clone(),
     };
     
     env.mock_all_auths();

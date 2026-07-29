@@ -61,13 +61,13 @@ Pending ──► Active ──► Completed
 | `admin` / `oracle_up`     | `update_oracle`     | `(old_oracle, new_oracle)`                   |
 | `admin` / `xfer`          | `transfer_admin`    | `(old_admin, new_admin)`                     |
 | `match` / `created`       | `create_match`      | `(match_id, player1, player2, stake_amount)` |
-| `match` / `completed`     | `submit_result`     | `(match_id, winner)`                         |
+| `match` / `completed`     | `submit_result`     | `(match_id, winner, payout_amount)`          |
 | `match` / `cancelled`     | `cancel_match`      | `match_id`                                   |
 | `match` / `expired`       | `expire_match`      | `match_id`                                   |
 
 ## 🛠️ Quick Start
 
-**New to Checkmate-Escrow?** Start with the [Local Development Setup](docs/local-dev.md) guide for step-by-step instructions on building, testing, and running the full stack locally.
+**New to Checkmate-Escrow?** Start with the [Local Development Setup](docs/local-dev.md) guide for step-by-step instructions on building, testing, and running the full stack locally — including [running the oracle service locally](docs/local-dev.md#running-the-oracle-service-locally) against a mock Lichess/Chess.com server.
 
 ### Prerequisites
 
@@ -115,12 +115,12 @@ VITE_STELLAR_NETWORK=testnet
 VITE_STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 ```
 
-Network configurations are defined in `environments.toml`:
+Network configurations are defined in `environments.toml` — see the [environments.toml reference](docs/local-dev.md#environmentstoml) in the local development guide for a full field-by-field breakdown of each network:
 
-- `testnet` — Stellar testnet
-- `mainnet` — Stellar mainnet
-- `futurenet` — Stellar futurenet
-- `standalone` — Local development
+- `testnet` — Stellar testnet (free funds via Friendbot, recommended for development)
+- `mainnet` — Stellar mainnet (real funds, production only)
+- `futurenet` — Stellar futurenet (preview of upcoming protocol features)
+- `standalone` — Local development node (fully isolated, no external connectivity)
 
 ### Deploy to Testnet
 
@@ -160,7 +160,10 @@ Prefer to learn by watching or testing yourself?
 - [FAQ](docs/faq.md) — common questions and answers
 - [Glossary](docs/glossary.md) — key terms (escrow, oracle, match states, Soroban, wave-ready, and more) for new contributors
 - [Architecture Overview](docs/architecture.md)
-- [Oracle Design](docs/oracle.md)
+- [Oracle Design](docs/oracle.md) — comprehensive oracle documentation covering result verification, consensus, and platform integration:
+  - [Lichess Integration](docs/oracle.md#lichess-integration) — API setup, game ID format, result mapping
+  - [Chess.com Integration](docs/oracle.md#chess-com-integration) — API key setup, rate limits, result field mapping, error handling
+  - [Platform Comparison Table](docs/oracle.md#platform-api-comparison-lichess-vs-chessdotcom) — Lichess vs Chess.com API differences
 - [WebSocket API](docs/websocket-api.md) — real-time match event protocol (protocol v1), connection lifecycle, subscription model, React hook
 - [Threat Model & Security](docs/security.md)
 - [Balance-Privacy Model](docs/privacy-model.md) — what the balance-snapshot APIs hide from non-admins, and what they don't
@@ -211,17 +214,48 @@ Examples:
 | Match completed (payout done)         | `true`      | `0`                  |
 | Match cancelled (refunds done)        | `false`     | `0`                  |
 
+### Contract Metadata
+
+```
+get_contract_version() -> String
+```
+
+- Returns the crate version from `Cargo.toml` (e.g. `"0.1.0"`) as a semver-formatted string. Clients can use this to detect version mismatches against a deployed contract.
+
 ### Oracle & Payouts
 
 ```
+get_oracle_address() -> Address
 submit_result(match_id, winner, caller) -> Result<(), Error>
 submit_result_with_oracle_record(match_id, winner, game_id) -> Result<(), Error>
+submit_result_batch(results: Vec<(match_id, winner)>, caller) -> Result<Vec<Option<Error>>, Error>
 ```
+
+- `get_oracle_address()` returns the oracle address currently configured on the contract. This is a view function that requires no authentication and is intended for off-chain clients, frontends, and monitoring tools to verify oracle configuration without reading raw contract storage. Returns `Error::Unauthorized` if the contract has not been initialized.
+
+- `submit_result_batch` settles multiple matches in a single call, reducing oracle transaction overhead. `caller` must be the configured oracle. Each match is processed independently — a failure on one (e.g. `NotFunded`, `InvalidState`) does not stop the rest from being processed. The returned `Vec` has one entry per input entry, in the same order: `None` on success, `Some(Error)` on failure for that match. (Soroban's contract ABI has no `Result` element type, so `Option<Error>` is the on-chain equivalent of `Result<(), Error>` here.)
 
 - `submit_result` is called by the configured oracle address and requires oracle authorization.
 - `submit_result_with_oracle_record` is the canonical oracle integration path and stores the verified `game_id` for audit.
 
 `submit_result` verifies the caller, records the winner, and immediately executes the payout (or refund on draw) in a single transaction. There are no separate `verify_result` or `execute_payout` functions.
+
+### Admin Controls
+
+```
+set_match_timeout(seconds) -> Result<(), Error>
+get_match_timeout() -> Result<u64, Error>
+set_maximum_stake(amount: Option<i128>) -> Result<(), Error>
+set_protocol_config(config: ProtocolConfig) -> Result<(), Error>
+get_protocol_config() -> Result<ProtocolConfig, Error>
+```
+
+All admin-control functions below require authorization from the configured admin address.
+
+- **Match timeout** — `set_match_timeout` sets how long (in seconds) a `Pending` match may wait for both deposits before anyone can call `expire_match` on it. Value must fall within `[MIN_MATCH_TIMEOUT_SECONDS, MAX_MATCH_TIMEOUT_SECONDS]` (1–90 days), enforced with `Error::InvalidTimeout`. `get_match_timeout` returns the current value in seconds. The timeout is stored in `ProtocolConfig::match_timeout_seconds` and defaults to `DEFAULT_MATCH_TIMEOUT_SECONDS` (30 days).
+- **Maximum stake** — `set_maximum_stake` caps the `stake_amount` accepted by `create_match` and its variants. Pass `Some(amount)` to set a cap (rejected with `Error::InvalidAmount` if `amount <= 0`), or `None` to remove the cap (the default). `create_match` rejects any `stake_amount` above the configured cap with `Error::InvalidAmount`. Read the current cap via `get_protocol_config().maximum_stake`.
+- **Protocol fee** — `ProtocolConfig::protocol_fee_bps` (basis points, default `0`) and `ProtocolConfig::fee_recipient` control a platform fee taken out of the winner's payout: `protocol_fee = stake_amount * 2 * protocol_fee_bps / 10_000`, transferred to `fee_recipient` when `submit_result` resolves a winner. Draw refunds are never charged this fee. Set both fields via `set_protocol_config`; `protocol_fee_bps` above `10_000` (100%) is rejected with `Error::InvalidAmount`.
+- **Full config read** — `get_protocol_config` returns the complete `ProtocolConfig` struct as currently stored on-chain (treasury, vesting duration, cancellation fee, stablecoin-only mode, maximum stake, match timeout, protocol fee, and fee recipient). Off-chain tools and the frontend can call this single function instead of making multiple separate admin queries to reconstruct contract state.
 
 ## 🧪 Testing
 

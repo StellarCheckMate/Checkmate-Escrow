@@ -3,7 +3,7 @@ use crate::types::{MatchState, Platform, Winner};
 use crate::{EscrowContract, EscrowContractClient};
 use oracle::{OracleContract, OracleContractClient};
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
     token::StellarAssetClient,
     Address, Env, String, Symbol, IntoVal,
 };
@@ -93,7 +93,7 @@ fn test_create_match_with_conversion_valid_rate() {
     );
 
     let m = escrow_client.get_match(&match_id);
-    assert_eq!(m.conversion_rate, rate);
+    assert_eq!(m.conversion_rate, Some(rate));
     assert_eq!(m.token_b, Some(token_b));
 }
 
@@ -131,7 +131,7 @@ fn test_multi_token_deposits_and_refunds() {
     let stake_amount = 100_0000000; // 100 token_a
     let rate = 50_000_000; // 5.0
     // Expected token_b stake = 100 * 5.0 = 500 token_b
-    let expected_b_stake = 500_0000000;
+    let expected_b_stake: i128 = 500_0000000;
 
     let match_id = escrow_client.create_match_with_conversion(
         &player1,
@@ -326,7 +326,7 @@ fn test_create_match_with_conversion_rate_boundary_low() {
     );
 
     let m = escrow_client.get_match(&match_id);
-    assert_eq!(m.conversion_rate, rate);
+    assert_eq!(m.conversion_rate, Some(rate));
     assert_eq!(m.token_b, Some(token_b));
 }
 
@@ -352,7 +352,7 @@ fn test_create_match_with_conversion_rate_boundary_high() {
     );
 
     let m = escrow_client.get_match(&match_id);
-    assert_eq!(m.conversion_rate, rate);
+    assert_eq!(m.conversion_rate, Some(rate));
     assert_eq!(m.token_b, Some(token_b));
 }
 
@@ -519,7 +519,7 @@ fn test_multi_token_with_valid_rate_at_boundary() {
         &Platform::Lichess,
     );
     let m_lower = escrow_client.get_match(&match_id_lower);
-    assert_eq!(m_lower.conversion_rate, rate_lower);
+    assert_eq!(m_lower.conversion_rate, Some(rate_lower));
 
     // Test rate exactly at upper boundary: 1_000_000 * 1.05 = 1_050_000
     let rate_upper = 1_050_000;
@@ -534,5 +534,5 @@ fn test_multi_token_with_valid_rate_at_boundary() {
         &Platform::Lichess,
     );
     let m_upper = escrow_client.get_match(&match_id_upper);
-    assert_eq!(m_upper.conversion_rate, rate_upper);
+    assert_eq!(m_upper.conversion_rate, Some(rate_upper));
 }

@@ -62,7 +62,11 @@ The states a [match](#match) moves through, modeled by the `MatchState` enum: [P
 
 ## Oracle
 
-The authorized off-chain service together with its on-chain account that bridges external chess-platform data to the contract. The oracle reads the result of the game identified by [game_id](#game_id) from Lichess/Chess.com and submits the verified outcome with `submit_result`. Only the oracle's authorization is accepted for result submission, which is what makes payouts automatic without a human middleman. The oracle address is set at initialization and can be rotated by the [admin](#admin). See [oracle.md](oracle.md) and `contracts/oracle`.
+The authorized off-chain service together with its on-chain account that bridges external chess-platform data to the contract. The oracle reads the result of the game identified by [game_id](#game_id) from Lichess/Chess.com and submits the verified outcome with `submit_result`. Only the oracle's authorization is accepted for result submission, which is what makes payouts automatic without a human middleman. The oracle address is set at initialization and can be rotated by the [admin](#admin). Use `get_oracle_address` (view function) to query the currently configured oracle address from off-chain clients. See [oracle.md](oracle.md) and `contracts/oracle`.
+
+## Oracle Rotation
+
+The [admin](#admin)-controlled process of replacing the escrow contract's trusted oracle address with a new one. This operation is performed via the `update_oracle` function and is used when the oracle keypair is compromised, the oracle service is being migrated to a new instance, or as part of regular security best practices. Oracle rotation ensures continuity of operations while maintaining the integrity of the escrow contract. Once rotated, all result submissions must come from the new oracle address; the old oracle is immediately deactivated. See [runbook-rotation.md](runbook-rotation.md) for step-by-step procedures and [oracle.md](oracle.md) for technical details about oracle operation and integration.
 
 ## Payout
 
