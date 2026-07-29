@@ -1,34 +1,67 @@
-# Network environment configurations for Stellar CLI / Soroban CLI.
-# Each section corresponds to a named network passed via --network <name>.
+# environments.toml — Network environment configurations for Stellar CLI / Soroban CLI.
 #
-# Fields:
-#   rpc_url           - Soroban RPC endpoint for the network
-#   network_passphrase - Unique string identifying the network; must match exactly
+# Each section defines a named network that can be selected at runtime via:
+#   --network <name>
+# or by setting the STELLAR_NETWORK environment variable in .env.
 #
-# To add a custom network, append a new section:
+# ─── Field Reference ────────────────────────────────────────────────────────
+#
+#   rpc_url
+#     The HTTP(S) endpoint of the Soroban RPC node for this network.
+#     Used by the CLI and scripts to submit transactions and query state.
+#     Example: "https://soroban-testnet.stellar.org"
+#
+#   network_passphrase
+#     A unique string that identifies the Stellar network. Every transaction
+#     is signed against this passphrase, so it MUST match the passphrase the
+#     target node expects — a mismatch causes immediate transaction rejection.
+#     The passphrases below are the canonical values; do not change them for
+#     the built-in networks.
+#
+# ─── Adding a Custom Network ────────────────────────────────────────────────
+#
+# Append a new section at the bottom of this file:
+#
 #   [my_network]
-#   rpc_url = "https://my-rpc-endpoint"
+#   rpc_url            = "https://my-rpc-endpoint"
 #   network_passphrase = "My Custom Network ; YYYY"
 #
-# Match Timeout Configuration (set via set_match_timeout admin function):
-#   Testnet:   1-7 days (17,280 - 120,960 ledgers) for faster testing
-#   Mainnet:   14-30 days (241,920 - 518,400 ledgers) for production stability
-#   Standalone: 1 day (17,280 ledgers) for development
-#   Min/Max:   1-90 days (17,280 - 1,555,200 ledgers)
+# Then select it with --network my_network or STELLAR_NETWORK=my_network.
+#
+# ─── Match Timeout Reference (set via set_match_timeout admin function) ─────
+#
+#   Ledger cadence: ~5 seconds per ledger on public networks.
+#
+#   Testnet:    1–7 days   (17,280–120,960 ledgers)   — faster iteration
+#   Mainnet:   14–30 days  (241,920–518,400 ledgers)  — production stability
+#   Standalone: 1 day      (17,280 ledgers)            — local development
+#   Absolute limits: 1–90 days (17,280–1,555,200 ledgers)
+#
+# ────────────────────────────────────────────────────────────────────────────
 
 [testnet]
-rpc_url = "https://soroban-testnet.stellar.org"
+# Stellar public testnet — free funds available via friendbot.
+# Use this for development and integration testing.
+# Friendbot: https://friendbot.stellar.org/?addr=<your-address>
+rpc_url            = "https://soroban-testnet.stellar.org"
 network_passphrase = "Test SDF Network ; September 2015"
 
 [mainnet]
-rpc_url = "https://soroban-mainnet.stellar.org"
+# Stellar public mainnet — real funds, production use only.
+# Deploying here costs real XLM. Verify contracts thoroughly on testnet first.
+rpc_url            = "https://soroban-mainnet.stellar.org"
 network_passphrase = "Public Global Stellar Network ; September 2015"
 
 [futurenet]
-rpc_url = "https://rpc-futurenet.stellar.org"
+# Stellar futurenet — preview of upcoming protocol features.
+# May be unstable; use only when testing features not yet on testnet.
+rpc_url            = "https://rpc-futurenet.stellar.org"
 network_passphrase = "Test SDF Future Network ; October 2022"
 
 [standalone]
-# Local development node — start with `stellar network start local`
-rpc_url = "http://localhost:8000/soroban/rpc"
+# Local development node — fully isolated, no external connectivity required.
+# Start a local node with: stellar network start local
+# Or via Docker:
+#   docker run --rm -it -p 8000:8000 stellar/quickstart:latest --standalone
+rpc_url            = "http://localhost:8000/soroban/rpc"
 network_passphrase = "Standalone Network ; February 2017"

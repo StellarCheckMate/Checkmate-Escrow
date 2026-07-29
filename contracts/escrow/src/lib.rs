@@ -45,11 +45,19 @@ const MAX_PLAYER_SNAPSHOTS: u32 = 32;
 /// Default match expiration timeout used when no explicit timeout is configured.
 pub const DEFAULT_MATCH_TIMEOUT_LEDGERS: u32 = MATCH_TTL_LEDGERS;
 
-/// Minimum match timeout: 1 day (17,280 ledgers at 5s/ledger).
-pub const MIN_MATCH_TIMEOUT_LEDGERS: u32 = 17_280;
+/// Average Stellar ledger close time (seconds). Used only to convert the
+/// public, seconds-denominated `ProtocolConfig::match_timeout_seconds` into
+/// the ledger-sequence delta `expire_match` compares against internally.
+const SECONDS_PER_LEDGER: u64 = 5;
 
-/// Maximum match timeout: 90 days (1,555,200 ledgers at 5s/ledger).
-pub const MAX_MATCH_TIMEOUT_LEDGERS: u32 = 1_555_200;
+/// Default match expiration timeout: 30 days.
+pub const DEFAULT_MATCH_TIMEOUT_SECONDS: u64 = 2_592_000;
+
+/// Minimum match timeout: 1 day.
+pub const MIN_MATCH_TIMEOUT_SECONDS: u64 = 86_400;
+
+/// Maximum match timeout: 90 days.
+pub const MAX_MATCH_TIMEOUT_SECONDS: u64 = 7_776_000;
 
 /// Default voting period for disputes: 1 day (17,280 ledgers at 5s/ledger).
 pub const VOTING_PERIOD_LEDGERS: u32 = 17_280;
@@ -82,6 +90,20 @@ pub const DEFAULT_QUORUM_BASIS_POINTS: u32 = 2000;
 ///
 /// Both formats fit well within this limit.
 const MAX_GAME_ID_LEN: u32 = 64;
+
+/// Exact game ID length required for Lichess (8 alphanumeric characters).
+const LICHESS_GAME_ID_LEN: u32 = 8;
+
+/// Minimum/maximum game ID length accepted for Chess.com (numeric string).
+const CHESS_COM_GAME_ID_MIN_LEN: u32 = 7;
+const CHESS_COM_GAME_ID_MAX_LEN: u32 = 12;
+
+/// Default minimum `stake_amount` accepted by `create_match` and friends
+/// when no admin override has been configured via `set_minimum_stake`.
+/// Kept at `1` (the pre-existing implicit floor from the `stake_amount > 0`
+/// check) so this ships without silently invalidating existing low-stake
+/// matches/tests; admins can raise it with `set_minimum_stake`.
+pub const DEFAULT_MINIMUM_STAKE: i128 = 1;
 
 /// Completed-match thresholds for unlocking progressively higher stake bands.
 const SILVER_MIN_COMPLETED_MATCHES: u32 = 3;
@@ -219,18 +241,16 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+        if config.protocol_fee_bps > 10_000 {
+            return Err(Error::InvalidAmount);
+        }
         env.storage().instance().set(&DataKey::ProtocolConfig, &config);
         Ok(())
     }
 
     /// Get the current protocol configuration.
     pub fn get_protocol_config(env: Env) -> Result<ProtocolConfig, Error> {
-        Ok(env.storage().instance().get(&DataKey::ProtocolConfig).unwrap_or(ProtocolConfig {
-            vesting_duration_seconds: 259_200,
-            cancellation_fee_basis_points: 0,
-            treasury: env.current_contract_address(),
-            stablecoin_only_mode: false,
-        }))
+        Ok(Self::get_config(&env))
     }
 
     /// Set the referral fee share in basis points (admin only).
@@ -781,22 +801,61 @@ impl EscrowContract {
         Ok(fee)
     }
 
+    /// Validate that `game_id` matches the format expected for `platform`.
+    ///
+    /// - Lichess: exactly 8 ASCII alphanumeric characters.
+    /// - Chess.com: 7–12 ASCII digits.
+    ///
+    /// Also enforces the shared non-empty / `MAX_GAME_ID_LEN` bound before
+    /// applying the platform-specific check.
+    fn validate_game_id_format(game_id: &String, platform: &Platform) -> Result<(), Error> {
+        let len = game_id.len();
+        if len == 0 || len > MAX_GAME_ID_LEN {
+            return Err(Error::InvalidGameId);
+        }
+
+        let mut buf = [0u8; MAX_GAME_ID_LEN as usize];
+        let slice = &mut buf[..len as usize];
+        game_id.copy_into_slice(slice);
+
+        match platform {
+            Platform::Lichess => {
+                if len != LICHESS_GAME_ID_LEN || !slice.iter().all(|b| b.is_ascii_alphanumeric()) {
+                    return Err(Error::InvalidGameId);
+                }
+            }
+            Platform::ChessDotCom => {
+                if len < CHESS_COM_GAME_ID_MIN_LEN
+                    || len > CHESS_COM_GAME_ID_MAX_LEN
+                    || !slice.iter().all(|b| b.is_ascii_digit())
+                {
+                    return Err(Error::InvalidGameId);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Create a new match. Both players must call `deposit` before the game starts.
     ///
     /// # Parameters
-    /// - `game_id`: The platform-specific game identifier. Must be ≤ 64 bytes.
-    ///   - **Lichess**: 8-character alphanumeric string (e.g. `"abcd1234"`).
+    /// - `game_id`: The platform-specific game identifier, validated against `platform`.
+    ///   - **Lichess**: exactly 8 alphanumeric characters (e.g. `"abcd1234"`).
     ///     Taken from the game URL: `https://lichess.org/<game_id>`
-    ///   - **Chess.com**: numeric string, typically 7–12 digits (e.g. `"123456789"`).
+    ///   - **Chess.com**: 7–12 numeric digits (e.g. `"123456789"`).
     ///     Taken from the game URL: `https://www.chess.com/game/live/<game_id>`
-    ///   Passing an ID from the wrong platform or a malformed ID will not be
-    ///   rejected on-chain, but the oracle will fail to verify the result.
+    ///   An ID that doesn't match its platform's format is rejected at
+    ///   creation time rather than failing later at oracle result-submission.
     /// - `platform`: Must match the platform the `game_id` was issued by.
     ///   Use `Platform::Lichess` or `Platform::ChessDotCom` accordingly.
     ///
     /// # Errors
-    /// Returns `Error::InvalidGameId` if `game_id` exceeds `MAX_GAME_ID_LEN` (64 bytes).
+    /// Returns `Error::InvalidGameId` if `game_id` is empty, exceeds `MAX_GAME_ID_LEN`
+    /// (64 bytes), or doesn't match the format expected for `platform`.
     /// Returns `Error::DuplicateGameId` if the same `game_id` has already been used.
+    /// Returns `Error::InvalidAmount` if `stake_amount` is below the configured
+    /// `minimum_stake` (see `set_minimum_stake`).
     pub fn create_match(
         env: Env,
         player1: Address,
@@ -834,14 +893,17 @@ impl EscrowContract {
             return Err(Error::NotStablecoin);
         }
 
-        if stake_amount <= 0 {
+        if stake_amount <= 0 || stake_amount < protocol_cfg.minimum_stake {
             return Err(Error::InvalidAmount);
+        }
+        if let Some(max_stake) = protocol_cfg.maximum_stake {
+            if stake_amount > max_stake {
+                return Err(Error::InvalidAmount);
+            }
         }
         Self::require_player_tier_for_stake(&env, &player1, stake_amount)?;
         Self::require_player_tier_for_stake(&env, &player2, stake_amount)?;
-        if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
-            return Err(Error::InvalidGameId);
-        }
+        Self::validate_game_id_format(&game_id, &platform)?;
 
         // Reject if either player is invalid
         if player1 == player2 {
@@ -998,8 +1060,13 @@ impl EscrowContract {
             }
         }
 
-        if stake_amount <= 0 || rate <= 0 {
+        if stake_amount <= 0 || rate <= 0 || stake_amount < protocol_cfg.minimum_stake {
             return Err(Error::InvalidAmount);
+        }
+        if let Some(max_stake) = protocol_cfg.maximum_stake {
+            if stake_amount > max_stake {
+                return Err(Error::InvalidAmount);
+            }
         }
         if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
@@ -1175,14 +1242,18 @@ impl EscrowContract {
             return Err(Error::TokenNotAllowed);
         }
 
-        if stake_amount <= 0 {
+        let protocol_cfg = Self::get_config(&env);
+        if stake_amount <= 0 || stake_amount < protocol_cfg.minimum_stake {
             return Err(Error::InvalidAmount);
+        }
+        if let Some(max_stake) = Self::get_config(&env).maximum_stake {
+            if stake_amount > max_stake {
+                return Err(Error::InvalidAmount);
+            }
         }
         Self::require_player_tier_for_stake(&env, &player1, stake_amount)?;
         Self::require_player_tier_for_stake(&env, &player2, stake_amount)?;
-        if game_id.len() == 0 || game_id.len() > MAX_GAME_ID_LEN {
-            return Err(Error::InvalidGameId);
-        }
+        Self::validate_game_id_format(&game_id, &platform)?;
 
         if player1 == player2 {
             return Err(Error::InvalidPlayers);
@@ -1400,6 +1471,16 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         oracle.require_auth();
 
+        Self::settle_result(&env, match_id, winner)
+    }
+
+    /// Core result-settlement logic shared by `submit_result` and
+    /// `submit_result_batch`. Assumes the pause state and oracle
+    /// authorization have already been checked by the caller — this lets
+    /// `submit_result_batch` authorize the oracle once for the whole batch
+    /// instead of once per match (repeated `require_auth` calls for the same
+    /// address within a single invocation are rejected by the host).
+    fn settle_result(env: &Env, match_id: u64, winner: Winner) -> Result<(), Error> {
         let mut m: Match = env
             .storage()
             .persistent()
@@ -1414,16 +1495,16 @@ impl EscrowContract {
             return Err(Error::NotFunded);
         }
 
-        Self::remove_active_match_indexed(&env, &m.player1, match_id);
-        Self::remove_active_match_indexed(&env, &m.player2, match_id);
+        Self::remove_active_match_indexed(env, &m.player1, match_id);
+        Self::remove_active_match_indexed(env, &m.player2, match_id);
 
         m.state = MatchState::Completed;
         m.completed_ledger = Some(env.ledger().sequence());
         m.winner = winner.clone();
         m.vested_at = Some(env.ledger().timestamp());
 
-        Self::record_completed_match(&env, &m.player1);
-        Self::record_completed_match(&env, &m.player2);
+        Self::record_completed_match(env, &m.player1);
+        Self::record_completed_match(env, &m.player2);
 
         env.storage()
             .persistent()
@@ -1434,14 +1515,20 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
 
-        let dispute_period = Self::get_dispute_period(&env);
+        let dispute_period = Self::get_dispute_period(env);
 
         if dispute_period == 0 {
             // Immediate payout (no dispute period, but still subject to vesting)
-            Self::record_snapshot(&env, &m, SnapshotReason::Completed);
+            Self::record_snapshot(env, &m, SnapshotReason::Completed);
+            let payout_amount = match winner {
+                Winner::Player1 | Winner::Player2 | Winner::Draw => {
+                    m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?
+                }
+                Winner::None => 0,
+            };
             env.events().publish(
-                (Symbol::new(&env, "match"), Symbol::new(&env, "completed")),
-                (match_id, winner),
+                (Symbol::new(env, "match"), Symbol::new(env, "completed")),
+                (match_id, winner, payout_amount),
             );
             Ok(())
         } else {
@@ -1481,10 +1568,10 @@ impl EscrowContract {
                 MATCH_TTL_LEDGERS,
             );
 
-            Self::record_snapshot(&env, &m, SnapshotReason::ResultSubmitted);
+            Self::record_snapshot(env, &m, SnapshotReason::ResultSubmitted);
 
             env.events().publish(
-                (Symbol::new(&env, "match"), Symbol::new(&env, "pending_result")),
+                (Symbol::new(env, "match"), Symbol::new(env, "pending_result")),
                 (match_id, winner, deadline),
             );
 
@@ -1524,6 +1611,50 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Batch-submit results for multiple matches in a single call, reducing
+    /// oracle transaction overhead. Caller must be the configured oracle.
+    ///
+    /// Each match is processed independently: a failure on one match (e.g.
+    /// `MatchNotFound`, `InvalidState`, `NotFunded`) does not stop processing
+    /// of the remaining entries. The returned `Vec` has one entry per input
+    /// entry, in the same order — `None` on success, `Some(Error)` on
+    /// failure for that match.
+    ///
+    /// Note: Soroban's contract ABI has no `Result` element type, so
+    /// `Option<Error>` is the on-chain equivalent of `Result<(), Error>` here
+    /// (`None` ~ `Ok(())`, `Some(e)` ~ `Err(e)`).
+    pub fn submit_result_batch(
+        env: Env,
+        results: Vec<(u64, Winner)>,
+        caller: Address,
+    ) -> Result<Vec<Option<Error>>, Error> {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        if caller != oracle {
+            return Err(Error::Unauthorized);
+        }
+        caller.require_auth();
+
+        let mut outcomes = Vec::new(&env);
+        for (match_id, winner) in results.iter() {
+            let outcome = Self::settle_result(&env, match_id, winner);
+            outcomes.push_back(outcome.err());
+        }
+        Ok(outcomes)
+    }
+
     /// Cancel a pending match and refund any deposits.
     /// Either player can cancel a pending match.
     pub fn cancel_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
@@ -1554,12 +1685,7 @@ impl EscrowContract {
 
         let is_multi_token = m.token_b.is_some() && m.conversion_rate.map_or(false, |r| r > 0);
 
-        let config: ProtocolConfig = env.storage().instance().get(&DataKey::ProtocolConfig).unwrap_or(ProtocolConfig {
-            vesting_duration_seconds: 259_200,
-            cancellation_fee_basis_points: 0,
-            treasury: env.current_contract_address(),
-            stablecoin_only_mode: false,
-        });
+        let config: ProtocolConfig = Self::get_config(&env);
         
         let fee_amount = if config.cancellation_fee_basis_points > 0 {
             m.stake_amount.checked_mul(config.cancellation_fee_basis_points as i128).ok_or(Error::Overflow)? / 10_000
@@ -1815,7 +1941,7 @@ impl EscrowContract {
     /// - The current ledger timestamp must be within
     ///   `ROLLBACK_WINDOW_SECONDS` (24 h) of `Match.last_heartbeat`. Outside
     ///   the window, the match is considered legitimately stalled and the
-    ///   rollback is rejected with `Error::RollbackWindowExpired`.
+    ///   rollback is rejected with `Error::VotingPeriodElapsed`.
     /// - The full stake is refunded to whichever players had deposited — no
     ///   cancellation fee is applied. This is a player-friendly escape hatch,
     ///   not a fee-bearing cancel.
@@ -1837,7 +1963,7 @@ impl EscrowContract {
 
         // Validate reason so it is indexable on-chain and bounded in size.
         if reason.len() == 0 || reason.len() > MAX_REASON_LEN {
-            return Err(Error::ReasonTooLong);
+            return Err(Error::InvalidEvidenceHash);
         }
 
         disputer.require_auth();
@@ -1870,7 +1996,7 @@ impl EscrowContract {
         let now: u64 = env.ledger().timestamp();
         let since_heartbeat: u64 = now.saturating_sub(m.last_heartbeat);
         if since_heartbeat > ROLLBACK_WINDOW_SECONDS {
-            return Err(Error::RollbackWindowExpired);
+            return Err(Error::VotingPeriodElapsed);
         }
 
         // Drop the active-match index for both players before mutating state
@@ -2032,6 +2158,12 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)
     }
 
+    /// Return the crate version (from `Cargo.toml`) as a semver string.
+    /// Lets clients detect version mismatches against a deployed contract.
+    pub fn get_contract_version(env: Env) -> String {
+        String::from_str(&env, env!("CARGO_PKG_VERSION"))
+    }
+
     /// Return the oracle address currently configured on the contract.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         env.storage()
@@ -2040,11 +2172,12 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)
     }
 
+    /// Configured match timeout expressed in ledgers, derived from
+    /// `ProtocolConfig::match_timeout_seconds` for use by `expire_match`
+    /// (which compares against ledger-sequence deltas).
     fn current_match_timeout(env: &Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::MatchTimeout)
-            .unwrap_or(DEFAULT_MATCH_TIMEOUT_LEDGERS)
+        let seconds = Self::get_config(env).match_timeout_seconds;
+        (seconds / SECONDS_PER_LEDGER) as u32
     }
 
     /// Get the cached count of completed matches for a player (O(1) lookup).
@@ -2156,8 +2289,9 @@ impl EscrowContract {
         }
     }
 
-    pub fn get_match_timeout(env: Env) -> Result<u32, Error> {
-        Ok(Self::current_match_timeout(&env))
+    /// Current match expiration timeout, in seconds.
+    pub fn get_match_timeout(env: Env) -> Result<u64, Error> {
+        Ok(Self::get_config(&env).match_timeout_seconds)
     }
 
     pub fn tier_from_match_count(env: Env, player: Address) -> PlayerTier {
@@ -2183,7 +2317,8 @@ impl EscrowContract {
         }
     }
 
-    pub fn set_match_timeout(env: Env, timeout: u32) -> Result<(), Error> {
+    /// Set the match expiration timeout, in seconds. Admin only.
+    pub fn set_match_timeout(env: Env, seconds: u64) -> Result<(), Error> {
         let admin: Address = env
             .storage()
             .instance()
@@ -2191,17 +2326,43 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        if timeout < MIN_MATCH_TIMEOUT_LEDGERS || timeout > MAX_MATCH_TIMEOUT_LEDGERS {
+        if seconds < MIN_MATCH_TIMEOUT_SECONDS || seconds > MAX_MATCH_TIMEOUT_SECONDS {
             return Err(Error::InvalidTimeout);
         }
 
-        let old_timeout = Self::current_match_timeout(&env);
-        env.storage()
-            .instance()
-            .set(&DataKey::MatchTimeout, &timeout);
+        let mut config = Self::get_config(&env);
+        let old_timeout = config.match_timeout_seconds;
+        config.match_timeout_seconds = seconds;
+        env.storage().instance().set(&DataKey::ProtocolConfig, &config);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("timeout")),
-            (old_timeout, timeout),
+            (old_timeout, seconds),
+        );
+        Ok(())
+    }
+
+    /// Set the maximum stake accepted by `create_match` and friends. Admin only.
+    /// `None` removes the cap (unlimited stakes).
+    pub fn set_maximum_stake(env: Env, amount: Option<i128>) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if let Some(max) = amount {
+            if max <= 0 {
+                return Err(Error::InvalidAmount);
+            }
+        }
+
+        let mut config = Self::get_config(&env);
+        config.maximum_stake = amount;
+        env.storage().instance().set(&DataKey::ProtocolConfig, &config);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("max_stake")),
+            amount,
         );
         Ok(())
     }
@@ -2827,16 +2988,7 @@ impl EscrowContract {
             );
         } else {
             // Bond forfeited to treasury on upheld outcome
-            let protocol_config: ProtocolConfig = env
-                .storage()
-                .instance()
-                .get(&DataKey::ProtocolConfig)
-                .unwrap_or(ProtocolConfig {
-                    vesting_duration_seconds: 259_200,
-                    cancellation_fee_basis_points: 0,
-                    treasury: env.current_contract_address(),
-                    stablecoin_only_mode: false,
-                });
+            let protocol_config: ProtocolConfig = Self::get_config(&env);
             let client = token::Client::new(&env, &m.token);
             client.transfer(
                 &env.current_contract_address(),
@@ -3645,6 +3797,64 @@ impl EscrowContract {
         Ok(page)
     }
 
+    /// Return a page of completed or cancelled matches, newest first.
+    ///
+    /// Pass `player` to restrict the history to matches involving that
+    /// address (as either `player1` or `player2`); pass `None` for the
+    /// full protocol-wide history. `offset`/`limit` paginate over the
+    /// filtered result set, not over the raw match ID range.
+    pub fn get_match_history(
+        env: Env,
+        player: Option<Address>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        let mut matches = soroban_sdk::vec![&env];
+        if limit == 0 {
+            return Ok(matches);
+        }
+
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+
+        let mut skipped = 0u32;
+        let mut added = 0u32;
+
+        for match_id in (0..count).rev() {
+            let Some(m) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
+            else {
+                continue;
+            };
+
+            if m.state != MatchState::Completed && m.state != MatchState::Cancelled {
+                continue;
+            }
+            if let Some(ref p) = player {
+                if &m.player1 != p && &m.player2 != p {
+                    continue;
+                }
+            }
+
+            if skipped < offset {
+                skipped = skipped.saturating_add(1);
+                continue;
+            }
+            matches.push_back(m);
+            added = added.saturating_add(1);
+            if added >= limit {
+                break;
+            }
+        }
+
+        Ok(matches)
+    }
+
     /// Update the oracle address — admin only.
     pub fn update_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
         extend_instance_ttl(&env);
@@ -3745,7 +3955,12 @@ impl EscrowContract {
                     let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
                     // Compute referral fee deduction for winner payouts (not draws)
                     let referral_fee = Self::compute_referral_fee(&env, &m, pot)?;
-                    let net_payout = pot.checked_sub(referral_fee).ok_or(Error::Overflow)?;
+                    let protocol_fee = Self::compute_protocol_fee(&env, pot)?;
+                    let net_payout = pot
+                        .checked_sub(referral_fee)
+                        .ok_or(Error::Overflow)?
+                        .checked_sub(protocol_fee)
+                        .ok_or(Error::Overflow)?;
                     if use_swap {
                         // Swap stake-token payout into player's preferred token using oracle rate.
                         // oracle rate: conversion_rate token_b units per 10_000_000 token_a units.
@@ -3767,6 +3982,10 @@ impl EscrowContract {
                         let referrer = m.referrer.clone().ok_or(Error::InvalidState)?;
                         let client = token::Client::new(&env, &m.token);
                         client.transfer(&env.current_contract_address(), &referrer, &referral_fee);
+                    }
+                    if protocol_fee > 0 {
+                        let client = token::Client::new(&env, &m.token);
+                        client.transfer(&env.current_contract_address(), &config.fee_recipient, &protocol_fee);
                     }
                 }
                 Winner::Draw => {
@@ -3792,7 +4011,12 @@ impl EscrowContract {
                     let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
                     // Compute referral fee deduction for winner payouts (not draws)
                     let referral_fee = Self::compute_referral_fee(&env, &m, pot)?;
-                    let net_payout = pot.checked_sub(referral_fee).ok_or(Error::Overflow)?;
+                    let protocol_fee = Self::compute_protocol_fee(&env, pot)?;
+                    let net_payout = pot
+                        .checked_sub(referral_fee)
+                        .ok_or(Error::Overflow)?
+                        .checked_sub(protocol_fee)
+                        .ok_or(Error::Overflow)?;
                     if use_swap {
                         // Swap stake-token payout into player's preferred token using oracle rate.
                         let swap_amount = net_payout
@@ -3813,6 +4037,10 @@ impl EscrowContract {
                         let referrer = m.referrer.clone().ok_or(Error::InvalidState)?;
                         let client = token::Client::new(&env, &m.token);
                         client.transfer(&env.current_contract_address(), &referrer, &referral_fee);
+                    }
+                    if protocol_fee > 0 {
+                        let client = token::Client::new(&env, &m.token);
+                        client.transfer(&env.current_contract_address(), &config.fee_recipient, &protocol_fee);
                     }
                 }
                 Winner::Draw => {
@@ -4172,6 +4400,10 @@ impl EscrowContract {
             cancellation_fee_basis_points: 0,
             treasury: env.current_contract_address(),
             stablecoin_only_mode: false,
+            maximum_stake: None,
+            match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+            protocol_fee_bps: 0,
+            fee_recipient: env.current_contract_address(),
         })
     }
 
@@ -4203,5 +4435,23 @@ impl EscrowContract {
             .ok_or(Error::Overflow)?
             / 10_000;
         Ok(referral_fee)
+    }
+
+    /// Compute the protocol fee to deduct from a winner's payout.
+    ///
+    /// Returns 0 if `protocol_fee_bps` is 0. Draw refunds never incur this
+    /// fee — it only applies to the winner's share of the pot.
+    ///
+    /// Formula: `protocol_fee = pot * protocol_fee_bps / 10_000`
+    fn compute_protocol_fee(env: &Env, pot: i128) -> Result<i128, Error> {
+        let config = Self::get_config(env);
+        if config.protocol_fee_bps == 0 {
+            return Ok(0);
+        }
+        let fee = pot
+            .checked_mul(config.protocol_fee_bps as i128)
+            .ok_or(Error::Overflow)?
+            / 10_000;
+        Ok(fee)
     }
 }

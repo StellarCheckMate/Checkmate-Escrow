@@ -386,17 +386,41 @@ registry.
 
 ---
 
-## game_id Format
+## Lichess Integration
 
-The `game_id` field is a platform-specific string that uniquely identifies a
-chess game. It is supplied when creating a match and must be passed to the
-oracle when submitting a result. The oracle uses it to look up the game outcome
-via the platform's public API.
+This section covers Lichess API integration for result verification and is provided for reference. If you are integrating a new chess platform, follow the patterns established here and in the Chess.com section above.
 
-### Lichess
+### API Key Setup
 
-Lichess game IDs are **8-character alphanumeric strings** (case-sensitive,
-lowercase letters and digits).
+The off-chain oracle service reads the Lichess API token from:
+
+```env
+LICHESS_API_TOKEN=lip_xxxxxxxxxxxxxxxx
+```
+
+#### Obtaining a Lichess API Token
+
+1. Visit [lichess.org/account/oauth/token](https://lichess.org/account/oauth/token)
+2. Create a new personal API token with `Challenge:Write` scope (or `Challenge:Read` for result lookups only)
+3. Copy the token to your `.env` file
+
+#### Using the API Token
+
+Set this in your `.env` file (copy from `.env.example`):
+
+```env
+LICHESS_API_TOKEN=lip_xxxxxxxxxxxxxxxx
+```
+
+The token is sent as a Bearer token in the `Authorization` header:
+
+```
+Authorization: Bearer lip_xxxxxxxxxxxxxxxx
+```
+
+### Game ID Format
+
+Lichess game IDs are **8-character alphanumeric strings** (case-sensitive, lowercase letters and digits only).
 
 They appear in the game URL:
 
@@ -406,47 +430,92 @@ https://lichess.org/abcd1234
                     game_id = "abcd1234"
 ```
 
-Example API call the oracle makes:
+### API Endpoint
+
+The oracle fetches game results from Lichess:
 
 ```
-GET https://lichess.org/game/export/abcd1234
+GET https://lichess.org/game/export/abcd1234?evals=false&clocks=false
 ```
 
-Valid example: `"abcd1234"`  
-Invalid examples: `"ABCD1234"` (uppercase), `"abcd123"` (7 chars), `""` (empty)
+Optional query parameters reduce response size:
+- `evals=false` — omit move evaluations
+- `clocks=false` — omit clock data
 
-### Chess.com
+### Example Request / Response
 
-Chess.com game IDs are **numeric strings**, typically 7–12 digits, found in the live game URL:
+**Request:**
 
-```
-https://www.chess.com/game/live/123456789
-                                ^^^^^^^^^
-                                game_id = "123456789"
-```
-
-Example API call the oracle makes:
-
-```
-GET https://api.chess.com/pub/game/123456789
+```http
+GET https://lichess.org/game/export/abcd1234?evals=false&clocks=false
+Authorization: Bearer lip_xxxxxxxxxxxxxxxx
 ```
 
-Valid example: `"123456789"`
-Invalid examples: `"abc"` (non-numeric), `""` (empty)
+**Successful response (white wins):**
 
+```json
+{
+  "id": "abcd1234",
+  "winner": "white"
+}
+```
+
+**Draw response (winner field absent):**
+
+```json
+{
+  "id": "abcd1234"
+}
+```
+
+**Game still in progress (no winner field):**
+
+```json
+{
+  "id": "abcd1234",
+  "status": "started"
+}
+```
+
+### Response Parsing and Result Mapping
+
+The `winner` field is mapped to the on-chain `Winner` type as follows:
+
+| `winner` field | On-chain `Winner` | Notes                                      |
+|---|---|---|
+| `"white"` | `Winner::Player1` | Player 1 is always white in the match |
+| `"black"` | `Winner::Player2` | Player 2 is always black in the match |
+| absent / `null` | `Winner::Draw` | Stakes are refunded to both players |
+| anything else | Error | `LichessError::InvalidResponse` — not submitted |
+
+### Error Handling
+
+| Condition | Error variant | Oracle behaviour |
+|---|---|---|
+| Empty game ID | `InvalidGameId` | Rejected before any HTTP call; not retried |
+| HTTP 404 | `GameNotFound` | Game ID invalid or not accessible; not retried |
+| HTTP non-2xx (other than 404) | `HttpStatus { status }` | Transient; retried with exponential backoff |
+| Request timeout (> 30 s) | `Timeout` | Transient; retried with exponential backoff |
+| Network error (connection refused etc.) | `Http(reqwest::Error)` | Transient; retried with exponential backoff |
+| `winner` field absent/null or invalid value | `InvalidResponse` | Game not finished or parsing error; retried later |
+
+The oracle will **never** submit a result on-chain until a verified terminal `winner` value is received.
 
 ---
 
-## Game ID Formats
+## game_id Format
 
-| Platform   | Format                        | Example         | Validation Rule                                      |
-|------------|-------------------------------|-----------------|------------------------------------------------------|
-| Lichess    | 8-character alphanumeric      | `abcd1234`      | Exactly 8 chars; lowercase letters and digits only   |
-| Chess.com  | Numeric string (7–12 digits)  | `123456789`     | Digits only; no letters or special characters        |
+The `game_id` field is a platform-specific string that uniquely identifies a
+chess game. It is supplied when creating a match and must be passed to the
+oracle when submitting a result. The oracle uses it to look up the game outcome
+via the platform's public API.
+
+| Platform   | Format                        | Example         | Validation Rule                                      | URL Pattern |
+|------------|-------------------------------|-----------------|------------------------------------------------------|---|
+| Lichess    | 8-character alphanumeric      | `abcd1234`      | Exactly 8 chars; lowercase letters and digits only   | `https://lichess.org/{game_id}` |
+| Chess.com  | Numeric string (7–12 digits)  | `123456789`     | Digits only; no letters or special characters        | `https://www.chess.com/game/live/{game_id}` |
 
 All game IDs are subject to a maximum length of **64 bytes** (`MAX_GAME_ID_LEN`). Submissions exceeding this limit are rejected on-chain with `Error::InvalidGameId` before any off-chain lookup is attempted.
-
----
 
 ## Validation Rules
 
@@ -490,7 +559,7 @@ results in a single atomic transaction.
 
 This section is the primary reference for oracle contributors working with the Chess.com platform. It covers everything needed to fetch a game result from Chess.com and feed it into the on-chain `submit_result` flow.
 
-### Environment Variable
+### API Key Setup
 
 The off-chain oracle service reads the Chess.com API key from:
 
@@ -498,10 +567,24 @@ The off-chain oracle service reads the Chess.com API key from:
 CHESSDOTCOM_API_KEY=your-key-here
 ```
 
-Set this in your `.env` file (copy from `.env.example`). The key is sent as a request header on every Chess.com API call:
+#### Obtaining a Chess.com API Key
+
+1. Visit [chess.com/settings/developer](https://www.chess.com/settings/developer)
+2. Generate a new access token (or use an existing one if you have one already)
+3. Copy the token to your `.env` file (or into your environment variables for production deployment)
+
+#### Using the API Key
+
+Set this in your `.env` file (copy from `.env.example`):
+
+```env
+CHESSDOTCOM_API_KEY=your-token-here
+```
+
+The key is sent as a request header on every Chess.com API call:
 
 ```
-X-Chess-Com-API-Key: your-key-here
+X-Chess-Com-API-Key: your-token-here
 ```
 
 > **Note:** The Chess.com public API does not require authentication for game lookups today, but the `CHESSDOTCOM_API_KEY` header is included for forward-compatibility and to receive higher rate-limit tiers if Chess.com introduces them. Contrast this with Lichess, which uses `LICHESS_API_TOKEN` sent as a `Bearer` token in the `Authorization` header.
@@ -597,21 +680,30 @@ The mapping is implemented in `oracle-service/src/oracle/chess_com_client.rs` in
 
 The oracle will **never** submit a result on-chain until a verified terminal `end.result` of `"white"`, `"black"`, or `"draw"` is received.
 
-### Rate Limiting and Authentication Differences from Lichess
+### Platform API Comparison: Lichess vs Chess.com
 
-| Aspect                    | Chess.com                                          | Lichess                                               |
-|---------------------------|----------------------------------------------------|-------------------------------------------------------|
-| Authentication            | `X-Chess-Com-API-Key` header (optional today)      | `Authorization: Bearer <LICHESS_API_TOKEN>` (required) |
-| Rate limit                | 30 req/min (≈ 1 req / 2 s), enforced client-side  | No documented hard limit; same 2 s spacing applied    |
-| Client-side spacing       | Shared token bucket with configurable burst/rate   | Shared token bucket with configurable burst/rate     |
-| Per-request timeout       | 30 seconds                                         | 30 seconds                                            |
-| Response format           | JSON; result in `end.result`                       | JSON; result in top-level `winner` field              |
-| Draw representation       | `"draw"` in `end.result`                           | `winner` field absent from JSON object                |
-| Game ID format            | Numeric string, 7–12 digits                        | Exactly 8 alphanumeric characters                     |
-| API base URL              | `https://api.chess.com`                            | `https://lichess.org`                                 |
-| Export path               | `/pub/game/{game_id}`                              | `/game/export/{game_id}`                              |
+Developers integrating a new oracle client or adding support for additional platforms should understand the key differences between Lichess and Chess.com APIs:
 
-Key difference to highlight for contributors: Lichess signals a **draw** by omitting the `winner` key entirely, while Chess.com signals a draw with the explicit value `"draw"` in `end.result`. Make sure any result-parsing code handles both conventions correctly.
+| Aspect                    | Lichess                                               | Chess.com                                          |
+|---------------------------|-------------------------------------------------------|---------------------------------------------------|
+| **Authentication** | Required: `Authorization: Bearer <TOKEN>` (required to set scope) | Optional today: `X-Chess-Com-API-Key` header (for forward-compatibility) |
+| **API Base URL** | `https://lichess.org` | `https://api.chess.com` |
+| **Export Path** | `/game/export/{game_id}[?evals=false&clocks=false]` | `/pub/game/{game_id}` |
+| **Rate Limit** | No documented hard limit (client enforces ~2 s spacing) | 30 req/min (client enforces with token bucket) |
+| **Per-request Timeout** | 30 seconds | 30 seconds |
+| **Result Field** | Top-level `winner` key in JSON response | Nested `end.result` in JSON response |
+| **Draw Representation** | `winner` field **absent** (null or omitted) | `end.result` = `"draw"` (explicit string value) |
+| **Game ID Format** | Exactly 8 alphanumeric characters (lowercase) | Numeric string, 7–12 digits |
+| **Response Format Example (White Wins)** | `{ "id": "abcd1234", "winner": "white" }` | `{ "end": { "result": "white" } }` |
+| **Response Format Example (Draw)** | `{ "id": "abcd1234" }` (winner key absent) | `{ "end": { "result": "draw" } }` (explicit) |
+| **Game In Progress** | `{ "id": "...", "status": "started" }` (no winner key) | `{ "end": null }` or `{ "end": {} }` (no result key) |
+
+**Key Integration Notes:**
+
+1. **Draw Handling:** This is the most critical difference. Lichess omits the `winner` key for a draw, while Chess.com explicitly sets `end.result = "draw"`. Code that maps the response must handle both conventions.
+2. **Rate Limits:** Lichess has no documented limit but should be treated as rate-limited. Chess.com documents 30 req/min. Both use client-side token bucket rate limiters.
+3. **Authentication:** Lichess requires auth to set API scopes; Chess.com's public API doesn't require it today, but the header is sent for forward-compatibility.
+4. **Field Nesting:** Lichess has a flat response; Chess.com nests the result under `end.result`. Always check for the presence and nullability of fields before parsing.
 
 ### Oracle rate-limiter and failover design
 

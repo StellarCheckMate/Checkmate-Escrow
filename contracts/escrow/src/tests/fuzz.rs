@@ -221,14 +221,14 @@ fn prop_only_oracle_can_submit_result(player1_submits: bool) -> bool {
 
 /// Invariant: set_match_timeout rejects values outside [MIN, MAX].
 #[quickcheck]
-fn prop_timeout_bounds_enforced(timeout: u32) -> bool {
-    use crate::{MAX_MATCH_TIMEOUT_LEDGERS, MIN_MATCH_TIMEOUT_LEDGERS};
+fn prop_timeout_bounds_enforced(timeout: u64) -> bool {
+    use crate::{MAX_MATCH_TIMEOUT_SECONDS, MIN_MATCH_TIMEOUT_SECONDS};
 
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_set_match_timeout(&timeout);
-    let valid = timeout >= MIN_MATCH_TIMEOUT_LEDGERS && timeout <= MAX_MATCH_TIMEOUT_LEDGERS;
+    let valid = timeout >= MIN_MATCH_TIMEOUT_SECONDS && timeout <= MAX_MATCH_TIMEOUT_SECONDS;
 
     if valid {
         result.is_ok()
