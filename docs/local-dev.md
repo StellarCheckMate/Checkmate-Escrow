@@ -230,6 +230,151 @@ stellar contract deploy \
   --network standalone
 ```
 
+4. **Reset contract state** (see [Resetting Local Contract State](#resetting-local-contract-state))
+
+## Resetting Local Contract State
+
+During local development, you'll often need to reset contract state between iterations — whether testing breaking changes, cleaning up from failed deployments, or starting fresh with a new contract version. This section covers the main approaches.
+
+### Option 1: Stop and restart the local Stellar node
+
+The simplest and most thorough way to reset state is to stop and restart the standalone network. This clears all contract state and creates a clean environment.
+
+**Using Docker:**
+
+```bash
+# Stop the current container (Ctrl+C in the terminal running it)
+# Then start a fresh instance:
+docker run --rm -it \
+  -p 8000:8000 \
+  stellar/quickstart:latest \
+  --standalone
+```
+
+**Using Stellar CLI:**
+
+```bash
+# Stop the running network
+stellar network stop local
+
+# Start a fresh network
+stellar network start local
+```
+
+**Expected output after restart:**
+
+```
+$ stellar network start local
+Starting local network...
+Network started successfully
+RPC URL: http://localhost:8000/soroban/rpc
+Network Passphrase: Standalone Network ; February 2017
+```
+
+### Option 2: Clear storage and redeploy contracts
+
+If you want to keep the node running but reset the contract state, you can manually clear Soroban storage and redeploy.
+
+**Clear all storage:**
+
+```bash
+# For standalone network, storage is in the container filesystem
+# Stop the container, remove volumes, then restart
+docker stop stellar-standalone
+docker rm stellar-standalone
+docker volume prune -f
+```
+
+**Redeploy contracts after clearing:**
+
+```bash
+# Rebuild contracts
+./scripts/build.sh
+
+# Deploy escrow contract
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/escrow.wasm \
+  --source deployer \
+  --network standalone
+
+# Deploy oracle contract
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/oracle.wasm \
+  --source deployer \
+  --network standalone
+```
+
+### Option 3: Reset specific contract instances
+
+For development workflows that test incremental changes, you can remove individual contract instances without affecting the entire node.
+
+**Remove a contract instance:**
+
+```bash
+# Get the contract ID
+CONTRACT_ID=$(stellar contract get-id --wasm target/wasm32-unknown-unknown/release/escrow.wasm --network standalone)
+
+# Remove the contract instance
+stellar contract remove \
+  --id "$CONTRACT_ID" \
+  --network standalone
+```
+
+**Note:** This only removes the contract instance — you'll need to rebuild and redeploy if you made code changes.
+
+### Common patterns
+
+**Pattern 1: Full reset between major iterations**
+
+```bash
+# Stop and restart the network
+stellar network stop local
+stellar network start local
+
+# Rebuild and redeploy
+./scripts/build.sh
+./scripts/deploy_local.sh  # or use your custom deploy script
+```
+
+**Pattern 2: Quick reset for minor changes**
+
+```bash
+# Just rebuild the WASM and redeploy (keeps existing network state)
+./scripts/build.sh
+
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/escrow.wasm \
+  --source deployer \
+  --network standalone
+```
+
+**Pattern 3: Docker compose reset**
+
+```bash
+# Stop and remove all containers and volumes
+docker compose down -v
+
+# Rebuild and restart
+docker compose up --build
+```
+
+### Verification
+
+After resetting, verify the state is clean:
+
+```bash
+# Check network is running
+stellar get-ledger --network standalone
+
+# Confirm no contracts are deployed
+stellar contract list --network standalone
+# Expected: empty list or only default system contracts
+
+# Deploy and verify
+stellar contract deploy --wasm target/wasm32-unknown-unknown/release/escrow.wasm --source deployer --network standalone
+# Expected: Contract deployed successfully, contract ID printed
+```
+
 ## Running the Oracle Service Locally
 
 The oracle service (`oracle-service/`) polls active matches, checks their result on Lichess/Chess.com, and submits the verified result on-chain via Soroban RPC. It reads all configuration from environment variables (see `oracle-service/src/config.rs`) and, in debug builds, auto-loads a `.env` file from the current directory.
