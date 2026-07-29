@@ -207,6 +207,7 @@ pub fn build_router(
         .route("/matches/active", get(get_active_matches))
         .route("/matches/pending", get(get_pending_matches))
         .route("/match/:match_id", get(get_match_info))
+        .route("/players/:address/matches", get(get_player_matches))
         .route(
             "/transactions/player/:player_address",
             get(get_player_transactions),
@@ -749,6 +750,14 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
 pub struct Stats {
     pub total_events: i64,
     pub cache_size: usize,
+}
+
+#[derive(Serialize)]
+pub struct PlayerMatchesResponse {
+    pub matches: Vec<MatchInfo>,
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
 }
 
 /// `GET /stats` – service-level statistics.
