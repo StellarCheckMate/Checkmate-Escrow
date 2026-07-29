@@ -37,7 +37,7 @@ stellar-strkey = "0.0.18"
 # Random number generator for sequence numbers / nonces
 rand = "0.8"
 # Base64 for XDR encoding over the wire
-base64 = "0.22"
+base64 = "0.23"
 # SHA-256 hashing for Stellar transaction signing
 sha2 = "0.10"
 
