@@ -195,6 +195,10 @@ pub enum DataKey {
     BlacklistedTokens,
     FeeTiers,
     PlayerPreferredToken(Address),
+    /// Pending permanent oracle rotation proposal (requires confirmation).
+    PendingOracleRotation,
+    /// Temporary oracle rotation active until expiry timestamp.
+    TempOracleRotation,
 }
 
 /// The lifecycle event that triggered a balance snapshot.

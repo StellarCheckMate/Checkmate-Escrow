@@ -2535,3 +2535,111 @@ fn test_expire_match_before_and_after_timeout() {
         "player2's balance must be unchanged (no deposit was made)"
     );
 }
+
+// #1176 — cancel_match must be rejected once both players have deposited (Active state)
+#[test]
+fn test_cancel_match_rejects_when_active() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create a match and have both players deposit so it transitions to Active.
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "active_cancel_guard"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Confirm the match is now Active before attempting the cancel.
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Attempt to cancel as player1 — must be rejected with MatchAlreadyActive.
+    let result = client.try_cancel_match(&id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::MatchAlreadyActive)),
+        "cancel_match must return MatchAlreadyActive when the match is in Active state"
+    );
+
+    // The match state must remain Active (no side-effects from the failed call).
+    assert_eq!(
+        client.get_match(&id).state,
+        MatchState::Active,
+        "match state must remain Active after a rejected cancel attempt"
+    );
+}
+
+// #1177 — draw refund must return exactly stake_amount to each player and
+//          leave the escrow balance at zero.
+#[test]
+fn test_draw_refund_correct_amounts() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    let stake_amount: i128 = 250;
+
+    // Record balances before the match so the assertions are stake-amount
+    // independent (setup mints 1000 to each player).
+    let p1_before = token_client.balance(&player1);
+    let p2_before = token_client.balance(&player2);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token,
+        &String::from_str(&env, "draw_refund_amounts"),
+        &Platform::Lichess,
+    );
+
+    // Both players deposit.
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Escrow holds both stakes.
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        stake_amount * 2,
+        "escrow must hold both stakes after both players deposit"
+    );
+
+    // Oracle submits a draw result.
+    client.submit_result(&id, &Winner::Draw);
+
+    // Claim vested payouts (vesting_duration_seconds = 0 in setup, so
+    // claim_vested_payout is available immediately).
+    client.claim_vested_payout(&id, &player1);
+    client.claim_vested_payout(&id, &player2);
+
+    // Each player must have received exactly their stake_amount back.
+    assert_eq!(
+        token_client.balance(&player1),
+        p1_before,
+        "player1's balance must be restored to its pre-match value after a draw"
+    );
+    assert_eq!(
+        token_client.balance(&player2),
+        p2_before,
+        "player2's balance must be restored to its pre-match value after a draw"
+    );
+
+    // The escrow must be empty after both refunds.
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        0,
+        "escrow balance must be 0 after both draw refunds are claimed"
+    );
+
+    // The match must be in Completed state.
+    assert_eq!(
+        client.get_match(&id).state,
+        MatchState::Completed,
+        "match state must be Completed after a draw result is submitted"
+    );
+}

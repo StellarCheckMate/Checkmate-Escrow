@@ -515,3 +515,126 @@ running.
 - For standalone, ensure `docker compose up` (or equivalent) is running before
   deploying.
 - Check the [Stellar Status page](https://status.stellar.org) for known outages.
+
+---
+
+## Post-Deploy Verification
+
+After deploying or rotating the oracle service, run the dedicated oracle smoke
+test to confirm that:
+
+1. The oracle is **reachable** (health endpoint returns HTTP 200).
+2. The oracle's **configured contract address** matches `CONTRACT_ESCROW`.
+3. The **on-chain oracle address** stored in the escrow contract matches the
+   oracle's signing key.
+
+### Running the smoke test
+
+```bash
+# Ensure .env is populated (CONTRACT_ESCROW, ORACLE_URL, STELLAR_NETWORK).
+cp .env.example .env   # if not already done
+# … fill in the values …
+
+./scripts/smoke_test_oracle.sh
+```
+
+You can also pass arguments directly to override environment variables:
+
+```bash
+./scripts/smoke_test_oracle.sh <CONTRACT_ESCROW> <ORACLE_URL> <NETWORK>
+# Example:
+./scripts/smoke_test_oracle.sh CABC...XYZ http://oracle.example.com:8080 testnet
+```
+
+### Environment variables
+
+| Variable          | Description                                              | Default               |
+|-------------------|----------------------------------------------------------|-----------------------|
+| `CONTRACT_ESCROW` | Escrow contract ID (`C…`)                                | **required**          |
+| `ORACLE_URL`      | Oracle service base URL                                  | `http://localhost:8080` |
+| `STELLAR_NETWORK` | Network name from `environments.toml`                    | `testnet`             |
+
+### Expected output (all passing)
+
+```
+══════════════════════════════════════════════════════
+  Checkmate-Escrow — Oracle Smoke Test
+══════════════════════════════════════════════════════
+  Contract : CABC...XYZ
+  Oracle   : http://oracle.example.com:8080
+  Network  : testnet
+
+▶ Pre-flight checks
+  ✅ PASS  curl is available
+  ✅ PASS  jq is available
+  ✅ PASS  stellar is available
+
+▶ Check 1 — Oracle health endpoint
+  ✅ PASS  GET http://oracle.example.com:8080/health → HTTP 200
+
+▶ Check 2 — Oracle reports correct escrow contract address
+  ✅ PASS  Oracle contract_id matches CONTRACT_ESCROW (CABC...XYZ)
+
+▶ Check 3 — Escrow contract's on-chain oracle address
+  ✅ PASS  On-chain oracle address matches oracle signing key (G…)
+
+══════════════════════════════════════════════════════
+  ✅ PASS — All oracle smoke tests passed.
+══════════════════════════════════════════════════════
+```
+
+A non-zero exit code (`❌ FAIL`) is printed for each failing check with an
+actionable error message. The script exits with code `1` if any check fails,
+making it safe to use in CI or deployment pipelines:
+
+```bash
+./scripts/smoke_test_oracle.sh || { echo "Oracle smoke test failed — aborting deploy."; exit 1; }
+```
+
+### Check descriptions
+
+| Check | What it verifies | Common failure cause |
+|-------|-----------------|----------------------|
+| **1 – Health endpoint** | `GET /health` returns HTTP 200 | Oracle service not running or wrong `ORACLE_URL` |
+| **2 – Contract address** | Oracle's `contract_id` field == `CONTRACT_ESCROW` | Oracle misconfigured with a stale contract address |
+| **3 – On-chain oracle address** | `get_oracle_address` on escrow == oracle's signing key | Oracle rotated without calling `update_oracle` on-chain (or vice-versa) |
+
+### Troubleshooting
+
+**Check 1 fails — HTTP 000 or connection refused**
+
+The oracle service is not reachable. Verify it is running and that `ORACLE_URL`
+is correct:
+
+```bash
+docker ps | grep oracle          # Docker deployments
+systemctl status oracle-service  # systemd deployments
+curl -v $ORACLE_URL/health       # manual connectivity check
+```
+
+**Check 2 fails — contract address mismatch**
+
+The oracle is pointed at a different contract than `CONTRACT_ESCROW`. Update
+the oracle's `CONTRACT_ESCROW` / `ESCROW_CONTRACT_ID` environment variable and
+restart the service.
+
+**Check 3 fails — on-chain oracle address mismatch**
+
+Either:
+- The oracle was rotated on-chain (via `update_oracle`) but the service was
+  not updated to use the new key, **or**
+- The service was reconfigured with a new signing key but `update_oracle` was
+  not called on the escrow contract.
+
+To rotate the oracle on-chain:
+
+```bash
+stellar contract invoke \
+  --id $CONTRACT_ESCROW \
+  --source <ADMIN_KEYPAIR> \
+  --network $STELLAR_NETWORK \
+  -- update_oracle \
+  --new_oracle <NEW_ORACLE_ADDRESS>
+```
+
+Then re-run `./scripts/smoke_test_oracle.sh` to confirm.
