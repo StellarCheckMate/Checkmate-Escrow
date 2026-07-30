@@ -686,3 +686,64 @@ fn test_accept_admin_wrong_caller_rejected() {
     let result = client.try_accept_admin();
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
+
+// ── Cross-Contract Reentrancy Guard ──────────────────────────────────────────
+
+/// Verify that the DepositInProgress reentrancy guard rejects a second
+/// deposit() call for the same match_id while the first is still executing.
+///
+/// Soroban does not support true re-entrant cross-contract callbacks in the
+/// test environment the way EVM does, so we simulate the race condition by
+/// manually writing the DepositInProgress flag into temporary storage before
+/// calling deposit().  This is the exact state the contract would be in if a
+/// malicious token contract (e.g. one with ERC-777-style transfer hooks)
+/// called back into deposit() during the token.transfer() cross-contract call.
+#[test]
+fn test_deposit_rejects_cross_contract_reentrancy_via_token_callback() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100i128,
+        &token,
+        &String::from_slice(&env, "reentrant_game"),
+        &Platform::Lichess,
+    );
+
+    // Simulate the mid-execution state: the reentrancy guard is set as it
+    // would be immediately before the cross-contract token.transfer() call.
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .temporary()
+            .set(&DataKey::DepositInProgress(match_id), &true);
+    });
+
+    // A concurrent (or callback-triggered) deposit() call for the same
+    // match_id must be rejected with DepositInProgress.
+    env.mock_all_auths();
+    let result = client.try_deposit(&match_id, &player1);
+    assert!(
+        matches!(result, Err(Ok(Error::DepositInProgress))),
+        "deposit() must return Err(DepositInProgress) when the reentrancy guard is set; got: {:?}",
+        result
+    );
+
+    // After clearing the guard (simulating normal completion), deposit()
+    // proceeds as expected.
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .temporary()
+            .remove(&DataKey::DepositInProgress(match_id));
+    });
+
+    env.mock_all_auths();
+    let result2 = client.try_deposit(&match_id, &player1);
+    assert!(
+        result2.is_ok(),
+        "deposit() must succeed once the reentrancy guard is cleared; got: {:?}",
+        result2
+    );
+}

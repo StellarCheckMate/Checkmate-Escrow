@@ -135,6 +135,11 @@ pub enum DataKey {
     PlayerActiveMatchCount(Address),
     /// Cached count of completed matches for a player, updated atomically at completion.
     PlayerCompletedMatchCount(Address),
+    /// Reentrancy guard for deposit(): set to true before the cross-contract
+    /// token transfer and cleared after all state updates complete.  Any
+    /// deposit() call that finds this flag set for a given match_id is
+    /// rejected immediately with `Error::DepositInProgress`.
+    DepositInProgress(u64),
 }
 
 /// The lifecycle event that triggered a balance snapshot.
