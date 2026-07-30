@@ -49,7 +49,7 @@ fn test_last_heartbeat_initialized_on_create_match() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "heartbeat_init"),
+        &String::from_str(&env, "c6d24a30"),
         &Platform::Lichess,
     );
 
@@ -72,7 +72,7 @@ fn test_last_heartbeat_refreshed_on_each_deposit() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "heartbeat_refresh"),
+        &String::from_str(&env, "e506f012"),
         &Platform::Lichess,
     );
     assert_eq!(client.get_match(&id).last_heartbeat, 1_000);
@@ -117,7 +117,7 @@ fn test_rollback_within_window_refunds_both_players() {
     client.dispute_and_rollback_match(
         &id,
         &player1,
-        &String::from_str(&env, "opponent_disconnected_lost_connection"),
+        &String::from_str(&env, "c16e8e9a"),
     );
 
     let m = client.get_match(&id);
@@ -158,7 +158,7 @@ fn test_rollback_at_exact_window_boundary_succeeds() {
     client.dispute_and_rollback_match(
         &id,
         &player2,
-        &String::from_str(&env, "boundary_test"),
+        &String::from_str(&env, "6717ca6c"),
     );
 
     let m = client.get_match(&id);
@@ -182,7 +182,7 @@ fn test_rollback_by_either_player_succeeds() {
     client_a.dispute_and_rollback_match(
         &match_a,
         &p1a,
-        &String::from_str(&env, "p1_initiated"),
+        &String::from_str(&env, "16f58d84"),
     );
     assert_eq!(
         client_a.get_match(&match_a).state,
@@ -196,7 +196,7 @@ fn test_rollback_by_either_player_succeeds() {
     client_b.dispute_and_rollback_match(
         &match_b,
         &p2b,
-        &String::from_str(&env, "p2_initiated"),
+        &String::from_str(&env, "69ce7626"),
     );
     assert_eq!(
         client_b.get_match(&match_b).state,
@@ -221,7 +221,7 @@ fn test_rollback_after_window_returns_rollback_window_expired() {
     let result = client.try_dispute_and_rollback_match(
         &id,
         &player1,
-        &String::from_str(&env, "too_late"),
+        &String::from_str(&env, "9fb2bbc1"),
     );
     assert_eq!(
         result,
@@ -259,7 +259,7 @@ fn test_rollback_24h1s_after_heartbeat_is_rejected() {
     let result = client.try_dispute_and_rollback_match(
         &id,
         &player2,
-        &String::from_str(&env, "well_past_window"),
+        &String::from_str(&env, "078c3210"),
     );
     assert_eq!(result, Err(Ok(Error::VotingPeriodElapsed)));
 }
@@ -277,7 +277,7 @@ fn test_rollback_rejects_non_player_address() {
     let result = client.try_dispute_and_rollback_match(
         &id,
         &stranger,
-        &String::from_str(&env, "sneaky"),
+        &String::from_str(&env, "66f363a6"),
     );
     assert_eq!(
         result,
@@ -300,14 +300,14 @@ fn test_rollback_rejects_pending_match() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "rb_pending"),
+        &String::from_str(&env, "0f6ed757"),
         &Platform::Lichess,
     );
 
     let result = client.try_dispute_and_rollback_match(
         &id,
         &player1,
-        &String::from_str(&env, "wrong_path"),
+        &String::from_str(&env, "4a788977"),
     );
     assert_eq!(
         result,
@@ -328,7 +328,7 @@ fn test_rollback_rejects_completed_match() {
     let result = client.try_dispute_and_rollback_match(
         &id,
         &player1,
-        &String::from_str(&env, "too_completed"),
+        &String::from_str(&env, "208a3573"),
     );
     assert_eq!(
         result,
@@ -349,7 +349,7 @@ fn test_rollback_rejects_paused_match() {
     let result = client.try_dispute_and_rollback_match(
         &id,
         &player1,
-        &String::from_str(&env, "paused_rollback"),
+        &String::from_str(&env, "a31b6bb0"),
     );
     assert_eq!(
         result,
@@ -370,14 +370,14 @@ fn test_rollback_rejects_already_cancelled_match() {
     client.dispute_and_rollback_match(
         &id,
         &player1,
-        &String::from_str(&env, "first_rollback"),
+        &String::from_str(&env, "79c6dd18"),
     );
     assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
 
     let result = client.try_dispute_and_rollback_match(
         &id,
         &player2,
-        &String::from_str(&env, "second_rollback_attempt"),
+        &String::from_str(&env, "082e1045"),
     );
     assert_eq!(
         result,
@@ -440,7 +440,7 @@ fn test_rollback_emits_match_rollback_event() {
     env.ledger().set_timestamp(50_000);
     let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_event");
 
-    let reason = String::from_str(&env, "opponent_disconnected_midgame");
+    let reason = String::from_str(&env, "64d7cfda");
     client.dispute_and_rollback_match(&id, &player1, &reason);
 
     let events = env.events().all();
@@ -479,7 +479,7 @@ fn test_rollback_event_not_emitted_when_window_expired() {
     let _ = client.try_dispute_and_rollback_match(
         &id,
         &player1,
-        &String::from_str(&env, "too_late"),
+        &String::from_str(&env, "9fb2bbc1"),
     );
 
     let rollback_short: soroban_sdk::Val = symbol_short!("rollback").into_val(&env);
@@ -597,7 +597,7 @@ fn test_rollback_multi_token_match_refunds_each_player_in_their_token() {
         &token_a,
         &token_b,
         &rate,
-        &String::from_str(&env, "rb_multi_token"),
+        &String::from_str(&env, "17d08186"),
         &Platform::Lichess,
     );
 
@@ -625,7 +625,7 @@ fn test_rollback_multi_token_match_refunds_each_player_in_their_token() {
     escrow_client.dispute_and_rollback_match(
         &match_id,
         &player1,
-        &String::from_str(&env, "multi_token_disconnect"),
+        &String::from_str(&env, "5dfd0223"),
     );
 
     let m_after = escrow_client.get_match(&match_id);
@@ -689,7 +689,7 @@ fn test_rollback_multi_token_emits_match_rollback_event() {
         &token_a,
         &token_b,
         &50_000_000,
-        &String::from_str(&env, "rb_multi_token_event"),
+        &String::from_str(&env, "5c922221"),
         &Platform::Lichess,
     );
     escrow_client.deposit(&match_id, &player1);
@@ -697,7 +697,7 @@ fn test_rollback_multi_token_emits_match_rollback_event() {
 
     StellarAssetClient::new(&env, &token_b).mint(&escrow_client.address, &500_0000000);
 
-    let reason = String::from_str(&env, "midgame_disconnect_multitoken");
+    let reason = String::from_str(&env, "a09e238d");
     env.ledger().set_timestamp(0);
 
     escrow_client.dispute_and_rollback_match(&match_id, &player1, &reason);
@@ -730,7 +730,7 @@ fn test_heartbeat_match_by_player1_refreshes_last_heartbeat() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "hb_player1"),
+        &String::from_str(&env, "c6c8ec3b"),
         &Platform::Lichess,
     );
     assert_eq!(client.get_match(&id).last_heartbeat, 0);
@@ -773,7 +773,7 @@ fn test_heartbeat_match_by_player2_refreshes_last_heartbeat() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "hb_player2"),
+        &String::from_str(&env, "8cebac55"),
         &Platform::Lichess,
     );
     env.ledger().set_timestamp(6_000);
@@ -828,7 +828,7 @@ fn test_heartbeat_match_rejects_non_active_states() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "hb_pending"),
+        &String::from_str(&env, "65fd4ea1"),
         &Platform::Lichess,
     );
     let r = client.try_heartbeat_match(&pending_id, &player1);
@@ -863,7 +863,7 @@ fn test_heartbeat_match_rejects_non_active_states() {
     client.dispute_and_rollback_match(
         &cancel_id,
         &player1,
-        &String::from_str(&env, "before hb test"),
+        &String::from_str(&env, "297c3c59"),
     );
     let r = client.try_heartbeat_match(&cancel_id, &player1);
     assert_eq!(
@@ -931,7 +931,7 @@ fn test_heartbeat_match_keeps_rollback_window_alive_past_24h() {
     client.dispute_and_rollback_match(
         &id,
         &player2,
-        &String::from_str(&env, "post_heartbeat_disconnect"),
+        &String::from_str(&env, "7a20679e"),
     );
 
     let m = client.get_match(&id);

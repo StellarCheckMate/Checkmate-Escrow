@@ -15,7 +15,7 @@ fn test_full_lifecycle_winner_payout() {
         &player2,
         &stake,
         &token,
-        &String::from_str(&env, "integration_winner_game"),
+        &String::from_str(&env, "94ae2fc9"),
         &Platform::Lichess,
     );
 
@@ -58,7 +58,7 @@ fn test_full_lifecycle_draw_refund() {
         &player2,
         &stake,
         &token,
-        &String::from_str(&env, "integration_draw_game"),
+        &String::from_str(&env, "43d9eaee"),
         &Platform::Lichess,
     );
 

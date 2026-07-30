@@ -10,7 +10,7 @@ fn test_create_match_zero_stake() {
         &player2,
         &0,
         &token,
-        &String::from_str(&env, "zero_stake_game"),
+        &String::from_str(&env, "c12c3c42"),
         &Platform::Lichess,
     );
 
@@ -168,7 +168,7 @@ fn test_create_match_below_minimum_stake_rejected() {
         &player2,
         &10,
         &token,
-        &String::from_str(&env, "low_stake_game"),
+        &String::from_str(&env, "acf75411"),
         &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::InvalidAmount)));
@@ -179,7 +179,7 @@ fn test_create_match_below_minimum_stake_rejected() {
         &player2,
         &50,
         &token,
-        &String::from_str(&env, "min_stake_game"),
+        &String::from_str(&env, "b5dbcc2b"),
         &Platform::Lichess,
     );
     assert_eq!(client.get_match(&id).stake_amount, 50);
