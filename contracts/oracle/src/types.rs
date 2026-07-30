@@ -119,6 +119,9 @@ pub enum DataKey {
     OracleVote(u64, Address),
     /// Metrics tracking and SLA performance indicators for an oracle.
     OracleMetrics(Address),
+    /// Cached result for a (game_id, platform) pair to avoid redundant lookups.
+    /// Stores `(Winner, expiry_timestamp)`.
+    OracleCache(String, Platform),
 }
 
 /// Configurable submission limits for a single oracle address.

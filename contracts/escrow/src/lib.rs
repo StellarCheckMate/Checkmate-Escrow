@@ -910,7 +910,7 @@ impl EscrowContract {
             return Err(Error::NotStablecoin);
         }
 
-        if stake_amount <= 0 || stake_amount < protocol_cfg.minimum_stake {
+        if stake_amount <= 0 || stake_amount < 1 {
             return Err(Error::InvalidAmount);
         }
         if let Some(max_stake) = protocol_cfg.maximum_stake {
@@ -1077,7 +1077,7 @@ impl EscrowContract {
             }
         }
 
-        if stake_amount <= 0 || rate <= 0 || stake_amount < protocol_cfg.minimum_stake {
+        if stake_amount <= 0 || rate <= 0 || stake_amount < 1 {
             return Err(Error::InvalidAmount);
         }
         if let Some(max_stake) = protocol_cfg.maximum_stake {
@@ -1260,7 +1260,7 @@ impl EscrowContract {
         }
 
         let protocol_cfg = Self::get_config(&env);
-        if stake_amount <= 0 || stake_amount < protocol_cfg.minimum_stake {
+        if stake_amount <= 0 || stake_amount < 1 {
             return Err(Error::InvalidAmount);
         }
         if let Some(max_stake) = Self::get_config(&env).maximum_stake {
@@ -3767,6 +3767,34 @@ impl EscrowContract {
         limit: u32,
     ) -> Result<soroban_sdk::Vec<Match>, Error> {
         Self::get_active_matches_paginated(env, offset, limit)
+    }
+
+    /// Return all matches that are in Completed state (result submitted, payout executed).
+    ///
+    /// Useful for off-chain clients and the frontend to display match history and
+    /// payout records without relying on event indexing.
+    ///
+    /// # Storage cost note
+    ///
+    /// This function scans every match ever created in linear time. For contracts with
+    /// a large number of matches this may become expensive. Prefer
+    /// `get_completed_matches_paginated` for production use cases where the total
+    /// match count could grow unboundedly — it lets callers fetch results in bounded
+    /// pages rather than loading the entire history in a single call.
+    pub fn get_completed_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state(&env, MatchState::Completed)
+    }
+
+    /// Return a paginated page of completed matches ordered by match ID ascending.
+    ///
+    /// `offset` — number of completed matches to skip before collecting results.
+    /// `limit`  — maximum number of completed matches to return (0 returns an empty vec).
+    pub fn get_completed_matches_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state_paginated(&env, MatchState::Completed, offset, limit)
     }
 
     /// Return the total number of matches created.

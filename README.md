@@ -186,6 +186,8 @@ expire_match(match_id) -> Result<(), Error>
 get_player_matches(player) -> Vec<u64>
 get_pending_matches() -> Vec<Match>
 get_active_matches() -> Vec<Match>
+get_completed_matches() -> Vec<Match>
+get_completed_matches_paginated(offset, limit) -> Vec<Match>
 ```
 
 - `create_match` must be authorized by `player1`.
