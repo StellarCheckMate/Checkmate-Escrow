@@ -36,7 +36,7 @@
 
 use escrow::errors::Error;
 use escrow::types::{MatchState, Platform, ProtocolConfig, Winner};
-use escrow::{EscrowContract, EscrowContractClient};
+use escrow::{DEFAULT_MINIMUM_STAKE, EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::StellarAssetClient,
@@ -76,6 +76,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         vesting_duration_seconds: 0,
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     (env, contract_id, oracle, player1, player2, token, admin)
@@ -120,7 +121,7 @@ fn chaos_oracle_timeout_match_expires_and_refunds() {
         &player2,
         &STAKE,
         &token,
-        &SorobanString::from_str(&env, "timeout01"),
+        &SorobanString::from_str(&env, "6da4446f"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -159,7 +160,7 @@ fn chaos_expire_before_timeout_is_rejected() {
         &player2,
         &STAKE,
         &token,
-        &SorobanString::from_str(&env, "timeout02"),
+        &SorobanString::from_str(&env, "1a2f491d"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -306,6 +307,7 @@ fn chaos_player_cannot_impersonate_oracle() {
         vesting_duration_seconds: 0,
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     let match_id = client.create_match(
@@ -369,7 +371,7 @@ fn chaos_submit_result_on_pending_match_fails() {
         &player2,
         &STAKE,
         &token,
-        &SorobanString::from_str(&env, "state01"),
+        &SorobanString::from_str(&env, "814c2976"),
         &Platform::Lichess,
     );
     // Only player1 deposits — match stays Pending.
@@ -395,7 +397,7 @@ fn chaos_submit_result_on_cancelled_match_fails() {
         &player2,
         &STAKE,
         &token,
-        &SorobanString::from_str(&env, "state02"),
+        &SorobanString::from_str(&env, "07a2b946"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -488,7 +490,7 @@ fn chaos_deposit_rejected_while_paused() {
         &player2,
         &STAKE,
         &token,
-        &SorobanString::from_str(&env, "pause02"),
+        &SorobanString::from_str(&env, "f2985df5"),
         &Platform::Lichess,
     );
 
@@ -520,7 +522,7 @@ fn chaos_create_match_rejected_while_paused() {
         &player2,
         &STAKE,
         &token,
-        &SorobanString::from_str(&env, "pause03"),
+        &SorobanString::from_str(&env, "1fbefc7b"),
         &Platform::Lichess,
     );
     assert_eq!(
@@ -578,7 +580,7 @@ fn chaos_fund_conservation_across_failure_scenarios() {
             &player2,
             &STAKE,
             &token,
-            &SorobanString::from_str(&env, "conserve01"),
+            &SorobanString::from_str(&env, "81b76b54"),
             &Platform::Lichess,
         );
         client.deposit(&match_id, &player1);
@@ -594,7 +596,7 @@ fn chaos_fund_conservation_across_failure_scenarios() {
             &player2,
             &STAKE,
             &token,
-            &SorobanString::from_str(&env, "conserve02"),
+            &SorobanString::from_str(&env, "a9b01cd0"),
             &Platform::Lichess,
         );
         client.deposit(&match_id, &player1);
