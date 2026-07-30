@@ -48,4 +48,7 @@ pub enum Error {
     InsufficientHoldingDuration = 43,
     OracleSlashFailed = 44,
     TooManyActiveMatches = 45,
+    /// A deposit() call arrived while the reentrancy guard was set for this
+    /// match_id, indicating a cross-contract callback attempted to re-enter.
+    DepositInProgress = 46,
 }

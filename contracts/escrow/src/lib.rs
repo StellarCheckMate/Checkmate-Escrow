@@ -728,6 +728,25 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
+        // ── Cross-contract reentrancy guard ──────────────────────────────────
+        // If a malicious (or callback-capable) token contract re-enters
+        // deposit() for the same match_id during the token.transfer() call
+        // below, this flag will already be true and the nested call is
+        // rejected immediately.  The flag is stored in temporary storage so
+        // it is automatically cleared at the end of the transaction even if
+        // an unexpected execution path skips the explicit removal below.
+        if env
+            .storage()
+            .temporary()
+            .get::<DataKey, bool>(&DataKey::DepositInProgress(match_id))
+            .unwrap_or(false)
+        {
+            return Err(Error::DepositInProgress);
+        }
+        env.storage()
+            .temporary()
+            .set(&DataKey::DepositInProgress(match_id), &true);
+
         let mut m: Match = env
             .storage()
             .persistent()
@@ -735,6 +754,10 @@ impl EscrowContract {
             .ok_or(Error::MatchNotFound)?;
 
         if m.state != MatchState::Pending {
+            // Clear guard before returning on error.
+            env.storage()
+                .temporary()
+                .remove(&DataKey::DepositInProgress(match_id));
             return Err(Error::InvalidState);
         }
 
@@ -742,17 +765,29 @@ impl EscrowContract {
         let is_p2 = player == m.player2;
 
         if !is_p1 && !is_p2 {
+            env.storage()
+                .temporary()
+                .remove(&DataKey::DepositInProgress(match_id));
             return Err(Error::Unauthorized);
         }
         if is_p1 && m.player1_deposited {
+            env.storage()
+                .temporary()
+                .remove(&DataKey::DepositInProgress(match_id));
             return Err(Error::AlreadyFunded);
         }
         if is_p2 && m.player2_deposited {
+            env.storage()
+                .temporary()
+                .remove(&DataKey::DepositInProgress(match_id));
             return Err(Error::AlreadyFunded);
         }
 
         Self::require_player_tier_for_stake(&env, &player, m.stake_amount)?;
 
+        // Perform the cross-contract token transfer.  A callback-capable token
+        // that attempts to call deposit() for the same match_id here will hit
+        // the DepositInProgress guard set above and be rejected.
         let client = token::Client::new(&env, &m.token);
         client.transfer(&player, &env.current_contract_address(), &m.stake_amount);
 
@@ -792,6 +827,11 @@ impl EscrowContract {
 
         Self::record_snapshot(&env, &m, SnapshotReason::Deposit);
         Self::record_player_snapshot(&env, &player);
+
+        // Clear the reentrancy guard now that all state updates are complete.
+        env.storage()
+            .temporary()
+            .remove(&DataKey::DepositInProgress(match_id));
 
         Ok(())
     }
