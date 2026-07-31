@@ -177,3 +177,4 @@ mod cancellation_fee;
 mod stablecoin;
 mod dispute_rollback;
 mod protocol_config;
+mod platform_stats;

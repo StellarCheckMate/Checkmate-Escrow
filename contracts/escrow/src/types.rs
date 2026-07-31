@@ -197,8 +197,8 @@ pub enum DataKey {
     BlacklistedTokens,
     FeeTiers,
     PlayerPreferredToken(Address),
-    PendingOracleRotation,
-    TempOracleRotation,
+    /// Platform-wide aggregated statistics (total matches, volume, payouts).
+    Stats,
 }
 
 /// The lifecycle event that triggered a balance snapshot.
@@ -340,4 +340,20 @@ pub enum BalanceAtTimestamp {
     /// The ring buffer has overwritten every snapshot old enough to answer
     /// this query. The true balance at that point is unknown, not zero.
     Pruned,
+}
+
+/// Platform-wide aggregated statistics for analytics.
+///
+/// Incremented atomically during `create_match` (for total_matches and total_volume)
+/// and `submit_result` (for total_payouts). Used by off-chain analytics to avoid
+/// the need for full indexing of on-chain events.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlatformStats {
+    /// Total number of matches created across all time.
+    pub total_matches: u64,
+    /// Total value (in base token units) staked across all matches.
+    pub total_volume: i128,
+    /// Total number of successful payouts (winner or draw completed matches).
+    pub total_payouts: u64,
 }
