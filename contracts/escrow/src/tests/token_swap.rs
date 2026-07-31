@@ -71,6 +71,12 @@ fn setup_swap_match(
         vesting_duration_seconds: 0,
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     // Register token A (stake token) and token B (preferred payout token)

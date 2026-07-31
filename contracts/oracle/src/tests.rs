@@ -2,7 +2,7 @@ extern crate std;
 
 use super::*;
 use escrow::types::{MatchState, Platform as EscrowPlatform, Winner as EscrowWinner};
-use escrow::{EscrowContract, EscrowContractClient};
+use escrow::{DEFAULT_MINIMUM_STAKE, EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::storage::{Instance as _, Persistent as _},
     testutils::{Address as _, Events as _, Ledger as _},
@@ -34,6 +34,11 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: escrow::DEFAULT_MINIMUM_STAKE,
     });
     escrow_client.create_match(
         &player1,

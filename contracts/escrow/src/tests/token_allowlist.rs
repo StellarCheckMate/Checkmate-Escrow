@@ -63,7 +63,7 @@ fn test_removed_tokens_are_rejected_when_other_allowed_tokens_remain() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "removed_token_game"),
+        &String::from_str(&env, "d67c215e"),
         &Platform::Lichess,
     );
     assert!(result.is_err(), "create_match should reject removed token");
@@ -73,7 +73,7 @@ fn test_removed_tokens_are_rejected_when_other_allowed_tokens_remain() {
         &player2,
         &100,
         &token2_addr,
-        &String::from_str(&env, "remaining_token_game"),
+        &String::from_str(&env, "3c362380"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0, "remaining allowed token should still be accepted");
@@ -138,7 +138,7 @@ fn test_removing_last_allowed_token_disables_allowlist_enforcement() {
         &player2,
         &100,
         &unknown_token,
-        &String::from_str(&env, "rollback_game"),
+        &String::from_str(&env, "e4f6ec85"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0, "create_match should accept any token after last allowed token is removed");
@@ -180,7 +180,7 @@ fn test_remove_last_allowed_token_disables_allowlist() {
         &player2,
         &100,
         &other_token,
-        &String::from_str(&env, "allowlist_disabled_game"),
+        &String::from_str(&env, "8bf7aba2"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0, "create_match should accept new token once the allowlist is disabled");
@@ -230,7 +230,7 @@ fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enab
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_token1"),
+        &String::from_str(&env, "a23a50ac"),
         &Platform::Lichess,
     );
     assert_eq!(id1, 0, "first match with token1 should succeed");
@@ -240,7 +240,7 @@ fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enab
         &player2,
         &100,
         &token2_addr,
-        &String::from_str(&env, "game_token2"),
+        &String::from_str(&env, "8e9fe189"),
         &Platform::Lichess,
     );
     assert_eq!(id2, 1, "second match with token2 should succeed");
@@ -251,7 +251,7 @@ fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enab
         &player2,
         &100,
         &unknown_token,
-        &String::from_str(&env, "game_unknown"),
+        &String::from_str(&env, "640efaee"),
         &Platform::Lichess,
     );
     assert!(

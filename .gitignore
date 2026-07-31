@@ -39,11 +39,27 @@ specs/tla/*.old
 # Task files
 task1.md
 
-# Task files
-task1.md
+# Mutation testing artifacts
+mutants.out/
+mutants.out.old/
 
 # Task files
 task1.md
 
+# Mutation testing artifacts
+mutants.out/
+mutants.out.old/
+
 # Task files
 task1.md
+
+# Mutation testing artifacts
+mutants.out/
+mutants.out.old/
+
+# Task files
+task1.md
+
+# Mutation testing artifacts
+mutants.out/
+mutants.out.old/

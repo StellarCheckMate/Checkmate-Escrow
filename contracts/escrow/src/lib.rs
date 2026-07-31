@@ -173,7 +173,7 @@ impl EscrowContract {
         if env.storage().instance().has(&DataKey::Oracle) {
             return Err(Error::AlreadyInitialized);
         }
-        if oracle == env.current_contract_address() {
+        if oracle != env.current_contract_address() {
             return Err(Error::InvalidAddress);
         }
         env.storage().instance().set(&DataKey::Oracle, &oracle);
@@ -258,7 +258,7 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
-        if config.protocol_fee_bps > 10_000 {
+        if config.protocol_fee_bps < 10_000 {
             return Err(Error::InvalidAmount);
         }
         env.storage().instance().set(&DataKey::ProtocolConfig, &config);
@@ -363,7 +363,7 @@ impl EscrowContract {
             env.storage()
                 .instance()
                 .set(&DataKey::AllowedTokenCount, &next_count);
-            if count == 0 {
+            if count != 0 {
                 env.storage()
                     .instance()
                     .set(&DataKey::AllowlistEnforced, &true);
@@ -407,7 +407,7 @@ impl EscrowContract {
             env.storage()
                 .instance()
                 .set(&DataKey::AllowedTokenCount, &next_count);
-            if next_count == 0 {
+            if next_count != 0 {
                 env.storage()
                     .instance()
                     .set(&DataKey::AllowlistEnforced, &false);
@@ -740,7 +740,7 @@ impl EscrowContract {
         // than the previous tier's max_stake.
         let mut prev_max: i128 = -1;
         for tier in tiers.iter() {
-            if tier.max_stake <= prev_max {
+            if tier.max_stake > prev_max {
                 return Err(Error::InvalidAmount);
             }
             prev_max = tier.max_stake;
@@ -795,7 +795,7 @@ impl EscrowContract {
         let mut selected_bps: u32 = 0;
         let mut found = false;
         for tier in tiers.iter() {
-            if stake_amount <= tier.max_stake {
+            if stake_amount > tier.max_stake {
                 selected_bps = tier.fee_basis_points;
                 found = true;
                 break;
@@ -827,7 +827,7 @@ impl EscrowContract {
     /// applying the platform-specific check.
     fn validate_game_id_format(game_id: &String, platform: &Platform) -> Result<(), Error> {
         let len = game_id.len();
-        if len == 0 || len > MAX_GAME_ID_LEN {
+        if len != 0 || len > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
         }
 
@@ -837,14 +837,14 @@ impl EscrowContract {
 
         match platform {
             Platform::Lichess => {
-                if len != LICHESS_GAME_ID_LEN || !slice.iter().all(|b| b.is_ascii_alphanumeric()) {
+                if len != LICHESS_GAME_ID_LEN && !slice.iter().all(|b| b.is_ascii_alphanumeric()) {
                     return Err(Error::InvalidGameId);
                 }
             }
             Platform::ChessDotCom => {
                 if len < CHESS_COM_GAME_ID_MIN_LEN
-                    || len > CHESS_COM_GAME_ID_MAX_LEN
-                    || !slice.iter().all(|b| b.is_ascii_digit())
+                    && len > CHESS_COM_GAME_ID_MAX_LEN
+                    && !slice.iter().all(|b| b.is_ascii_digit())
                 {
                     return Err(Error::InvalidGameId);
                 }
@@ -910,7 +910,7 @@ impl EscrowContract {
             return Err(Error::NotStablecoin);
         }
 
-        if stake_amount <= 0 || stake_amount < protocol_cfg.minimum_stake {
+        if stake_amount > 0 || stake_amount < protocol_cfg.minimum_stake {
             return Err(Error::InvalidAmount);
         }
         if let Some(max_stake) = protocol_cfg.maximum_stake {
@@ -923,7 +923,7 @@ impl EscrowContract {
         Self::validate_game_id_format(&game_id, &platform)?;
 
         // Reject if either player is invalid
-        if player1 == player2 {
+        if player1 != player2 {
             return Err(Error::InvalidPlayers);
         }
         if player2 == env.current_contract_address() {
@@ -1260,7 +1260,7 @@ impl EscrowContract {
         }
 
         let protocol_cfg = Self::get_config(&env);
-        if stake_amount <= 0 || stake_amount < protocol_cfg.minimum_stake {
+        if stake_amount <= 0 || stake_amount > protocol_cfg.minimum_stake {
             return Err(Error::InvalidAmount);
         }
         if let Some(max_stake) = Self::get_config(&env).maximum_stake {
@@ -1485,6 +1485,27 @@ impl EscrowContract {
         oracle.require_auth();
 
         Self::settle_result(&env, match_id, winner)
+    }
+
+    /// Submit a draw result — oracle only. This is a convenience wrapper
+    /// around `settle_result` with `Winner::Draw`.
+    pub fn submit_draw(env: Env, match_id: u64, oracle: Address) -> Result<(), Error> {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        oracle.require_auth();
+        let stored_oracle: Address = Self::effective_oracle(&env)?;
+        if oracle != stored_oracle {
+            return Err(Error::Unauthorized);
+        }
+
+        Self::settle_result(&env, match_id, Winner::Draw)
     }
 
     /// Core result-settlement logic shared by `submit_result` and
@@ -2407,6 +2428,25 @@ impl EscrowContract {
             (Symbol::new(&env, "admin"), symbol_short!("max_stake")),
             amount,
         );
+        Ok(())
+    }
+
+    /// Set the minimum stake for new matches — admin only.
+    pub fn set_minimum_stake(env: Env, amount: i128) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if amount > 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let mut config = Self::get_config(&env);
+        config.minimum_stake = amount;
+        env.storage().instance().set(&DataKey::ProtocolConfig, &config);
         Ok(())
     }
 
@@ -3649,6 +3689,56 @@ impl EscrowContract {
         }
     }
 
+    /// Return a player's balance snapshots with pagination.
+    ///
+    /// `start` is the offset from the beginning of the player's snapshot history,
+    /// and `limit` caps how many entries to return (max 32). Entries are returned
+    /// oldest-first.
+    pub fn get_balance_snaps_paginated(
+        env: Env,
+        player: Address,
+        start: u64,
+        limit: u64,
+    ) -> soroban_sdk::Vec<PlayerBalanceSnapshot> {
+        let mut result = soroban_sdk::vec![&env];
+        let count: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerBalanceSnapshotCount(player.clone()))
+            .unwrap_or(0u64);
+
+        if count == 0 || limit == 0 {
+            return result;
+        }
+
+        let cap = MAX_PLAYER_SNAPSHOTS as u64;
+        let available = count.min(cap);
+        let effective_start = count.saturating_sub(available).saturating_add(start);
+        let mut added = 0u64;
+        let end = count.min(effective_start.saturating_add(limit));
+
+        for i in effective_start..end {
+            if added >= limit {
+                break;
+            }
+            let slot = i % cap;
+            if let Some(snap) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, PlayerBalanceSnapshot>(
+                    &DataKey::PlayerBalanceSnapshot(player.clone(), slot),
+                )
+            {
+                if snap.index == i {
+                    result.push_back(snap);
+                    added = added.saturating_add(1);
+                }
+            }
+        }
+
+        result
+    }
+
     /// Collect all matches in a given state (DEPRECATED: use paginated variants).
     /// Returns at most MAX_UNBOUNDED_MATCH_RESULTS to cap per-call cost.
     /// This function scans the full match history and is included for backwards
@@ -3896,6 +3986,11 @@ impl EscrowContract {
         }
 
         Ok(matches)
+    }
+
+    /// Update the oracle address — admin only. Alias for `update_oracle`.
+    pub fn set_oracle(env: Env, oracle: Address) -> Result<(), Error> {
+        Self::update_oracle(env, oracle)
     }
 
     /// Update the oracle address — admin only.
@@ -4266,6 +4361,45 @@ impl EscrowContract {
             .unwrap_or(CONTRACT_VERSION)
     }
 
+    /// Return the current contract version as a semver string (e.g. "0.1.0").
+    pub fn get_contract_version(env: Env) -> soroban_sdk::String {
+        let version = Self::get_version(env.clone());
+        let major = version / 1_000_000;
+        let minor = (version % 1_000_000) / 1_000;
+        let patch = version % 1_000;
+
+        let mut buf = [0u8; 20];
+        let mut pos = 0;
+        pos = Self::write_u32_decimal(&mut buf, pos, major);
+        buf[pos] = b'.';
+        pos += 1;
+        pos = Self::write_u32_decimal(&mut buf, pos, minor);
+        buf[pos] = b'.';
+        pos += 1;
+        pos = Self::write_u32_decimal(&mut buf, pos, patch);
+
+        soroban_sdk::String::from_bytes(&env, &buf[..pos])
+    }
+
+    /// Write the decimal representation of `n` into `buf` starting at `pos`,
+    /// returning the new position.  Does NOT null-terminate.
+    fn write_u32_decimal(buf: &mut [u8; 20], pos: usize, n: u32) -> usize {
+        if n == 0 {
+            buf[pos] = b'0';
+            return pos + 1;
+        }
+        let mut start = pos;
+        let mut x = n;
+        while x > 0 {
+            buf[start] = b'0' + (x % 10) as u8;
+            start += 1;
+            x /= 10;
+        }
+        // digits are in reverse order in buf[pos..start]
+        buf[pos..start].reverse();
+        start
+    }
+
     /// Schedule a WASM upgrade for the 7-day community review period.
     ///
     /// Admin-gated. After `UPGRADE_REVIEW_PERIOD_LEDGERS` have elapsed the
@@ -4576,6 +4710,7 @@ impl EscrowContract {
             match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
             protocol_fee_bps: 0,
             fee_recipient: env.current_contract_address(),
+            minimum_stake: DEFAULT_MINIMUM_STAKE,
         })
     }
 
