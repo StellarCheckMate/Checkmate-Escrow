@@ -11,7 +11,7 @@ fn test_create_match_records_created_snapshot() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_created"),
+        &String::from_str(&env, "09d02479"),
         &Platform::Lichess,
     );
 
@@ -41,7 +41,7 @@ fn test_deposit_records_a_snapshot_per_deposit() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_deposit"),
+        &String::from_str(&env, "40683ac8"),
         &Platform::Lichess,
     );
 
@@ -74,7 +74,7 @@ fn test_submit_result_records_completed_snapshot_with_zero_balance() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_completed"),
+        &String::from_str(&env, "94fab174"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -97,7 +97,7 @@ fn test_cancel_match_records_cancelled_snapshot_with_zero_balance() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_cancelled"),
+        &String::from_str(&env, "ece1fa59"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -119,7 +119,7 @@ fn test_snapshot_cancelled_reason() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_cancelled_reason"),
+        &String::from_str(&env, "afda84f6"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -143,7 +143,7 @@ fn test_expire_match_records_cancelled_snapshot() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_expired"),
+        &String::from_str(&env, "73a1729d"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -166,7 +166,7 @@ fn test_full_lifecycle_snapshot_sequence_is_chronological() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_sequence"),
+        &String::from_str(&env, "f92119ff"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -202,7 +202,7 @@ fn test_admin_sees_exact_amounts_in_snapshots() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_admin_view"),
+        &String::from_str(&env, "dcd84561"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -222,7 +222,7 @@ fn test_player_sees_redacted_amounts_in_snapshots() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_player_view"),
+        &String::from_str(&env, "8ed6cb1a"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -270,7 +270,7 @@ fn test_unrelated_caller_cannot_query_snapshots() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_unauthorized"),
+        &String::from_str(&env, "1c216381"),
         &Platform::Lichess,
     );
 
@@ -320,7 +320,7 @@ fn test_multi_token_matches_record_independent_symbols_and_amounts() {
         &player2,
         &100,
         &token_a,
-        &String::from_str(&env, "multi_token_a"),
+        &String::from_str(&env, "38f1500a"),
         &Platform::Lichess,
     );
     let match_b = client.create_match(
@@ -328,7 +328,7 @@ fn test_multi_token_matches_record_independent_symbols_and_amounts() {
         &player2,
         &60,
         &token_b,
-        &String::from_str(&env, "multi_token_b"),
+        &String::from_str(&env, "3620012345"),
         &Platform::ChessDotCom,
     );
 
@@ -354,7 +354,7 @@ fn test_snapshot_ring_buffer_prunes_oldest_entries() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_pruning"),
+        &String::from_str(&env, "dccbbb1c"),
         &Platform::Lichess,
     );
 
@@ -395,7 +395,7 @@ fn test_get_balance_snapshots_empty_for_match_with_no_recorded_history() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snap_wipe_history"),
+        &String::from_str(&env, "c2461931"),
         &Platform::Lichess,
     );
 

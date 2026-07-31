@@ -10,7 +10,7 @@ fn test_game_id_reservation_survives_ledger_advancement() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let game_id = String::from_str(&env, "game_123");
+    let game_id = String::from_str(&env, "7d03217e");
 
     // Reserve a game ID
     let _match_id_1 = client.create_match(
@@ -49,7 +49,7 @@ fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_1"),
+        &String::from_str(&env, "404da6de"),
         &Platform::Lichess,
     );
 
@@ -58,7 +58,7 @@ fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_2"),
+        &String::from_str(&env, "86b9ea0e"),
         &Platform::Lichess,
     );
 
@@ -67,7 +67,7 @@ fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_3"),
+        &String::from_str(&env, "fb595cfb"),
         &Platform::Lichess,
     );
 
@@ -100,7 +100,7 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_1"),
+        &String::from_str(&env, "404da6de"),
         &Platform::Lichess,
     );
 
@@ -109,7 +109,7 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_2"),
+        &String::from_str(&env, "86b9ea0e"),
         &Platform::Lichess,
     );
 
@@ -118,7 +118,7 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_3"),
+        &String::from_str(&env, "fb595cfb"),
         &Platform::Lichess,
     );
 
@@ -127,7 +127,7 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_4"),
+        &String::from_str(&env, "24a3f6f9"),
         &Platform::Lichess,
     );
 
@@ -199,7 +199,7 @@ fn test_get_pending_matches_returns_only_pending_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "pending_match"),
+        &String::from_str(&env, "fdc4cb3b"),
         &Platform::Lichess,
     );
 
@@ -208,7 +208,7 @@ fn test_get_pending_matches_returns_only_pending_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "active_match"),
+        &String::from_str(&env, "34eeb2af"),
         &Platform::Lichess,
     );
     client.deposit(&active_id, &player1);
@@ -233,7 +233,7 @@ fn test_match_transitions_from_pending_to_active_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "transition_match"),
+        &String::from_str(&env, "41e95cf3"),
         &Platform::Lichess,
     );
 
@@ -284,7 +284,7 @@ fn test_get_active_matches_after_deposits() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "active_after_deposits"),
+        &String::from_str(&env, "b9429870"),
         &Platform::Lichess,
     );
 
@@ -312,7 +312,7 @@ fn test_get_player_matches_returns_ids() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "match_1"),
+        &String::from_str(&env, "ab5b2d0d"),
         &Platform::Lichess,
     );
 
@@ -321,7 +321,7 @@ fn test_get_player_matches_returns_ids() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "match_2"),
+        &String::from_str(&env, "bd611cec"),
         &Platform::Lichess,
     );
 
@@ -330,7 +330,7 @@ fn test_get_player_matches_returns_ids() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "match_3"),
+        &String::from_str(&env, "907a4dee"),
         &Platform::Lichess,
     );
 

@@ -85,7 +85,7 @@ fn test_balance_conservation_after_cancel_with_one_deposit() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "conservation_cancel_one"),
+        &String::from_str(&env, "d6988d40"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -119,7 +119,7 @@ fn test_balance_conservation_after_cancel_with_both_deposits() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "conservation_cancel_both"),
+        &String::from_str(&env, "c08ee812"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -165,7 +165,7 @@ fn test_escrow_balance_tracks_deposits_exactly() {
         &player2,
         &stake,
         &token,
-        &String::from_str(&env, "balance_tracking_game"),
+        &String::from_str(&env, "13d00cb6"),
         &Platform::Lichess,
     );
 
@@ -247,7 +247,7 @@ fn test_cancelled_match_rejects_submit_result() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "cancelled_submit_guard"),
+        &String::from_str(&env, "112a59c0"),
         &Platform::Lichess,
     );
     client.cancel_match(&match_id, &player1);
@@ -271,7 +271,7 @@ fn test_cancelled_match_rejects_deposit() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "cancelled_deposit_guard"),
+        &String::from_str(&env, "a031cfc4"),
         &Platform::Lichess,
     );
     client.cancel_match(&match_id, &player1);
@@ -296,7 +296,7 @@ fn test_cancelled_match_rejects_cancel() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "double_cancel_guard"),
+        &String::from_str(&env, "2ae5361a"),
         &Platform::Lichess,
     );
     client.cancel_match(&match_id, &player1);
@@ -330,7 +330,7 @@ fn test_escrow_balance_is_zero_in_all_terminal_states() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "terminal_cancel_balance"),
+        &String::from_str(&env, "5983d7b6"),
         &Platform::Lichess,
     );
     client.cancel_match(&cancel_id, &player1);
@@ -360,7 +360,7 @@ fn test_snapshot_count_monotonic() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "snapshot_count_monotonic"),
+        &String::from_str(&env, "e4eb0584"),
         &Platform::Lichess,
     );
 

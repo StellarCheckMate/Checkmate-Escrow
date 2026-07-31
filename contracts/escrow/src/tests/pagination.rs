@@ -108,7 +108,7 @@ fn test_player_history_index_excludes_unrelated_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_1"),
+        &String::from_str(&env, "404da6de"),
         &Platform::Lichess,
     );
 
@@ -117,7 +117,7 @@ fn test_player_history_index_excludes_unrelated_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_2"),
+        &String::from_str(&env, "86b9ea0e"),
         &Platform::Lichess,
     );
 
@@ -127,7 +127,7 @@ fn test_player_history_index_excludes_unrelated_matches() {
         &player4,
         &100,
         &token,
-        &String::from_str(&env, "game_3"),
+        &String::from_str(&env, "fb595cfb"),
         &Platform::Lichess,
     );
 
@@ -136,7 +136,7 @@ fn test_player_history_index_excludes_unrelated_matches() {
         &player4,
         &100,
         &token,
-        &String::from_str(&env, "game_4"),
+        &String::from_str(&env, "24a3f6f9"),
         &Platform::Lichess,
     );
 
@@ -177,7 +177,7 @@ fn test_get_player_matches_preserves_insertion_order() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_1"),
+        &String::from_str(&env, "404da6de"),
         &Platform::Lichess,
     );
 
@@ -186,7 +186,7 @@ fn test_get_player_matches_preserves_insertion_order() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_2"),
+        &String::from_str(&env, "86b9ea0e"),
         &Platform::Lichess,
     );
 
@@ -195,7 +195,7 @@ fn test_get_player_matches_preserves_insertion_order() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_3"),
+        &String::from_str(&env, "fb595cfb"),
         &Platform::Lichess,
     );
 
@@ -204,7 +204,7 @@ fn test_get_player_matches_preserves_insertion_order() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_4"),
+        &String::from_str(&env, "24a3f6f9"),
         &Platform::Lichess,
     );
 
@@ -233,7 +233,7 @@ fn test_get_match_count_increments_correctly() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_1"),
+        &String::from_str(&env, "404da6de"),
         &Platform::Lichess,
     );
     let count = client.get_match_count();
@@ -245,7 +245,7 @@ fn test_get_match_count_increments_correctly() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_2"),
+        &String::from_str(&env, "86b9ea0e"),
         &Platform::Lichess,
     );
     let count = client.get_match_count();
@@ -257,7 +257,7 @@ fn test_get_match_count_increments_correctly() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_3"),
+        &String::from_str(&env, "fb595cfb"),
         &Platform::Lichess,
     );
     let count = client.get_match_count();
@@ -269,7 +269,7 @@ fn test_get_match_count_increments_correctly() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_4"),
+        &String::from_str(&env, "24a3f6f9"),
         &Platform::Lichess,
     );
     let count = client.get_match_count();
@@ -324,7 +324,7 @@ fn test_get_match_history_returns_completed_and_cancelled_newest_first() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "history_completed"),
+        &String::from_str(&env, "00fe4d0c"),
         &Platform::Lichess,
     );
     client.deposit(&completed_id, &player1);
@@ -337,7 +337,7 @@ fn test_get_match_history_returns_completed_and_cancelled_newest_first() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "history_cancelled"),
+        &String::from_str(&env, "c1cc8be1"),
         &Platform::Lichess,
     );
     client.cancel_match(&cancelled_id, &player1);
@@ -348,7 +348,7 @@ fn test_get_match_history_returns_completed_and_cancelled_newest_first() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "history_pending"),
+        &String::from_str(&env, "8aa3f868"),
         &Platform::Lichess,
     );
 
@@ -414,7 +414,7 @@ fn test_get_match_history_filters_by_player() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "history_p12"),
+        &String::from_str(&env, "4b7f4050"),
         &Platform::Lichess,
     );
     client.cancel_match(&id_12, &player1);
@@ -425,7 +425,7 @@ fn test_get_match_history_filters_by_player() {
         &player3,
         &100,
         &token,
-        &String::from_str(&env, "history_p13"),
+        &String::from_str(&env, "f6e56b5e"),
         &Platform::Lichess,
     );
     client.cancel_match(&id_13, &player1);

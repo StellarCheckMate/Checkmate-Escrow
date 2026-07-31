@@ -24,7 +24,7 @@ fn test_admin_pause_blocks_create_match() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "paused_game"),
+        &String::from_str(&env, "fdc7c9d7"),
         &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
@@ -43,7 +43,7 @@ fn test_admin_unpause_allows_create_match() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "unpaused_game"),
+        &String::from_str(&env, "35fc8b4a"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0);
@@ -59,7 +59,7 @@ fn test_admin_unpause_allows_deposit_after_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "unpaused_deposit_game"),
+        &String::from_str(&env, "0171a0c9"),
         &Platform::Lichess,
     );
 
@@ -83,7 +83,7 @@ fn test_admin_unpause_allows_submit_result_after_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "unpaused_submit_game"),
+        &String::from_str(&env, "ceda6d69"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -109,7 +109,7 @@ fn test_paused_contract_rejects_deposit() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game123"),
+        &String::from_str(&env, "d7153de4"),
         &Platform::Lichess,
     );
 
@@ -129,7 +129,7 @@ fn test_deposit_blocked_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "paused_deposit_game"),
+        &String::from_str(&env, "b59dc515"),
         &Platform::Lichess,
     );
 
@@ -153,7 +153,7 @@ fn test_deposit_by_unauthorized_address_returns_unauthorized() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "unauth_deposit_game"),
+        &String::from_str(&env, "6a312768"),
         &Platform::Lichess,
     );
 
@@ -173,7 +173,7 @@ fn test_submit_result_blocked_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "paused_submit_game"),
+        &String::from_str(&env, "cea8b158"),
         &Platform::Lichess,
     );
 
@@ -233,7 +233,7 @@ fn test_old_oracle_rejected_after_rotation() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "oracle_rotation"),
+        &String::from_str(&env, "a5c1750c"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -279,7 +279,7 @@ fn test_non_oracle_unauthorized_even_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "paused_unauth"),
+        &String::from_str(&env, "fea151a8"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -322,7 +322,7 @@ fn test_update_oracle_routes_submit_result() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "oracle_new_match"),
+        &String::from_str(&env, "5ad728ec"),
         &Platform::Lichess,
     );
     client.deposit(&id1, &player1);
@@ -350,7 +350,7 @@ fn test_update_oracle_routes_submit_result() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "oracle_old_match"),
+        &String::from_str(&env, "e53c88a5"),
         &Platform::Lichess,
     );
     client.deposit(&id2, &player1);
@@ -382,7 +382,7 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "non_oracle_submit_game"),
+        &String::from_str(&env, "272549d8"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -758,7 +758,7 @@ fn test_deposit_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "deposit_when_paused_game"),
+        &String::from_str(&env, "cbaadb4a"),
         &Platform::Lichess,
     );
 
@@ -781,7 +781,7 @@ fn test_create_match_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "create_match_when_paused_game"),
+        &String::from_str(&env, "bcdf5273"),
         &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
@@ -832,7 +832,7 @@ fn test_pause_blocks_create_match() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "paused_game"),
+        &String::from_str(&env, "fdc7c9d7"),
         &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)), "create_match must fail when paused");
@@ -844,7 +844,7 @@ fn test_pause_blocks_create_match() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "unpaused_game"),
+        &String::from_str(&env, "35fc8b4a"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0, "create_match must succeed after unpause");
