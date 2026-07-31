@@ -56,6 +56,8 @@ pub struct ProtocolConfig {
     pub protocol_fee_bps: u32,
     /// Recipient of the protocol fee collected on winner payouts.
     pub fee_recipient: Address,
+    /// Minimum stake amount enforced in create_match (default 1).
+    pub minimum_stake: i128,
 }
 
 /// A single fee tier entry: matches with a stake up to `max_stake` are charged

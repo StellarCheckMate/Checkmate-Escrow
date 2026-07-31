@@ -193,7 +193,7 @@ fn test_create_match_rejects_blacklisted_token() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "blacklist_game1"),
+        &String::from_str(&env, "bedee772"),
         &Platform::Lichess,
     );
     assert_eq!(
@@ -217,7 +217,7 @@ fn test_create_match_allows_token_after_removal_from_blacklist() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "blacklist_game2"),
+        &String::from_str(&env, "4b9ece60"),
         &Platform::Lichess,
     );
     assert!(result.is_ok(), "token removed from blacklist must be usable");
@@ -237,7 +237,7 @@ fn test_blacklist_takes_precedence_over_allowlist() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "blacklist_game3"),
+        &String::from_str(&env, "cd241fbf"),
         &Platform::Lichess,
     );
     assert_eq!(
