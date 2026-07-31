@@ -285,3 +285,77 @@ fn test_allowlist_enforcement_clears_when_empty() {
         "allowlist should not be enforced after removing the last token"
     );
 }
+
+
+#[test]
+fn test_get_allowed_tokens_returns_tokens_in_correct_order() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+    let token3_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token3_addr = token3_id.address();
+
+    // Initially empty
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 0);
+
+    // Add first token
+    client.add_allowed_token(&token);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 1);
+    assert_eq!(allowed.get(0).unwrap(), token);
+
+    // Add second token
+    client.add_allowed_token(&token2_addr);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 2);
+    assert_eq!(allowed.get(0).unwrap(), token);
+    assert_eq!(allowed.get(1).unwrap(), token2_addr);
+
+    // Add third token
+    client.add_allowed_token(&token3_addr);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 3);
+    assert_eq!(allowed.get(0).unwrap(), token);
+    assert_eq!(allowed.get(1).unwrap(), token2_addr);
+    assert_eq!(allowed.get(2).unwrap(), token3_addr);
+}
+
+#[test]
+fn test_get_allowed_tokens_reflects_removals() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+    let token3_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token3_addr = token3_id.address();
+
+    // Add three tokens
+    client.add_allowed_token(&token);
+    client.add_allowed_token(&token2_addr);
+    client.add_allowed_token(&token3_addr);
+
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 3);
+
+    // Remove middle token
+    client.remove_allowed_token(&token2_addr);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 2);
+    assert_eq!(allowed.get(0).unwrap(), token);
+    assert_eq!(allowed.get(1).unwrap(), token3_addr);
+
+    // Remove first token
+    client.remove_allowed_token(&token);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 1);
+    assert_eq!(allowed.get(0).unwrap(), token3_addr);
+
+    // Remove last token
+    client.remove_allowed_token(&token3_addr);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 0);
+}
