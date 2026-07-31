@@ -24,7 +24,7 @@ fn test_admin_pause_blocks_create_match() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "paused_game"),
+        &String::from_str(&env, "fdc7c9d7"),
         &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
@@ -43,7 +43,7 @@ fn test_admin_unpause_allows_create_match() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "unpaused_game"),
+        &String::from_str(&env, "35fc8b4a"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0);
@@ -59,7 +59,7 @@ fn test_admin_unpause_allows_deposit_after_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "unpaused_deposit_game"),
+        &String::from_str(&env, "0171a0c9"),
         &Platform::Lichess,
     );
 
@@ -83,7 +83,7 @@ fn test_admin_unpause_allows_submit_result_after_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "unpaused_submit_game"),
+        &String::from_str(&env, "ceda6d69"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -109,7 +109,7 @@ fn test_paused_contract_rejects_deposit() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game123"),
+        &String::from_str(&env, "d7153de4"),
         &Platform::Lichess,
     );
 
@@ -129,7 +129,7 @@ fn test_deposit_blocked_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "paused_deposit_game"),
+        &String::from_str(&env, "b59dc515"),
         &Platform::Lichess,
     );
 
@@ -153,7 +153,7 @@ fn test_deposit_by_unauthorized_address_returns_unauthorized() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "unauth_deposit_game"),
+        &String::from_str(&env, "6a312768"),
         &Platform::Lichess,
     );
 
@@ -173,7 +173,7 @@ fn test_submit_result_blocked_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "paused_submit_game"),
+        &String::from_str(&env, "cea8b158"),
         &Platform::Lichess,
     );
 
@@ -233,7 +233,7 @@ fn test_old_oracle_rejected_after_rotation() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "oracle_rotation"),
+        &String::from_str(&env, "a5c1750c"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -279,7 +279,7 @@ fn test_non_oracle_unauthorized_even_when_paused() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "paused_unauth"),
+        &String::from_str(&env, "fea151a8"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -322,7 +322,7 @@ fn test_update_oracle_routes_submit_result() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "oracle_new_match"),
+        &String::from_str(&env, "5ad728ec"),
         &Platform::Lichess,
     );
     client.deposit(&id1, &player1);
@@ -350,7 +350,7 @@ fn test_update_oracle_routes_submit_result() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "oracle_old_match"),
+        &String::from_str(&env, "e53c88a5"),
         &Platform::Lichess,
     );
     client.deposit(&id2, &player1);
@@ -382,7 +382,7 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "non_oracle_submit_game"),
+        &String::from_str(&env, "272549d8"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -626,66 +626,66 @@ fn test_second_pending_admin_replaces_first_proposal() {
 }
 
 
-// #737 - set_match_timeout validates minimum bound
+// #737 / #1160 - set_match_timeout validates minimum bound
 #[test]
 fn test_set_match_timeout_rejects_below_minimum() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let min_timeout = 17_280u32;
+    let min_timeout = MIN_MATCH_TIMEOUT_SECONDS;
     let below_min = min_timeout - 1;
 
     let result = client.try_set_match_timeout(&below_min);
     assert_eq!(result, Err(Ok(Error::InvalidTimeout)));
 }
 
-// #737 - set_match_timeout validates maximum bound
+// #737 / #1160 - set_match_timeout validates maximum bound
 #[test]
 fn test_set_match_timeout_rejects_above_maximum() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let max_timeout = 1_555_200u32;
+    let max_timeout = MAX_MATCH_TIMEOUT_SECONDS;
     let above_max = max_timeout + 1;
 
     let result = client.try_set_match_timeout(&above_max);
     assert_eq!(result, Err(Ok(Error::InvalidTimeout)));
 }
 
-// #737 - set_match_timeout accepts valid minimum value
+// #737 / #1160 - set_match_timeout accepts valid minimum value
 #[test]
 fn test_set_match_timeout_accepts_minimum_valid_value() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let min_timeout = 17_280u32;
+    let min_timeout = MIN_MATCH_TIMEOUT_SECONDS;
     client.set_match_timeout(&min_timeout);
 
     let result = client.get_match_timeout();
     assert_eq!(result, min_timeout);
 }
 
-// #737 - set_match_timeout accepts valid maximum value
+// #737 / #1160 - set_match_timeout accepts valid maximum value
 #[test]
 fn test_set_match_timeout_accepts_maximum_valid_value() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let max_timeout = 1_555_200u32;
+    let max_timeout = MAX_MATCH_TIMEOUT_SECONDS;
     client.set_match_timeout(&max_timeout);
 
     let result = client.get_match_timeout();
     assert_eq!(result, max_timeout);
 }
 
-// #737 - set_match_timeout requires admin authorization
+// #737 / #1160 - set_match_timeout requires admin authorization
 #[test]
 fn test_set_match_timeout_requires_admin_authorization() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let attacker = Address::generate(&env);
-    let new_timeout = 34_560u32;
+    let new_timeout = 172_800u64;
 
     env.mock_auths(&[MockAuth {
         address: &attacker,
@@ -699,6 +699,92 @@ fn test_set_match_timeout_requires_admin_authorization() {
 
     let result = client.try_set_match_timeout(&new_timeout);
     assert!(result.is_err(), "non-admin should not be able to set timeout");
+}
+
+// #1159 - set_maximum_stake requires admin authorization
+#[test]
+fn test_set_maximum_stake_requires_admin_authorization() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let attacker = Address::generate(&env);
+    let new_max = Some(500i128);
+
+    env.mock_auths(&[MockAuth {
+        address: &attacker,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_maximum_stake",
+            args: (new_max,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_set_maximum_stake(&new_max);
+    assert!(result.is_err(), "non-admin should not be able to set maximum_stake");
+}
+
+// #1159 - set_maximum_stake updates ProtocolConfig.maximum_stake
+#[test]
+fn test_set_maximum_stake_updates_config() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.set_maximum_stake(&Some(500));
+    assert_eq!(client.get_protocol_config().maximum_stake, Some(500));
+
+    client.set_maximum_stake(&None);
+    assert_eq!(client.get_protocol_config().maximum_stake, None);
+}
+
+// #1159 - set_maximum_stake rejects a non-positive cap
+#[test]
+fn test_set_maximum_stake_rejects_non_positive() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_set_maximum_stake(&Some(0));
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+// #1133 — deposit is rejected when contract is paused
+#[test]
+fn test_deposit_when_paused() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cbaadb4a"),
+        &Platform::Lichess,
+    );
+
+    client.pause();
+
+    let result = client.try_deposit(&id, &player1);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
+
+// #1132 — create_match is rejected when contract is paused
+#[test]
+fn test_create_match_when_paused() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "bcdf5273"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
 // #766 — two-step admin transfer: propose_admin + accept_admin happy-path
@@ -731,4 +817,63 @@ fn test_two_step_admin_transfer() {
         env.storage().instance().get(&DataKey::PendingAdmin)
     });
     assert!(pending.is_none(), "PendingAdmin key must be cleared after acceptance");
+}
+
+// #1101 — pause blocks create_match and unpause restores it
+#[test]
+fn test_pause_blocks_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause();
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "fdc7c9d7"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::ContractPaused)), "create_match must fail when paused");
+
+    client.unpause();
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "35fc8b4a"),
+        &Platform::Lichess,
+    );
+    assert_eq!(id, 0, "create_match must succeed after unpause");
+}
+
+// #1162 — get_contract_version returns the crate's semver string
+#[test]
+fn test_get_contract_version_returns_semver_string() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let version = client.get_contract_version();
+
+    assert!(!version.is_empty(), "contract version must not be empty");
+
+    use std::string::ToString;
+    let version_str = version.to_string();
+    let parts: std::vec::Vec<&str> = version_str.split('.').collect();
+    assert_eq!(
+        parts.len(),
+        3,
+        "contract version must be semver-formatted (major.minor.patch): {}",
+        version_str
+    );
+    for part in parts {
+        assert!(
+            part.chars().all(|c| c.is_ascii_digit()) && !part.is_empty(),
+            "each semver component must be a non-empty numeric string: {}",
+            version_str
+        );
+    }
 }
