@@ -108,7 +108,7 @@ fn test_player_history_index_excludes_unrelated_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_1"),
+        &String::from_str(&env, "404da6de"),
         &Platform::Lichess,
     );
 
@@ -117,7 +117,7 @@ fn test_player_history_index_excludes_unrelated_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_2"),
+        &String::from_str(&env, "86b9ea0e"),
         &Platform::Lichess,
     );
 
@@ -127,7 +127,7 @@ fn test_player_history_index_excludes_unrelated_matches() {
         &player4,
         &100,
         &token,
-        &String::from_str(&env, "game_3"),
+        &String::from_str(&env, "fb595cfb"),
         &Platform::Lichess,
     );
 
@@ -136,7 +136,7 @@ fn test_player_history_index_excludes_unrelated_matches() {
         &player4,
         &100,
         &token,
-        &String::from_str(&env, "game_4"),
+        &String::from_str(&env, "24a3f6f9"),
         &Platform::Lichess,
     );
 
@@ -177,7 +177,7 @@ fn test_get_player_matches_preserves_insertion_order() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_1"),
+        &String::from_str(&env, "404da6de"),
         &Platform::Lichess,
     );
 
@@ -186,7 +186,7 @@ fn test_get_player_matches_preserves_insertion_order() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_2"),
+        &String::from_str(&env, "86b9ea0e"),
         &Platform::Lichess,
     );
 
@@ -195,7 +195,7 @@ fn test_get_player_matches_preserves_insertion_order() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_3"),
+        &String::from_str(&env, "fb595cfb"),
         &Platform::Lichess,
     );
 
@@ -204,7 +204,7 @@ fn test_get_player_matches_preserves_insertion_order() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_4"),
+        &String::from_str(&env, "24a3f6f9"),
         &Platform::Lichess,
     );
 
@@ -233,7 +233,7 @@ fn test_get_match_count_increments_correctly() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_1"),
+        &String::from_str(&env, "404da6de"),
         &Platform::Lichess,
     );
     let count = client.get_match_count();
@@ -245,7 +245,7 @@ fn test_get_match_count_increments_correctly() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_2"),
+        &String::from_str(&env, "86b9ea0e"),
         &Platform::Lichess,
     );
     let count = client.get_match_count();
@@ -257,7 +257,7 @@ fn test_get_match_count_increments_correctly() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_3"),
+        &String::from_str(&env, "fb595cfb"),
         &Platform::Lichess,
     );
     let count = client.get_match_count();
@@ -269,7 +269,7 @@ fn test_get_match_count_increments_correctly() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_4"),
+        &String::from_str(&env, "24a3f6f9"),
         &Platform::Lichess,
     );
     let count = client.get_match_count();
@@ -308,4 +308,136 @@ fn test_get_pending_matches_pagination() {
     for (i, match_obj) in page2.iter().enumerate() {
         assert_eq!(match_obj.id, pending_match_ids[20 + i]);
     }
+}
+
+// Issue #1155: `get_match_history` returns completed/cancelled matches,
+// newest first, with optional pagination and player filtering.
+
+#[test]
+fn test_get_match_history_returns_completed_and_cancelled_newest_first() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Completed match.
+    let completed_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "00fe4d0c"),
+        &Platform::Lichess,
+    );
+    client.deposit(&completed_id, &player1);
+    client.deposit(&completed_id, &player2);
+    client.submit_result(&completed_id, &Winner::Player1);
+
+    // Cancelled match (created after, so it should sort first).
+    let cancelled_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "c1cc8be1"),
+        &Platform::Lichess,
+    );
+    client.cancel_match(&cancelled_id, &player1);
+
+    // Still-pending match — must not appear in history.
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "8aa3f868"),
+        &Platform::Lichess,
+    );
+
+    let history = client.get_match_history(&None, &10, &0);
+    assert_eq!(history.len(), 2);
+    assert_eq!(history.get(0).unwrap().id, cancelled_id);
+    assert_eq!(history.get(1).unwrap().id, completed_id);
+    assert_eq!(history.get(0).unwrap().state, MatchState::Cancelled);
+    assert_eq!(history.get(1).unwrap().state, MatchState::Completed);
+}
+
+#[test]
+fn test_get_match_history_pagination() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let mut ids = Vec::new();
+    for i in 0..5 {
+        let id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, &format!("history_page_{}", i)),
+            &Platform::Lichess,
+        );
+        client.cancel_match(&id, &player1);
+        ids.push(id);
+    }
+    // Newest first: ids[4], ids[3], ids[2], ids[1], ids[0]
+
+    let page0 = client.get_match_history(&None, &2, &0);
+    assert_eq!(page0.len(), 2);
+    assert_eq!(page0.get(0).unwrap().id, ids[4]);
+    assert_eq!(page0.get(1).unwrap().id, ids[3]);
+
+    let page1 = client.get_match_history(&None, &2, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap().id, ids[2]);
+    assert_eq!(page1.get(1).unwrap().id, ids[1]);
+
+    let page2 = client.get_match_history(&None, &2, &4);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get(0).unwrap().id, ids[0]);
+
+    let empty = client.get_match_history(&None, &10, &10);
+    assert_eq!(empty.len(), 0);
+
+    let zero_limit = client.get_match_history(&None, &0, &0);
+    assert_eq!(zero_limit.len(), 0);
+}
+
+#[test]
+fn test_get_match_history_filters_by_player() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let player3 = Address::generate(&env);
+    token_client(&env, &token).transfer(&player2, &player3, &500);
+
+    // Match between player1 and player2.
+    let id_12 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "4b7f4050"),
+        &Platform::Lichess,
+    );
+    client.cancel_match(&id_12, &player1);
+
+    // Match between player1 and player3.
+    let id_13 = client.create_match(
+        &player1,
+        &player3,
+        &100,
+        &token,
+        &String::from_str(&env, "f6e56b5e"),
+        &Platform::Lichess,
+    );
+    client.cancel_match(&id_13, &player1);
+
+    let player3_history = client.get_match_history(&Some(player3.clone()), &10, &0);
+    assert_eq!(player3_history.len(), 1);
+    assert_eq!(player3_history.get(0).unwrap().id, id_13);
+
+    let player1_history = client.get_match_history(&Some(player1.clone()), &10, &0);
+    assert_eq!(player1_history.len(), 2);
+
+    let player2_history = client.get_match_history(&Some(player2.clone()), &10, &0);
+    assert_eq!(player2_history.len(), 1);
+    assert_eq!(player2_history.get(0).unwrap().id, id_12);
 }

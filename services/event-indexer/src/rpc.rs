@@ -13,6 +13,13 @@
 //! creating duplicates.  The idempotency guarantee in the DB is the correctness
 //! backstop; leader election is purely a performance optimisation that avoids
 //! redundant RPC calls.
+//!
+//! ## Cache invalidation
+//! Every ingested event invalidates the cached API responses for its match (the
+//! match summary, every match list, and analytics).  Because the response cache
+//! is shared through Redis, the single leader invalidating is enough for *all*
+//! replicas to stop serving the stale value — followers do not need to observe
+//! the event themselves.  See [`crate::api_cache::ApiCache::invalidate_match`].
 
 use anyhow::{anyhow, Result};
 use reqwest::Client;
@@ -22,6 +29,7 @@ use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, info_span, warn, Instrument};
 
+use crate::api_cache::ApiCache;
 use crate::cache::EventCache;
 use crate::db::Database;
 use crate::id_gen::compute_event_id;
@@ -125,6 +133,7 @@ pub async fn event_poller(
     rpc: Arc<SorobanRpcClient>,
     db: Arc<Database>,
     cache: Arc<RwLock<EventCache>>,
+    api_cache: Arc<ApiCache>,
     mut leader: LeaderElection,
     contract_id: &str,
     poll_interval_secs: u64,
@@ -142,7 +151,7 @@ pub async fn event_poller(
         // ── Poll ──────────────────────────────────────────────────────────
         let last_ledger = db.get_latest_polled_ledger(contract_id).await.ok().flatten();
         let span = info_span!("poll_iteration", contract_id, last_polled_ledger = ?last_ledger);
-        match poll_events(&rpc, &db, &cache, contract_id, last_ledger)
+        match poll_events(&rpc, &db, &cache, &api_cache, contract_id, last_ledger)
             .instrument(span)
             .await
         {
@@ -168,6 +177,7 @@ async fn poll_events(
     rpc: &Arc<SorobanRpcClient>,
     db: &Arc<Database>,
     cache: &Arc<RwLock<EventCache>>,
+    api_cache: &Arc<ApiCache>,
     contract_id: &str,
     _start_ledger: Option<u32>,
 ) -> Result<Option<u32>> {
@@ -205,6 +215,10 @@ async fn poll_events(
                         .mark_events_as_invalid(contract_id, reorg_ledger, last, "ledger_backtrack")
                         .await?;
                     info!("Marked {} events as invalid due to reorg at ledger {}", _invalidated, reorg_ledger);
+                    // A reorg can change any match, so drop every aggregate
+                    // response rather than trying to work out which matches the
+                    // invalidated ledger range touched.
+                    api_cache.invalidate_lists_and_analytics().await;
                     // Continue processing; caller will reset polling on next iteration
                 }
             }
@@ -214,6 +228,11 @@ async fn poll_events(
             let mut cache_lock = cache.write().await;
             cache_lock.insert(indexed_event.clone());
             drop(cache_lock);
+
+            // Drop the cached API responses this event makes stale.  Done after
+            // the write so a reader that misses can only re-populate from
+            // post-insert state.
+            api_cache.invalidate_match(indexed_event.match_id).await;
 
             max_ledger = Some(indexed_event.ledger_sequence);
             event_index += 1;

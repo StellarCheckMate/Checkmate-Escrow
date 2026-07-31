@@ -43,6 +43,35 @@ pub struct ProtocolConfig {
     pub vesting_duration_seconds: u64,
     pub cancellation_fee_basis_points: u32,
     pub treasury: Address,
+    /// When true, only tokens issued by a registered stablecoin issuer are
+    /// accepted for new matches.  Disabled by default.
+    pub stablecoin_only_mode: bool,
+    /// Upper bound on `stake_amount` accepted by `create_match` and friends.
+    /// `None` means unlimited (default).
+    pub maximum_stake: Option<i128>,
+    /// Runtime-configurable match expiration timeout, in seconds.
+    pub match_timeout_seconds: u64,
+    /// Protocol fee charged on winner payouts, in basis points of the pot
+    /// (1 bp = 0.01 %). Draw refunds are never charged this fee. Default 0.
+    pub protocol_fee_bps: u32,
+    /// Recipient of the protocol fee collected on winner payouts.
+    pub fee_recipient: Address,
+    /// Minimum stake amount enforced in create_match (default 1).
+    pub minimum_stake: i128,
+}
+
+/// A single fee tier entry: matches with a stake up to `max_stake` are charged
+/// `fee_basis_points` (e.g. 50 = 0.5 %).  Tiers must be stored in ascending
+/// `max_stake` order; the last tier acts as the catch-all for any stake that
+/// exceeds all explicit thresholds.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeTier {
+    /// Maximum stake (inclusive) for this tier.  Use `i128::MAX` for the
+    /// open-ended final tier.
+    pub max_stake: i128,
+    /// Fee charged as basis points of the total pot (1 bp = 0.01 %).
+    pub fee_basis_points: u32,
 }
 
 #[contracttype]
@@ -76,6 +105,28 @@ pub struct Match {
     pub paused_ledger: Option<u32>,
     /// Total pause duration in ledgers.
     pub total_pause_duration: u32,
+    /// Optional referrer address for referral fee sharing.
+    pub referrer: Option<Address>,
+    /// Ledger timestamp (Unix seconds) of the last recorded match activity.
+    /// Initialized at match creation and refreshed on each deposit so that
+    /// `dispute_and_rollback_match` can enforce the 24h dispute window based
+    /// on the most recent in-game activity.
+    pub last_heartbeat: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TempOracleRotation {
+    pub old_oracle: Address,
+    pub temp_oracle: Address,
+    pub expiry: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingOracleRotation {
+    pub old_oracle: Address,
+    pub new_oracle: Address,
 }
 
 #[contracttype]
@@ -89,7 +140,6 @@ pub enum DataKey {
     GameId(String),
     ActiveMatches,
     PlayerMatches(Address),
-    MatchTimeout,
     AllowedToken(Address),
     AllowedTokenCount,
     AllowlistEnforced,
@@ -135,11 +185,20 @@ pub enum DataKey {
     PlayerActiveMatchCount(Address),
     /// Cached count of completed matches for a player, updated atomically at completion.
     PlayerCompletedMatchCount(Address),
-    /// Reentrancy guard for deposit(): set to true before the cross-contract
-    /// token transfer and cleared after all state updates complete.  Any
-    /// deposit() call that finds this flag set for a given match_id is
-    /// rejected immediately with `Error::DepositInProgress`.
-    DepositInProgress(u64),
+    /// Whether a given address is a registered stablecoin issuer.
+    StablecoinIssuer(Address),
+    /// Total number of registered stablecoin issuers.
+    StablecoinIssuerCount,
+    PendingUpgradeHash,
+    UpgradeScheduledAt,
+    ContractVersion,
+    ReferralShareBasisPoints,
+    BlacklistedToken(Address),
+    BlacklistedTokens,
+    FeeTiers,
+    PlayerPreferredToken(Address),
+    PendingOracleRotation,
+    TempOracleRotation,
 }
 
 /// The lifecycle event that triggered a balance snapshot.

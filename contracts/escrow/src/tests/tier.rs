@@ -91,7 +91,7 @@ fn test_create_match_enforces_tier_stake_caps() {
         &player2,
         &101,
         &token,
-        &String::from_str(&env, "bronze_cap_rejection"),
+        &String::from_str(&env, "9519079c"),
         &Platform::Lichess,
     );
 
@@ -114,7 +114,7 @@ fn test_deposit_rechecks_current_player_tier() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "pending_bronze_match"),
+        &String::from_str(&env, "0813206a"),
         &Platform::Lichess,
     );
 

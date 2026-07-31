@@ -54,8 +54,17 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Run cargo audit
+        run: cargo audit
+
+      - name: Run cargo deny
+        run: cargo deny check
+
       - name: Run tests
         run: cargo test
+
+      - name: Run upgrade simulation tests
+        run: cargo test -p escrow --test upgrade_simulation_tests
 
   frontend-build:
     name: Frontend Build
@@ -161,3 +170,20 @@ jobs:
         with:
           name: benchmark-results
           path: reports/performance/benchmark-results.json
+
+  validate-openapi:
+    name: Validate OpenAPI Schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Install @redocly/cli
+        run: npm install -g @redocly/cli@1.25.14
+
+      - name: Validate OpenAPI schema
+        run: redocly lint docs/openapi.yaml --format=stylish

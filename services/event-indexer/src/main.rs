@@ -1,4 +1,4 @@
-use event_indexer::{api, cache, config, db, leader, rpc};
+use event_indexer::{api, api_cache, cache, config, db, leader, rpc};
 
 use anyhow::Result;
 use config::Config;
@@ -11,6 +11,10 @@ async fn main() -> Result<()> {
     let config = Config::from_env()?;
 
     tracing_subscriber::fmt()
+        .json()
+        .flatten_event(true)
+        .with_current_span(false)
+        .with_span_list(false)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(format!("event_indexer={}", config.log_level).parse()?),
@@ -32,6 +36,16 @@ async fn main() -> Result<()> {
     // ── In-process LRU cache ──────────────────────────────────────────────
     let cache = Arc::new(RwLock::new(cache::EventCache::new(config.cache_size)));
 
+    // ── Shared API response cache ─────────────────────────────────────────
+    // Falls back to a process-local TTL cache when REDIS_URL is unset or the
+    // server is unreachable, so start-up never depends on Redis being up.
+    let response_cache =
+        Arc::new(api_cache::ApiCache::from_config(config.redis_url.as_deref()).await);
+    info!(
+        "API response cache backend: {}",
+        response_cache.backend_name()
+    );
+
     // ── Soroban RPC client ────────────────────────────────────────────────
     let rpc_client = Arc::new(rpc::SorobanRpcClient::new(&config.rpc_url)?);
 
@@ -48,10 +62,13 @@ async fn main() -> Result<()> {
         let db = database.clone();
         let cache = cache.clone();
         let rpc = rpc_client.clone();
+        let response_cache = response_cache.clone();
         let bind_addr = config.bind_addr.clone();
         let bind_port = config.bind_port;
         tokio::spawn(async move {
-            if let Err(e) = api::start_server(&bind_addr, bind_port, db, cache, rpc).await {
+            if let Err(e) =
+                api::start_server(&bind_addr, bind_port, db, cache, rpc, response_cache).await
+            {
                 error!("API server error: {}", e);
             }
         })
@@ -62,11 +79,20 @@ async fn main() -> Result<()> {
         let db = database.clone();
         let cache = cache.clone();
         let rpc = rpc_client.clone();
+        let response_cache = response_cache.clone();
         let contract = config.contract_escrow.clone();
         let interval = config.poll_interval_secs;
         tokio::spawn(async move {
-            if let Err(e) =
-                rpc::event_poller(rpc, db, cache, election, &contract, interval).await
+            if let Err(e) = rpc::event_poller(
+                rpc,
+                db,
+                cache,
+                response_cache,
+                election,
+                &contract,
+                interval,
+            )
+            .await
             {
                 error!("Event poller error: {}", e);
             }

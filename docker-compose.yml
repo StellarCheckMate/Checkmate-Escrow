@@ -1,6 +1,28 @@
 version: '3.8'
 
 services:
+  # ── Stellar standalone node (local Soroban network + RPC) ─────────────────
+  # Provides a throwaway local network for contract deployment and testing —
+  # no testnet/mainnet access needed for local full-stack development.
+  stellar-standalone:
+    image: stellar/quickstart:latest
+    restart: unless-stopped
+    command: ["--standalone", "--enable-soroban-rpc"]
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - >-
+          curl -sf -X POST http://localhost:8000/soroban/rpc
+          -H 'Content-Type: application/json'
+          -d '{"jsonrpc":"2.0","id":1,"method":"getHealth"}'
+          | grep -q healthy
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:15-alpine
@@ -19,6 +41,30 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Redis (shared API response cache) ─────────────────────────────────────
+  # Both replicas share this cache, so an invalidation performed by the leader
+  # after ingesting an event is immediately visible to the follower serving
+  # reads. Without it each replica caches independently and can serve a stale
+  # response for up to one TTL after the other has invalidated.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Cache-only workload: no persistence, and a bounded memory footprint with
+    # LRU eviction so it can never grow into the host's memory.
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # ── Event Indexer Replica #1 (leader-eligible) ───────────────────────────
   event-indexer-1:
     build:
@@ -28,10 +74,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8080:8080"
     environment:
       DATABASE_URL: postgres://event_indexer:event_indexer_pass@postgres:5432/event_indexer
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
       CONTRACT_ESCROW: ${CONTRACT_ESCROW}
       EVENT_INDEXER_INSTANCE_ID: indexer-1
@@ -59,10 +108,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8081:8080"
     environment:
       DATABASE_URL: postgres://event_indexer:event_indexer_pass@postgres:5432/event_indexer
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
       CONTRACT_ESCROW: ${CONTRACT_ESCROW}
       EVENT_INDEXER_INSTANCE_ID: indexer-2
@@ -90,10 +142,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8082:8080"
     environment:
       DATABASE_URL: postgres://event_indexer:event_indexer_pass@postgres:5432/event_indexer
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
       CONTRACT_ESCROW: ${CONTRACT_ESCROW}
       EVENT_INDEXER_INSTANCE_ID: indexer-3
@@ -113,6 +168,40 @@ services:
       retries: 3
     profiles:
       - testing
+
+  # ── Oracle service (Lichess/Chess.com result submission) ─────────────────
+  # Requires CONTRACT_ESCROW, CONTRACT_ORACLE and ORACLE_SIGNING_KEY to be set
+  # in .env once contracts are deployed to stellar-standalone — see
+  # docs/local-dev.md for the full local deployment walkthrough.
+  oracle-service:
+    build:
+      context: .
+      dockerfile: oracle-service/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      stellar-standalone:
+        condition: service_healthy
+    ports:
+      - "8095:8000"
+    environment:
+      STELLAR_RPC_URL: ${ORACLE_RPC_URL:-http://stellar-standalone:8000/soroban/rpc}
+      STELLAR_NETWORK: ${STELLAR_NETWORK:-standalone}
+      CONTRACT_ESCROW: ${CONTRACT_ESCROW}
+      CONTRACT_ORACLE: ${CONTRACT_ORACLE}
+      ORACLE_SIGNING_KEY: ${ORACLE_SIGNING_KEY}
+      LICHESS_API_TOKEN: ${LICHESS_API_TOKEN:-}
+      CHESSDOTCOM_API_KEY: ${CHESSDOTCOM_API_KEY:-}
+      ORACLE_POLL_INTERVAL_SECS: ${ORACLE_POLL_INTERVAL_SECS:-30}
+      ORACLE_MAX_RETRIES: ${ORACLE_MAX_RETRIES:-5}
+      ORACLE_RETRY_BASE_DELAY_SECS: ${ORACLE_RETRY_BASE_DELAY_SECS:-10}
+      ORACLE_QUEUE_DIR: /data/oracle-queue
+    volumes:
+      - oracle-queue-data:/data/oracle-queue
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   # ── WebSocket server (real-time match events) ────────────────────────────
   websocket-server:
@@ -144,4 +233,6 @@ services:
 
 volumes:
   postgres-data:
+    driver: local
+  oracle-queue-data:
     driver: local

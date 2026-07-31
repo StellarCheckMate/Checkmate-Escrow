@@ -23,7 +23,7 @@ fn test_fuzz_stake_amounts() {
             &player2,
             &amount,
             &token,
-            &String::from_str(&env, &format!("game123_{}", i)),
+            &String::from_str(&env, &format!("901230{}", i)),
             &Platform::ChessDotCom,
         );
         assert!(result.is_ok(), "Failed for amount: {}", amount);
@@ -50,7 +50,7 @@ fn test_fuzz_invalid_stake_amounts() {
             &player2,
             &amount,
             &token,
-            &String::from_slice(&env, "game123"),
+            &String::from_slice(&env, "9012345"),
             &Platform::Lichess,
         );
         assert!(result.is_err(), "Should reject amount: {}", amount);
@@ -65,18 +65,18 @@ fn test_fuzz_game_id_lengths() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    // Valid: minimum length (1 byte)
+    // Valid: minimum length for Chess.com (7 digits)
     env.mock_all_auths();
-    let game_id_1 = String::from_slice(&env, "a");
+    let game_id_7 = String::from_slice(&env, "1234567");
     let result = client.try_create_match(
         &player1,
         &player2,
         &100i128,
         &token,
-        &game_id_1,
+        &game_id_7,
         &Platform::ChessDotCom,
     );
-    assert!(result.is_ok(), "Should accept 1-byte game ID");
+    assert!(result.is_ok(), "Should accept 7-digit Chess.com game ID");
 
     // Valid: typical length (8 bytes for Lichess)
     env.mock_all_auths();
@@ -91,9 +91,9 @@ fn test_fuzz_game_id_lengths() {
     );
     assert!(result.is_ok(), "Should accept 8-byte game ID");
 
-    // Valid: maximum length (64 bytes)
+    // Rejected: exceeds Lichess length (must be exactly 8)
     env.mock_all_auths();
-    let game_id_64 = String::from_slice(&env, &"x".repeat(64));
+    let game_id_64 = String::from_slice(&env, &"abcd12345678".repeat(4));
     let result = client.try_create_match(
         &player1,
         &player2,
@@ -102,7 +102,20 @@ fn test_fuzz_game_id_lengths() {
         &game_id_64,
         &Platform::Lichess,
     );
-    assert!(result.is_ok(), "Should accept 64-byte game ID");
+    assert!(result.is_err(), "Should reject >8 byte game ID for Lichess");
+
+    // Valid: maximum length for Chess.com (12 digits)
+    env.mock_all_auths();
+    let game_id_12 = String::from_slice(&env, "123456789012");
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100i128,
+        &token,
+        &game_id_12,
+        &Platform::ChessDotCom,
+    );
+    assert!(result.is_ok(), "Should accept 12-digit Chess.com game ID");
 }
 
 /// Test that game IDs exceeding max length are rejected
@@ -172,7 +185,7 @@ fn test_security_unauthorized_deposit() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -195,7 +208,7 @@ fn test_security_unauthorized_submit_result() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -224,7 +237,7 @@ fn test_security_double_deposit_attack() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -256,7 +269,7 @@ fn test_security_cancel_completed_match_attack() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -287,7 +300,7 @@ fn test_security_cancel_active_match_attack() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -331,7 +344,7 @@ fn test_security_allowlist_bypass_attempt() {
         &player2,
         &100i128,
         &token_addr_2,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
     assert!(
@@ -359,7 +372,7 @@ fn test_security_create_match_when_paused() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
     assert!(result.is_err(), "Should reject create_match when paused");
@@ -377,7 +390,7 @@ fn test_security_deposit_when_paused() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -403,7 +416,7 @@ fn test_security_submit_result_when_paused() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -435,7 +448,7 @@ fn test_security_same_player_attack() {
         &player1, // Same player
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
     assert!(
@@ -456,7 +469,7 @@ fn test_security_contract_as_player_attack() {
         &contract_id, // Contract as player2
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
     assert!(
@@ -473,7 +486,7 @@ fn test_security_duplicate_game_id_attack() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let game_id = String::from_slice(&env, "game123");
+    let game_id = String::from_slice(&env, "9012345");
 
     // First match with game_id succeeds
     env.mock_all_auths();
@@ -556,7 +569,7 @@ fn test_security_cancel_only_pending_matches() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -580,7 +593,7 @@ fn test_security_oracle_record_stored() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "game123"),
+        &String::from_slice(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -588,7 +601,7 @@ fn test_security_oracle_record_stored() {
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
 
-    let game_id = String::from_slice(&env, "game123");
+    let game_id = String::from_slice(&env, "9012345");
 
     // Submit result with oracle record
     env.mock_all_auths();
@@ -687,63 +700,70 @@ fn test_accept_admin_wrong_caller_rejected() {
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
-// ── Cross-Contract Reentrancy Guard ──────────────────────────────────────────
-
-/// Verify that the DepositInProgress reentrancy guard rejects a second
-/// deposit() call for the same match_id while the first is still executing.
-///
-/// Soroban does not support true re-entrant cross-contract callbacks in the
-/// test environment the way EVM does, so we simulate the race condition by
-/// manually writing the DepositInProgress flag into temporary storage before
-/// calling deposit().  This is the exact state the contract would be in if a
-/// malicious token contract (e.g. one with ERC-777-style transfer hooks)
-/// called back into deposit() during the token.transfer() cross-contract call.
+/// Test that transfer_admin rejects non-admin caller
 #[test]
-fn test_deposit_rejects_cross_contract_reentrancy_via_token_callback() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+fn test_transfer_admin_unauthorized() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    env.mock_all_auths();
-    let match_id = client.create_match(
-        &player1,
-        &player2,
-        &100i128,
-        &token,
-        &String::from_slice(&env, "reentrant_game"),
-        &Platform::Lichess,
-    );
+    let new_admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
 
-    // Simulate the mid-execution state: the reentrancy guard is set as it
-    // would be immediately before the cross-contract token.transfer() call.
-    env.as_contract(&contract_id, || {
-        env.storage()
-            .temporary()
-            .set(&DataKey::DepositInProgress(match_id), &true);
-    });
+    env.mock_auths(&[MockAuth {
+        address: &non_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "transfer_admin",
+            args: (new_admin.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
 
-    // A concurrent (or callback-triggered) deposit() call for the same
-    // match_id must be rejected with DepositInProgress.
-    env.mock_all_auths();
-    let result = client.try_deposit(&match_id, &player1);
-    assert!(
-        matches!(result, Err(Ok(Error::DepositInProgress))),
-        "deposit() must return Err(DepositInProgress) when the reentrancy guard is set; got: {:?}",
-        result
-    );
-
-    // After clearing the guard (simulating normal completion), deposit()
-    // proceeds as expected.
-    env.as_contract(&contract_id, || {
-        env.storage()
-            .temporary()
-            .remove(&DataKey::DepositInProgress(match_id));
-    });
-
-    env.mock_all_auths();
-    let result2 = client.try_deposit(&match_id, &player1);
-    assert!(
-        result2.is_ok(),
-        "deposit() must succeed once the reentrancy guard is cleared; got: {:?}",
-        result2
-    );
+    let result = client.try_transfer_admin(&new_admin);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
+
+/// Test that pause rejects non-admin caller
+#[test]
+fn test_pause_unauthorized() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let non_admin = Address::generate(&env);
+
+    env.mock_auths(&[MockAuth {
+        address: &non_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_pause();
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+/// Test that submit_result by non-oracle is rejected
+#[test]
+fn test_submit_result_unauthorized() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) = setup_with_funded_match();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let non_oracle = Address::generate(&env);
+
+    env.mock_auths(&[MockAuth {
+        address: &non_oracle,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (match_id, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+

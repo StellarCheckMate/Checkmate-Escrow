@@ -4,6 +4,7 @@
 //!
 //! 1. **Health HTTP endpoint** on `0.0.0.0:8000` — exposes `/health` with
 //!    real-time dependency checks and `/metrics` for Prometheus scraping.
+//!    Also exposes `/api/docs` (Swagger UI) and `/api/openapi.yaml` (raw schema).
 //!
 //! 2. **Health check poller** — runs comprehensive liveness checks every 30
 //!    seconds, updating the health status with real RPC, contract, and API
@@ -13,7 +14,13 @@
 //!    processes all due pending-verification entries, and submits results
 //!    on-chain via Soroban RPC.
 
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::header,
+    response::{Html, IntoResponse, Response},
+    routing::get,
+    Json, Router,
+};
 use std::sync::Arc;
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -33,6 +40,30 @@ struct AppState {
 async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> {
     let status = state.health_checker.status().await;
     Json(serde_json::to_value(&status).unwrap_or(serde_json::json!(null)))
+}
+
+// ── API documentation handlers ────────────────────────────────────────────────
+
+/// `GET /api/docs` — serves the Swagger UI HTML page.
+///
+/// The HTML page loads `swagger-ui-dist` from unpkg CDN and points it at
+/// `/api/openapi.yaml` so the interactive docs always reflect the canonical
+/// schema bundled with the service binary.
+async fn api_docs_ui() -> Html<&'static str> {
+    Html(include_str!("../../docs/swagger-ui.html"))
+}
+
+/// `GET /api/openapi.yaml` — serves the raw OpenAPI 3.0 schema.
+///
+/// Swagger UI (and any other tooling) fetches this file to render the
+/// interactive documentation. Clients can also download it directly for
+/// code-generation or schema validation.
+async fn api_openapi_yaml() -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/yaml")],
+        include_str!("../../docs/openapi.yaml"),
+    )
+        .into_response()
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -117,6 +148,8 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health_check))
+        .route("/api/docs", get(api_docs_ui))
+        .route("/api/openapi.yaml", get(api_openapi_yaml))
         .with_state(app_state);
 
     let listener = match tokio::net::TcpListener::bind("0.0.0.0:8000").await {
@@ -128,6 +161,7 @@ async fn main() {
     };
 
     info!("oracle service listening on http://0.0.0.0:8000");
+    info!("API docs available at http://0.0.0.0:8000/api/docs");
 
     // ── Run all three tasks concurrently ───────────────────────────────────
     tokio::select! {
