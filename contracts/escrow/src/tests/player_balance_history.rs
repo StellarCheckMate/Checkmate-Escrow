@@ -36,7 +36,7 @@ fn test_get_balance_at_timestamp_returns_zero_for_player_with_no_history() {
         &player2,
         &100,
         &_token,
-        &String::from_str(&env, "no_history_match"),
+        &String::from_str(&env, "131ed60b"),
         &Platform::Lichess,
     );
     assert_eq!(
@@ -59,7 +59,7 @@ fn test_deposit_records_player_snapshot_increasing_balance() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "deposit_player_snap"),
+        &String::from_str(&env, "58673754"),
         &Platform::Lichess,
     );
 
@@ -111,7 +111,7 @@ fn test_two_deposits_cumulate_balance_in_history() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "two_deposits"),
+        &String::from_str(&env, "ca09be9c"),
         &Platform::Lichess,
     );
 
@@ -167,7 +167,7 @@ fn test_submit_result_zeroes_player_balance_in_history() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "payout_zero"),
+        &String::from_str(&env, "25ce4b43"),
         &Platform::Lichess,
     );
 
@@ -215,7 +215,7 @@ fn test_cancel_match_zeroes_player_balance_in_history() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "cancel_zero"),
+        &String::from_str(&env, "ee3ee4d2"),
         &Platform::Lichess,
     );
 
@@ -252,7 +252,7 @@ fn test_expire_match_zeroes_player_balance_in_history() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.set_match_timeout(&17_280);
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
     env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
@@ -260,7 +260,7 @@ fn test_expire_match_zeroes_player_balance_in_history() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "expire_zero"),
+        &String::from_str(&env, "27cc9123"),
         &Platform::Lichess,
     );
 
@@ -294,7 +294,7 @@ fn test_balance_history_across_multiple_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "multi_a"),
+        &String::from_str(&env, "732e8c5c"),
         &Platform::Lichess,
     );
     let b = client.create_match(
@@ -302,7 +302,7 @@ fn test_balance_history_across_multiple_matches() {
         &player2,
         &50,
         &token,
-        &String::from_str(&env, "multi_b"),
+        &String::from_str(&env, "9872012345"),
         &Platform::ChessDotCom,
     );
 
@@ -364,7 +364,7 @@ fn test_get_balance_at_timestamp_returns_no_history_when_no_snapshot_before_quer
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "no_history_before"),
+        &String::from_str(&env, "30f7ea82"),
         &Platform::Lichess,
     );
 
@@ -408,7 +408,7 @@ fn test_get_balance_at_timestamp_after_ring_buffer_overwrites_oldest() {
         &player2,
         &100,
         &_token,
-        &String::from_str(&env, "ring_prune"),
+        &String::from_str(&env, "55c38b21"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);

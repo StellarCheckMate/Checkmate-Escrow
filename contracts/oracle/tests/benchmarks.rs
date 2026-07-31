@@ -158,6 +158,7 @@ fn run_all_benchmarks() {
                     &SorobanString::from_str(&h.env, "bench_game"),
                     &Platform::Lichess,
                     &Winner::Player1,
+                    &1000u64,
                 );
             },
         ));
@@ -180,6 +181,7 @@ fn run_all_benchmarks() {
             &SorobanString::from_str(&h.env, "bench_game"),
             &Platform::Lichess,
             &Winner::Player2,
+            &1000u64,
         );
 
         // Majority votes agree, up to (but not including) the finalizing one.
@@ -190,6 +192,7 @@ fn run_all_benchmarks() {
                 &SorobanString::from_str(&h.env, "bench_game"),
                 &Platform::Lichess,
                 &Winner::Player1,
+                &1000u64,
             );
         }
 
@@ -206,6 +209,7 @@ fn run_all_benchmarks() {
                     &SorobanString::from_str(&h.env, "bench_game"),
                     &Platform::Lichess,
                     &Winner::Player1,
+                    &1000u64,
                 );
             },
         ));
@@ -230,6 +234,7 @@ fn run_all_benchmarks() {
                     &SorobanString::from_str(&h.env, "bench_game"),
                     &Platform::Lichess,
                     &Winner::Player1,
+                    &1000u64,
                 );
             },
         ));

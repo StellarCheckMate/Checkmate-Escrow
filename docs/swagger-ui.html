@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Checkmate-Escrow API Docs</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui.css" />
+  <style>
+    /* ── Brand overrides ──────────────────────────────────────────────── */
+    :root {
+      --brand-bg:      #1a1a2e;
+      --brand-header:  #16213e;
+      --brand-accent:  #e94560;
+      --brand-text:    #eaeaea;
+    }
+
+    body {
+      margin: 0;
+      background: var(--brand-bg);
+      color: var(--brand-text);
+      font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+    }
+
+    /* Top banner */
+    #top-banner {
+      background: var(--brand-header);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      border-bottom: 3px solid var(--brand-accent);
+    }
+
+    #top-banner .logo {
+      font-size: 1.6rem;
+      line-height: 1;
+    }
+
+    #top-banner h1 {
+      margin: 0;
+      font-size: 1.25rem;
+      color: var(--brand-text);
+      font-weight: 600;
+    }
+
+    #top-banner p {
+      margin: 2px 0 0;
+      font-size: 0.8rem;
+      color: #aaa;
+    }
+
+    #top-banner .links {
+      margin-left: auto;
+      display: flex;
+      gap: 12px;
+      font-size: 0.85rem;
+    }
+
+    #top-banner .links a {
+      color: #89b4fa;
+      text-decoration: none;
+    }
+
+    #top-banner .links a:hover {
+      text-decoration: underline;
+    }
+
+    /* Swagger UI host element */
+    #swagger-ui {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 0 16px 48px;
+    }
+
+    /* Lighten the white blocks Swagger renders */
+    .swagger-ui .wrapper,
+    .swagger-ui .opblock-tag-section,
+    .swagger-ui .opblock {
+      background: #0f172a !important;
+    }
+
+    .swagger-ui .topbar { display: none; }
+
+    .swagger-ui .info .title { color: var(--brand-text) !important; }
+
+    .swagger-ui .opblock .opblock-summary-operation-id,
+    .swagger-ui .opblock .opblock-summary-path,
+    .swagger-ui .opblock .opblock-summary-path__deprecated {
+      color: #cdd6f4 !important;
+    }
+
+    .swagger-ui .btn.execute { background: var(--brand-accent) !important; }
+
+    /* Error-code tables inside descriptions */
+    .swagger-ui table thead tr td,
+    .swagger-ui table thead tr th {
+      background: #1e293b !important;
+      color: #e2e8f0 !important;
+    }
+
+    .swagger-ui table tbody tr td {
+      background: #0f172a !important;
+      color: #cbd5e1 !important;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Top banner ──────────────────────────────────────────────────────── -->
+  <div id="top-banner">
+    <span class="logo">♟️</span>
+    <div>
+      <h1>Checkmate-Escrow API</h1>
+      <p>Trustless chess wagering on Stellar Soroban</p>
+    </div>
+    <nav class="links" aria-label="Documentation links">
+      <a href="openapi.yaml" target="_blank">openapi.yaml</a>
+      <a href="api-examples.md" target="_blank">Code Examples</a>
+      <a href="https://github.com/checkmate-escrow" target="_blank">GitHub</a>
+      <a href="../README.md" target="_blank">README</a>
+    </nav>
+  </div>
+
+  <!-- ── Swagger UI mount point ───────────────────────────────────────────── -->
+  <div id="swagger-ui"></div>
+
+  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5.17.14/swagger-ui-standalone-preset.js"></script>
+  <script>
+    window.onload = function () {
+      SwaggerUIBundle({
+        url: "openapi.yaml",
+        dom_id: "#swagger-ui",
+
+        // ── Display options ───────────────────────────────────────────────
+        deepLinking: true,
+        defaultModelsExpandDepth: 2,
+        defaultModelExpandDepth: 2,
+        docExpansion: "list",      // collapse all ops by default; click to expand
+        filter: true,              // show the search/filter box
+        showExtensions: true,
+        showCommonExtensions: true,
+        tryItOutEnabled: false,    // disable "Try it out" by default (contract calls need Stellar SDK)
+
+        // ── Layout ───────────────────────────────────────────────────────
+        layout: "StandaloneLayout",
+        presets: [
+          SwaggerUIBundle.presets.apis,
+          SwaggerUIStandalonePreset,
+        ],
+        plugins: [
+          SwaggerUIBundle.plugins.DownloadUrl,
+        ],
+
+        // ── Syntax highlighting ──────────────────────────────────────────
+        syntaxHighlight: {
+          activate: true,
+          theme: "agate",
+        },
+
+        // ── Request interceptor (adds CORS headers for local dev) ────────
+        requestInterceptor: function (req) {
+          // Nothing to mutate for read-only docs — placeholder for SDK integration.
+          return req;
+        },
+      });
+    };
+  </script>
+</body>
+</html>

@@ -40,6 +40,7 @@ REST API (Axum)
 | `EVENT_INDEXER_PORT` | `8080` | API server port |
 | `EVENT_INDEXER_CACHE_SIZE` | `10000` | Maximum cache entries |
 | `EVENT_INDEXER_POLL_INTERVAL` | `5` | Event polling interval in seconds |
+| `REDIS_URL` | unset | Redis DSN for the shared response cache (`redis://…` or `rediss://…`). When unset, a process-local cache with the same TTLs is used |
 
 ## API Endpoints
 
@@ -286,6 +287,120 @@ curl "http://localhost:8080/stats"
 
 **Latency:** < 5ms
 
+**Caching:** 60 seconds (see [Response Caching](#response-caching)).
+
+---
+
+### 7. Player Transaction History
+
+**Endpoint:** `GET /transactions/player/{player_address}`
+
+**Description:** A player's financial transaction history, projected from the
+indexed events. Only events that move funds appear here: deposits, payouts and
+fees. Lifecycle-only events (`match:created`, `match:paused`, …) are excluded.
+
+**Path parameter:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `player_address` | Stellar account address (`G…`). The player is matched on either side of the match |
+
+**Query parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `type` | all | `deposit`, `payout` or `fee` (also accepted as `tx_type`) |
+| `token` | all | Token symbol or contract address |
+| `from_date` | unbounded | RFC 3339 timestamp or `YYYY-MM-DD` (inclusive) |
+| `to_date` | unbounded | RFC 3339 timestamp or `YYYY-MM-DD` (inclusive) |
+| `limit` | `100` | Page size, 1–1000 |
+| `offset` | `0` | Rows to skip |
+| `sort_by` | `timestamp` | `timestamp`, `amount`, `match_id` or `type` |
+| `sort_order` | `desc` | `asc` or `desc` (also accepted as `order`) |
+
+**Example Request:**
+```bash
+curl "http://localhost:8080/transactions/player/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN?type=payout&from_date=2026-01-01&limit=50"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "transactions": [
+      {
+        "match_id": 42,
+        "timestamp": "2026-07-27T12:34:56Z",
+        "type": "payout",
+        "amount": "20000000",
+        "token": "XLM",
+        "event_id": "a1b2c3d4e5f6",
+        "event_type": "match:completed",
+        "ledger_sequence": 1048576
+      }
+    ],
+    "total": 137,
+    "limit": 50,
+    "offset": 0,
+    "has_more": true
+  },
+  "error": null
+}
+```
+
+**Notes:**
+
+- `amount` is a decimal **string** of stroops — amounts exceed the range JSON
+  numbers can represent exactly.
+- `total` is the count matching the filters, ignoring `limit` and `offset`, so a
+  client can render pagination without a second request.
+- Sorting by `amount` is numeric, not lexicographic.
+- An empty history returns `200` with an empty list, not `404`.
+- Reorg-invalidated events are excluded: a rolled-back ledger moved no funds.
+
+**Event → transaction type mapping:**
+
+| Type | Matching event names |
+|------|----------------------|
+| `deposit` | `deposit`, `funded` |
+| `payout` | `completed`, `finalized`, `claim`, `payout`, `resolved` |
+| `fee` | `fee`, `cancelled`, `expired` |
+
+**Latency:** < 50ms
+
+**Caching:** none — responses are per-player and per-filter, so the hit rate
+would be poor while staleness would be user-visible.
+
+---
+
+## Response Caching
+
+High-traffic read endpoints are memoised in a TTL cache. With `REDIS_URL` set the
+cache is **shared across replicas**, so one instance's invalidation is seen by
+all of them; without it, each process keeps its own cache with identical TTLs.
+
+| Endpoint | TTL | Invalidated by |
+|----------|-----|----------------|
+| `GET /matches` (including `?status=pending`) | 10 s | any contract event |
+| `GET /match/{match_id}` | 5 s | any contract event for that match |
+| `GET /stats` | 60 s | any contract event |
+| `GET /events`, `GET /events/{match_id}` | not cached | — |
+| `GET /transactions/player/{player_address}` | not cached | — |
+
+**Invalidation on state change.** The poller drops the cached responses a newly
+ingested event makes stale: the match's own entry, every match list (a state
+change moves the match from one list to another) and the analytics entry (its
+counters are derived from the event table). A state change is therefore visible
+well before the TTL would have expired; the TTL only bounds staleness for matches
+nothing is happening to. A reorg drops all lists and analytics.
+
+**Failure behaviour.** The cache is an optimisation, never a source of truth.
+Every Redis error is logged and treated as a cache miss, and a `404` is never
+cached. A cache outage costs latency, not correctness — and start-up does not
+depend on Redis being reachable: if the connection fails, the service logs a
+warning and falls back to the process-local cache.
+
 ---
 
 ## Event Types
@@ -319,6 +434,40 @@ All endpoints return standardized error responses:
 | 404 | No events found matching criteria |
 | 400 | Invalid query parameters |
 | 500 | Database or RPC error |
+
+### Input Validation
+
+Requests pass through a validation layer **before** any handler runs, so
+malformed input never reaches the database. A rejection is a `400` whose message
+names the offending field and says what was expected:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": "invalid limit: must be between 1 and 1000, got 5000"
+}
+```
+
+| Field | Rule |
+|-------|------|
+| `player_address`, `player`, `address` | 56-character Stellar strkey, upper-case, `G` (account) or `C` (contract) prefix, valid CRC16 checksum |
+| `match_id` (path or query) | Unsigned integer; `0` is valid — match ids start at zero |
+| `status` | `pending`, `active`, `completed`, `cancelled`, `expired` |
+| `limit` | 1–1000 |
+| `offset` | Not negative |
+| `amount`, `stake_amount` | Positive integer stroops; no sign, no decimal point |
+| `game_id` | 1–64 characters of `A–Z`, `a–z`, `0–9`, `-`, `_` |
+| `token` | Symbol (letters, digits, `:`, `-`, `_`) or a checksum-valid contract address |
+| `from_date`, `to_date`, `start_date`, `end_date` | RFC 3339 timestamp or `YYYY-MM-DD`; the range must not be inverted |
+| `type` / `tx_type` | `deposit`, `payout`, `fee` |
+| `sort_by`, `sort_order` | Whitelisted values only |
+
+Checksum verification matters in practice: it is what turns a single mistyped
+character in an address into a clear `400` instead of a query that silently
+matches nothing. Unrecognised query parameters are ignored so a client can add
+one without a coordinated deploy, and an empty value (`?status=`) is treated as
+absent.
 
 ## Performance Characteristics
 

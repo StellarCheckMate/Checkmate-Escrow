@@ -29,6 +29,14 @@ postgres-types = { version = "0.2", features = ["derive", "with-chrono-0_4"] }
 # Proper LRU cache
 indexmap = "2"
 
+# Redis — shared TTL cache for API responses.
+# `connection-manager` gives us a cloneable, self-reconnecting multiplexed
+# connection so handlers never block on a connection pool.
+redis = { version = "0.25", default-features = false, features = [
+    "tokio-comp",
+    "connection-manager",
+] }
+
 [dev-dependencies]
 wiremock = "0.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
