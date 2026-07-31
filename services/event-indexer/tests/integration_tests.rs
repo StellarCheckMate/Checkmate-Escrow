@@ -395,7 +395,21 @@ async fn load_test_n_instance_read_scaling() {
 use axum::body::to_bytes;
 use axum::http::{Request, StatusCode};
 use event_indexer::api::{build_router, ApiResponse};
+use event_indexer::api_cache::ApiCache;
 use tower::ServiceExt;
+
+/// Checksum-valid account addresses. The validation middleware verifies the
+/// strkey CRC, so placeholder strings like `"PLAYER_X"` are rejected with a 400
+/// before they reach a handler.
+const PLAYER_X: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+const PLAYER_Y: &str = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
+const OTHER_PLAYER: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
+/// Response caching is exercised in `api_cache_tests.rs`; the shape tests here
+/// use a disabled cache so every request reaches the database.
+fn no_cache() -> Arc<ApiCache> {
+    Arc::new(ApiCache::disabled())
+}
 
 /// Build a test router backed by a mock in-process database.
 /// Because the PostgreSQL `Database` requires real pool connections, we test
@@ -422,7 +436,7 @@ async fn api_unknown_status_returns_400() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc);
+    let app = build_router(db, cache, rpc, no_cache());
 
     for uri in ["/events?status=bogus", "/matches?status=bogus"] {
         let response = app
@@ -444,7 +458,11 @@ async fn api_unknown_status_returns_400() {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let parsed: ApiResponse<serde_json::Value> = serde_json::from_slice(&body).unwrap();
         assert!(!parsed.success);
-        assert!(parsed.error.as_deref().unwrap_or("").contains("Invalid query parameter"));
+        // The validation middleware now rejects the value before the extractor
+        // runs, so the message names the offending field and the allowed values.
+        let error = parsed.error.as_deref().unwrap_or("");
+        assert!(error.contains("status"), "unhelpful error: {error}");
+        assert!(error.contains("pending"), "error should list valid values: {error}");
     }
 }
 
@@ -463,9 +481,9 @@ async fn api_get_events_by_player_returns_correct_subset() {
 
     // Insert test events.
     for (id, p1, p2, match_id) in [
-        ("test-api-a1", "PLAYER_X", "OTHER_1", 901u64),
-        ("test-api-a2", "OTHER_2", "PLAYER_X", 902u64),
-        ("test-api-b1", "PLAYER_Y", "OPPONENT", 903u64),
+        ("test-api-a1", PLAYER_X, OTHER_PLAYER, 901u64),
+        ("test-api-a2", OTHER_PLAYER, PLAYER_X, 902u64),
+        ("test-api-b1", PLAYER_Y, OTHER_PLAYER, 903u64),
     ] {
         let mut e = make_event(id, match_id, match_id as u32);
         e.player1 = Some(p1.to_string());
@@ -475,12 +493,12 @@ async fn api_get_events_by_player_returns_correct_subset() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db.clone(), cache, rpc);
+    let app = build_router(db.clone(), cache, rpc, no_cache());
 
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/events?player_address=PLAYER_X")
+                .uri(&format!("/events?player_address={PLAYER_X}"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -522,7 +540,7 @@ async fn api_match_info_not_found_returns_404() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc);
+    let app = build_router(db, cache, rpc, no_cache());
 
     let response = app
         .oneshot(
@@ -786,4 +804,311 @@ fn event_index_in_txn_is_preserved() {
     assert_eq!(e1.event_index_in_txn, Some(0));
     assert_eq!(e2.event_index_in_txn, Some(1));
     assert_ne!(e1.event_index_in_txn, e2.event_index_in_txn);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. Analytics API tests (#967)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `GET /analytics/overview` returns 200 with the correct response shape.
+#[tokio::test]
+async fn analytics_overview_returns_200_with_correct_shape() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping analytics_overview: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(
+        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
+    );
+    db.init_schema().await.expect("schema");
+
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
+    let app = build_router(db, cache, rpc);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/analytics/overview")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(parsed["success"], true);
+    let data = &parsed["data"];
+    assert!(data.is_object(), "data must be an object");
+    assert!(data["total_matches"].is_number());
+    assert!(data["total_volume"].is_string());
+    assert!(data["average_stake"].is_string());
+    assert!(data["completed_matches"].is_number());
+    assert!(data["cancelled_matches"].is_number());
+}
+
+/// `GET /analytics/overview` accepts optional time range filters.
+#[tokio::test]
+async fn analytics_overview_accepts_time_range_params() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping analytics_overview_time_range: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(
+        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
+    );
+    db.init_schema().await.expect("schema");
+
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
+    let app = build_router(db, cache, rpc);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/analytics/overview?start_date=2025-01-01T00:00:00Z&end_date=2026-12-31T23:59:59Z")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Should return 200 (or 400 for bad params, not 500)
+    assert!(
+        response.status() == StatusCode::OK || response.status() == StatusCode::BAD_REQUEST,
+        "time range params must not cause a 500"
+    );
+}
+
+/// `GET /analytics/player/:address` returns 200 with the correct response shape.
+#[tokio::test]
+async fn analytics_player_returns_200_with_correct_shape() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping analytics_player: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(
+        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
+    );
+    db.init_schema().await.expect("schema");
+
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
+    let app = build_router(db, cache, rpc);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/analytics/player/GABC1234XYZ")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(parsed["success"], true);
+    let data = &parsed["data"];
+    assert!(data.is_object(), "data must be an object");
+    assert_eq!(data["player_address"], "GABC1234XYZ");
+    assert!(data["total_matches"].is_number());
+    assert!(data["wins"].is_number());
+    assert!(data["losses"].is_number());
+    assert!(data["draws"].is_number());
+    assert!(data["win_rate"].is_number());
+    assert!(data["total_winnings"].is_string());
+    assert!(data["match_history"].is_array());
+    assert!(data["total"].is_number());
+}
+
+/// `GET /analytics/player/:address` accepts pagination params.
+#[tokio::test]
+async fn analytics_player_accepts_pagination_params() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping analytics_player_pagination: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(
+        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
+    );
+    db.init_schema().await.expect("schema");
+
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
+    let app = build_router(db, cache, rpc);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/analytics/player/GABC?limit=10&offset=0")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// `GET /analytics/token/:token_address` returns 200 with the correct response shape.
+#[tokio::test]
+async fn analytics_token_returns_200_with_correct_shape() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping analytics_token: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(
+        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
+    );
+    db.init_schema().await.expect("schema");
+
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
+    let app = build_router(db, cache, rpc);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/analytics/token/USDC_TOKEN_ADDRESS")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(parsed["success"], true);
+    let data = &parsed["data"];
+    assert!(data.is_object(), "data must be an object");
+    assert_eq!(data["token_address"], "USDC_TOKEN_ADDRESS");
+    assert!(data["total_volume"].is_string());
+    assert!(data["match_count"].is_number());
+    assert!(data["average_stake"].is_string());
+    assert!(data["match_history"].is_array());
+    assert!(data["total"].is_number());
+}
+
+/// `GET /analytics/token/:token_address` accepts pagination and time range params.
+#[tokio::test]
+async fn analytics_token_accepts_pagination_and_time_range() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping analytics_token_pagination: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(
+        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
+    );
+    db.init_schema().await.expect("schema");
+
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
+    let app = build_router(db, cache, rpc);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/analytics/token/XLM_ADDRESS?limit=20&offset=0&start_date=2025-01-01T00:00:00Z")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        response.status() == StatusCode::OK || response.status() == StatusCode::BAD_REQUEST,
+        "pagination + time range must not cause a 500"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. Analytics model serialization unit tests (no DB needed)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn analytics_overview_serializes_correctly() {
+    use event_indexer::models::AnalyticsOverview;
+
+    let overview = AnalyticsOverview {
+        total_matches: 42,
+        total_volume: "1000000".to_string(),
+        average_stake: "23809".to_string(),
+        completed_matches: 30,
+        cancelled_matches: 12,
+    };
+
+    let json = serde_json::to_string(&overview).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed["total_matches"], 42);
+    assert_eq!(parsed["total_volume"], "1000000");
+    assert_eq!(parsed["average_stake"], "23809");
+    assert_eq!(parsed["completed_matches"], 30);
+    assert_eq!(parsed["cancelled_matches"], 12);
+}
+
+#[test]
+fn player_analytics_serializes_correctly() {
+    use event_indexer::models::PlayerAnalytics;
+
+    let analytics = PlayerAnalytics {
+        player_address: "GABC".to_string(),
+        total_matches: 10,
+        wins: 7,
+        losses: 2,
+        draws: 1,
+        win_rate: 70.0,
+        total_winnings: "14000".to_string(),
+        match_history: vec![],
+        total: 10,
+    };
+
+    let json = serde_json::to_string(&analytics).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed["player_address"], "GABC");
+    assert_eq!(parsed["wins"], 7);
+    assert_eq!(parsed["win_rate"], 70.0);
+    assert_eq!(parsed["total_winnings"], "14000");
+}
+
+#[test]
+fn token_analytics_serializes_correctly() {
+    use event_indexer::models::TokenAnalytics;
+
+    let analytics = TokenAnalytics {
+        token_address: "XLM".to_string(),
+        total_volume: "500000".to_string(),
+        match_count: 50,
+        average_stake: "10000".to_string(),
+        match_history: vec![],
+        total: 50,
+    };
+
+    let json = serde_json::to_string(&analytics).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed["token_address"], "XLM");
+    assert_eq!(parsed["match_count"], 50);
+    assert_eq!(parsed["total_volume"], "500000");
 }

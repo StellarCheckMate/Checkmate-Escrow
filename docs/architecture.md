@@ -45,6 +45,47 @@ sequenceDiagram
 
 ## Match Lifecycle
 
+### Sequence Diagram: Match Flow (Creation to Payout)
+
+```mermaid
+sequenceDiagram
+    actor Player1
+    actor Player2
+    participant Escrow as Escrow Contract
+    participant OracleSvc as Oracle Service
+    participant OracleContract as Oracle Contract
+    participant Platform as Lichess / Chess.com
+
+    Player1->>Escrow: create_match(player1, player2, stake, token, game_id)
+    Escrow-->>Escrow: state = Pending
+    Player1->>Escrow: deposit(match_id, player1)
+    Player2->>Escrow: deposit(match_id, player2)
+    Escrow-->>Escrow: state = Active (both deposited)
+
+    OracleSvc->>Platform: Poll game result for game_id
+    Platform-->>OracleSvc: Game outcome (winner)
+    OracleSvc->>OracleContract: Record verified result
+    OracleSvc->>Escrow: submit_result(match_id, winner)
+    Escrow-->>Escrow: state = Completed (or PendingResult<br/>if dispute_period > 0)
+    Escrow->>Player1: Payout (winner or draw refund)
+    Escrow->>Player2: Payout (winner or draw refund)
+    Escrow-->>OracleSvc: Emit match/completed event
+
+    alt Cancel before activation
+        Player1->>Escrow: cancel_match(match_id, caller)
+        Escrow-->>Player1: Refund deposit (if any)
+        Escrow-->>Escrow: state = Cancelled
+    else Expire after timeout (still Pending)
+        Note over Escrow: match_timeout ledgers elapse<br/>with match still Pending
+        Player1->>Escrow: expire_match(match_id)
+        Escrow-->>Player1: Refund deposit(s) (if any)
+        Escrow-->>Escrow: state = Cancelled
+    end
+```
+
+- **Oracle Service** is the off-chain component (`oracle-service/`) that polls Lichess/Chess.com, then calls both the on-chain Oracle Contract (audit record) and the Escrow Contract's `submit_result`.
+- The cancel/expire path is only reachable while the match is still `Pending` (before both players have deposited); once `Active`, the match can only resolve via `submit_result` and its downstream payout/dispute flow.
+
 ### State Machine Diagram
 
 ```mermaid

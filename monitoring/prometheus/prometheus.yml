@@ -1,0 +1,41 @@
+# Prometheus scrape configuration for Checkmate-Escrow
+#
+# Include this file (or merge its contents) into your prometheus.yml.
+# See docs/monitoring-setup.md for the full setup guide.
+#
+# Example:
+#   rule_files:
+#     - "checkmate_alerts.yml"
+#   scrape_configs:
+#     - <<: *checkmate_scrape_configs
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+rule_files:
+  - "alerts.yml"
+
+scrape_configs:
+  # Oracle service — exposes /metrics on port 8000
+  - job_name: "checkmate-oracle"
+    static_configs:
+      - targets: ["oracle-service:8000"]
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  # Event indexer instances
+  - job_name: "checkmate-event-indexer"
+    static_configs:
+      - targets:
+          - "event-indexer-1:8080"
+          - "event-indexer-2:8080"
+    metrics_path: /metrics
+    scrape_interval: 15s
+
+  # WebSocket server
+  - job_name: "checkmate-websocket"
+    static_configs:
+      - targets: ["websocket-server:8090"]
+    metrics_path: /metrics
+    scrape_interval: 15s

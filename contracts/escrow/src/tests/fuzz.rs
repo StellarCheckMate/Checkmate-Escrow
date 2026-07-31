@@ -23,7 +23,7 @@ fn prop_create_match_stake_validation(stake: i128) -> TestResult {
         &player2,
         &stake,
         &token,
-        &String::from_str(&env, "fuzz_game_1"),
+        &String::from_str(&env, "c46f48a2"),
         &Platform::Lichess,
     );
 
@@ -56,7 +56,7 @@ fn prop_escrow_balance_equals_two_stakes(stake: i128) -> TestResult {
         &player2,
         &stake,
         &token,
-        &String::from_str(&env, "fuzz_game_2"),
+        &String::from_str(&env, "10f1761a"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -79,7 +79,7 @@ fn prop_no_double_deposit(use_player1: bool) -> bool {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "fuzz_game_3"),
+        &String::from_str(&env, "f56b3b7a"),
         &Platform::Lichess,
     );
 
@@ -115,7 +115,7 @@ fn prop_payout_conserves_tokens(stake: i128, winner_is_player1: bool) -> TestRes
         &player2,
         &stake,
         &token,
-        &String::from_str(&env, "fuzz_game_4"),
+        &String::from_str(&env, "c2a23f18"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -156,7 +156,7 @@ fn prop_draw_refunds_exact_stakes(stake: i128) -> TestResult {
         &player2,
         &stake,
         &token,
-        &String::from_str(&env, "fuzz_game_5"),
+        &String::from_str(&env, "d36ea1fa"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -181,7 +181,7 @@ fn prop_only_oracle_can_submit_result(player1_submits: bool) -> bool {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "fuzz_game_6"),
+        &String::from_str(&env, "1a49d1ef"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -221,14 +221,14 @@ fn prop_only_oracle_can_submit_result(player1_submits: bool) -> bool {
 
 /// Invariant: set_match_timeout rejects values outside [MIN, MAX].
 #[quickcheck]
-fn prop_timeout_bounds_enforced(timeout: u32) -> bool {
-    use crate::{MAX_MATCH_TIMEOUT_LEDGERS, MIN_MATCH_TIMEOUT_LEDGERS};
+fn prop_timeout_bounds_enforced(timeout: u64) -> bool {
+    use crate::{MAX_MATCH_TIMEOUT_SECONDS, MIN_MATCH_TIMEOUT_SECONDS};
 
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_set_match_timeout(&timeout);
-    let valid = timeout >= MIN_MATCH_TIMEOUT_LEDGERS && timeout <= MAX_MATCH_TIMEOUT_LEDGERS;
+    let valid = timeout >= MIN_MATCH_TIMEOUT_SECONDS && timeout <= MAX_MATCH_TIMEOUT_SECONDS;
 
     if valid {
         result.is_ok()
