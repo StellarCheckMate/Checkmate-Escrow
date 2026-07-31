@@ -18,6 +18,7 @@ fn custom_config(treasury: &Address) -> ProtocolConfig {
         match_timeout_seconds: 604_800, // 7 days
         protocol_fee_bps: 100,
         fee_recipient: treasury.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     }
 }
 
@@ -41,6 +42,7 @@ fn test_get_protocol_config_returns_config_set_during_initialize() {
         match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     };
 
     let actual = client.get_protocol_config();
@@ -64,6 +66,7 @@ fn test_get_protocol_config_reflects_update_after_set() {
         match_timeout_seconds: 172_800, // 2 days
         protocol_fee_bps: 200,
         fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     };
 
     client.set_protocol_config(&updated);

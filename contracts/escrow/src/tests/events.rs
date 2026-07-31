@@ -41,7 +41,7 @@ fn test_create_match_emits_event() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_ev2"),
+        &String::from_str(&env, "7773b359"),
         &Platform::Lichess,
     );
 
@@ -75,7 +75,7 @@ fn test_deposit_emits_event_for_partial_funding() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_deposit_partial"),
+        &String::from_str(&env, "23013e94"),
         &Platform::Lichess,
     );
 
@@ -110,7 +110,7 @@ fn test_deposit_emits_event_with_state_when_match_activates() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_deposit_activate"),
+        &String::from_str(&env, "5ebcec73"),
         &Platform::Lichess,
     );
 
@@ -147,7 +147,7 @@ fn test_submit_result_emits_event() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_evt"),
+        &String::from_str(&env, "5f058e93"),
         &Platform::Lichess,
     );
 
@@ -182,7 +182,7 @@ fn test_cancel_match_emits_event() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_cancel"),
+        &String::from_str(&env, "77d28b33"),
         &Platform::Lichess,
     );
 
@@ -214,7 +214,7 @@ fn test_cancel_match_no_deposits_emits_no_token_transfers() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_no_deposit_cancel"),
+        &String::from_str(&env, "039d345a"),
         &Platform::Lichess,
     );
 
@@ -290,7 +290,7 @@ fn test_submit_result_emits_completed_event_with_correct_winner() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "event_test"),
+        &String::from_str(&env, "e982d701"),
         &Platform::Lichess,
     );
 
@@ -330,7 +330,7 @@ fn test_submit_result_event_includes_payout_amount() {
         &player2,
         &stake_amount,
         &token,
-        &String::from_str(&env, "payout_amount_event"),
+        &String::from_str(&env, "87187534"),
         &Platform::Lichess,
     );
 
@@ -367,7 +367,7 @@ fn test_deposit_emits_event_for_player1() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "deposit_p1_event"),
+        &String::from_str(&env, "4edf4769"),
         &Platform::Lichess,
     );
 
@@ -402,7 +402,7 @@ fn test_deposit_emits_event_for_player2_and_includes_final_state() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "deposit_p2_event"),
+        &String::from_str(&env, "8c5d122d"),
         &Platform::Lichess,
     );
 
@@ -507,7 +507,7 @@ fn test_expire_match_emits_event() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_expire_evt"),
+        &String::from_str(&env, "29f0809d"),
         &Platform::Lichess,
     );
 

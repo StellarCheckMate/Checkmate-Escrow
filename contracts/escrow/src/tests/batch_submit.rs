@@ -12,7 +12,7 @@ fn test_submit_result_batch_all_success() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "batch_all_success_a"),
+        &String::from_str(&env, "885b6556"),
         &Platform::Lichess,
     );
     let match_b = client.create_match(
@@ -20,7 +20,7 @@ fn test_submit_result_batch_all_success() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "batch_all_success_b"),
+        &String::from_str(&env, "8372756a"),
         &Platform::Lichess,
     );
 
@@ -59,7 +59,7 @@ fn test_submit_result_batch_partial_failure() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "batch_partial_ok"),
+        &String::from_str(&env, "7e081169"),
         &Platform::Lichess,
     );
     client.deposit(&match_a, &player1);
@@ -72,7 +72,7 @@ fn test_submit_result_batch_partial_failure() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "batch_partial_not_funded"),
+        &String::from_str(&env, "8b4685e8"),
         &Platform::Lichess,
     );
     client.deposit(&match_b, &player1);

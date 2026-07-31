@@ -10,7 +10,7 @@
 //!   cargo test -p escrow --test match_lifecycle_test
 
 use escrow::types::{MatchState, Platform, ProtocolConfig, Winner};
-use escrow::{EscrowContract, EscrowContractClient};
+use escrow::{DEFAULT_MINIMUM_STAKE, EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString,
 };
@@ -41,6 +41,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address) {
         vesting_duration_seconds: 0,
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     (env, contract_id, oracle, player1, player2, token)
@@ -57,7 +58,7 @@ fn full_match_lifecycle_create_deposit_result_completed() {
         &player2,
         &STAKE,
         &token,
-        &SorobanString::from_str(&env, "lifecycle_e2e_game"),
+        &SorobanString::from_str(&env, "caffad17"),
         &Platform::Lichess,
     );
     assert_eq!(client.get_match(&match_id).state, MatchState::Pending);
