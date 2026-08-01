@@ -10,7 +10,7 @@ fn test_create_match_with_zero_stake_rejected() {
         &player2,
         &0,
         &token,
-        &String::from_str(&env, "zero_stake_game"),
+        &String::from_str(&env, "c12c3c42"),
         &Platform::Lichess,
     );
 
@@ -27,7 +27,7 @@ fn test_create_match_with_same_player_rejected() {
         &player1,
         &100,
         &token,
-        &String::from_str(&env, "same_player_game"),
+        &String::from_str(&env, "6bff5692"),
         &Platform::Lichess,
     );
 
@@ -49,7 +49,7 @@ fn test_create_match_with_excessive_stake_rejected() {
         &player2,
         &excessive_stake,
         &token,
-        &String::from_str(&env, "excessive_stake_game"),
+        &String::from_str(&env, "98f83834"),
         &Platform::Lichess,
     );
 
@@ -93,7 +93,7 @@ fn test_deposit_insufficient_balance_rejected() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "insufficient_balance_game"),
+        &String::from_str(&env, "ae5352c2"),
         &Platform::Lichess,
     );
 
@@ -106,11 +106,11 @@ fn test_deposit_insufficient_balance_rejected() {
 
 #[test]
 fn test_deposit_on_completed_match_rejected() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) =
+    let (env, contract_id, _oracle, player1, player2, token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.submit_result(&0, &oracle, &1);
+    client.submit_result(&match_id, &Winner::Player1);
 
     let result = client.try_deposit(&0, &player1);
     assert!(
@@ -129,7 +129,7 @@ fn test_multiple_deposits_from_same_player_rejected() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "duplicate_deposit_game"),
+        &String::from_str(&env, "ff109d4b"),
         &Platform::Lichess,
     );
 

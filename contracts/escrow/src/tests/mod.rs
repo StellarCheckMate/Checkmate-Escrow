@@ -30,6 +30,7 @@ mod snapshots;
 mod tier;
 mod token_allowlist;
 mod ttl;
+mod fee_tiers;
 mod validation;
 
 // ── Base fixture ─────────────────────────────────────────────────────────────
@@ -70,6 +71,7 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     (
@@ -113,7 +115,7 @@ pub fn setup_with_funded_match() -> (
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "funded_fixture_game"),
+        &String::from_str(&env, "aba1d0d0"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -175,3 +177,4 @@ mod cancellation_fee;
 mod stablecoin;
 mod dispute_rollback;
 mod protocol_config;
+mod platform_stats;
