@@ -9,6 +9,7 @@ This document outlines the security considerations, trust assumptions, and risk 
 - [Admin Key Risks](#admin-key-risks)
 - [Re-initialization Protection](#re-initialization-protection)
 - [Pause Mechanism](#pause-mechanism)
+- [Cross-Contract Reentrancy Protection](#cross-contract-reentrancy-protection)
 - [Known Limitations](#known-limitations)
 - [Deployment Security](#deployment-security)
 - [Operational Security](#operational-security)
@@ -181,6 +182,81 @@ Both contracts implement emergency pause functionality for rapid response to sec
 3. **Investigation**: Analyze the incident while contract is paused
 4. **Resolution**: Either unpause after false alarm or migrate to new contract
 5. **Post-mortem**: Update security measures based on lessons learned
+
+## Cross-Contract Reentrancy Protection
+
+### Threat Description
+
+`deposit()` makes a cross-contract call to `token::Client::transfer()` before
+all internal state updates are committed.  If the token contract is malicious
+or implements transfer hooks (analogous to ERC-777 callbacks on EVM), it could
+call back into `deposit()` for the same `match_id` while the escrow contract's
+state still reflects the pre-transfer values.  An attacker could exploit this
+to:
+
+- Deposit once but have funds counted multiple times.
+- Advance a match from `Pending` → `Active` without a legitimate second deposit.
+- Drain escrow funds across repeated re-entrant calls before the deposit flag
+  is set.
+
+Stellar Soroban's current execution model does not permit true mid-instruction
+re-entrancy the way EVM does, but defence-in-depth requires the contract to be
+correct regardless of future VM changes or the introduction of hook-capable
+token standards.
+
+### Protection Mechanism
+
+A per-`match_id` reentrancy guard is implemented using
+`DataKey::DepositInProgress(match_id)` stored in **temporary storage**:
+
+```rust
+// Before the cross-contract token transfer:
+if env.storage().temporary()
+       .get::<DataKey, bool>(&DataKey::DepositInProgress(match_id))
+       .unwrap_or(false)
+{
+    return Err(Error::DepositInProgress);
+}
+env.storage().temporary()
+   .set(&DataKey::DepositInProgress(match_id), &true);
+
+// ... token.transfer() cross-contract call ...
+// ... all state updates (deposit flags, match state, snapshots) ...
+
+// After all state updates are complete:
+env.storage().temporary()
+   .remove(&DataKey::DepositInProgress(match_id));
+```
+
+Key properties:
+
+| Property | Detail |
+|----------|--------|
+| **Scope** | Per `match_id` — guards are independent for different matches |
+| **Storage type** | Temporary — automatically cleared at transaction end even if an unexpected execution path skips the explicit `remove` |
+| **Error code** | `Error::DepositInProgress` (code 46) |
+| **Guard set** | Before `token.transfer()`, after all read-only validation passes |
+| **Guard cleared** | After all persistent state writes and snapshot recording complete |
+| **Error path cleanup** | Every early-return error path explicitly removes the guard before returning |
+
+### Attack Vectors & Protections
+
+| Attack Vector | Protection |
+|---------------|------------|
+| Malicious token callback re-enters `deposit()` for same `match_id` | `DepositInProgress` guard rejects with `Error::DepositInProgress` |
+| Callback targets a different `match_id` | Normal validation (state, player auth, already-funded checks) rejects it independently |
+| Guard not removed on error path | Temporary storage TTL ensures automatic cleanup; explicit removal on all error paths provides defence-in-depth |
+| Flash-loan-funded multi-deposit race | Guard is set before the first token transfer, so the second call for the same player is also blocked |
+
+### Test Coverage
+
+`test_deposit_rejects_cross_contract_reentrancy_via_token_callback` in
+`contracts/escrow/src/tests/security.rs` verifies:
+
+1. When the `DepositInProgress` flag is set (simulating mid-transfer callback
+   state), a concurrent `deposit()` call for the same `match_id` is rejected
+   with `Error::DepositInProgress`.
+2. After the guard is cleared, `deposit()` proceeds normally.
 
 ## Known Limitations
 

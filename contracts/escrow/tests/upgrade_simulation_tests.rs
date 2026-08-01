@@ -27,7 +27,7 @@
 
 use escrow::errors::Error;
 use escrow::types::{FeeTier, MatchState, Platform, ProtocolConfig, Winner};
-use escrow::{CONTRACT_VERSION, UPGRADE_REVIEW_PERIOD_LEDGERS};
+use escrow::{CONTRACT_VERSION, DEFAULT_MINIMUM_STAKE, UPGRADE_REVIEW_PERIOD_LEDGERS};
 use escrow::{EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
@@ -71,6 +71,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     (env, contract_id, oracle, player1, player2, token, admin)
@@ -180,6 +181,7 @@ fn test_protocol_config_preserved_across_migration() {
         cancellation_fee_basis_points: 50,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     };
     client.set_protocol_config(&config);
 
@@ -335,7 +337,7 @@ fn test_create_match_api_compatible_after_migration() {
         &player2,
         &STAKE,
         &token,
-        &SorobanString::from_str(&env, "api_compat_post_migrate"),
+        &SorobanString::from_str(&env, "c57e2890"),
         &Platform::Lichess,
     );
     assert!(match_id > 0 || match_id == 0); // always true; checks compile-time type compat

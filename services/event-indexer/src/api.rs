@@ -23,9 +23,9 @@
 use axum::{
     async_trait,
     extract::{rejection::QueryRejection, FromRequestParts, Path, Query, Request, State},
-    http::{request::Parts, StatusCode},
+    http::{header, request::Parts, StatusCode},
     middleware::Next,
-    response::Response,
+    response::{Html, IntoResponse, Response},
     routing::get,
     Json, Router,
 };
@@ -202,6 +202,8 @@ pub fn build_router(
     };
     Router::new()
         .route("/health", get(health_check))
+        .route("/api/docs", get(api_docs_ui))
+        .route("/api/openapi.yaml", get(api_openapi_yaml))
         .route("/events", get(get_events))
         .route("/events/:match_id", get(get_match_events))
         .route("/matches", get(get_matches))
@@ -246,6 +248,28 @@ pub async fn start_server(
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
+
+/// `GET /api/docs` — serves the Swagger UI HTML page.
+///
+/// The HTML page loads `swagger-ui-dist` from unpkg CDN and points it at
+/// `/api/openapi.yaml` so the interactive docs always reflect the canonical
+/// schema bundled with the service binary.
+async fn api_docs_ui() -> Html<&'static str> {
+    Html(include_str!("../../../../docs/swagger-ui.html"))
+}
+
+/// `GET /api/openapi.yaml` — serves the raw OpenAPI 3.0 schema.
+///
+/// Swagger UI (and any other tooling) fetches this file to render the
+/// interactive documentation. Clients can also download it directly for
+/// code-generation or schema validation.
+async fn api_openapi_yaml() -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/yaml")],
+        include_str!("../../../../docs/openapi.yaml"),
+    )
+        .into_response()
+}
 
 /// `GET /health` – health check for load balancers and monitoring tools.
 ///

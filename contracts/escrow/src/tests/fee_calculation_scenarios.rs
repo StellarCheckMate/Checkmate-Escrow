@@ -10,6 +10,11 @@ fn test_cancellation_fee_calculation_correct() {
         cancellation_fee_basis_points: 500,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     let match_id = client.create_match(
@@ -17,14 +22,13 @@ fn test_cancellation_fee_calculation_correct() {
         &player2,
         &1000,
         &token,
-        &String::from_str(&env, "fee_calc_game"),
+        &String::from_str(&env, "c178ad12"),
         &Platform::Lichess,
     );
 
     client.deposit(&match_id, &player1);
 
-    let result = client.cancel_match(&match_id);
-    assert!(result.is_ok(), "cancellation must succeed with valid fee config");
+    client.cancel_match(&match_id, &player1);
 }
 
 #[test]
@@ -37,6 +41,11 @@ fn test_zero_cancellation_fee_accepted() {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     let match_id = client.create_match(
@@ -44,14 +53,12 @@ fn test_zero_cancellation_fee_accepted() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "zero_fee_game"),
+        &String::from_str(&env, "522b5101"),
         &Platform::Lichess,
     );
 
     client.deposit(&match_id, &player1);
-    let result = client.cancel_match(&match_id);
-
-    assert!(result.is_ok(), "cancellation with zero fee must be allowed");
+    client.cancel_match(&match_id, &player1);
 }
 
 #[test]
@@ -64,6 +71,11 @@ fn test_high_cancellation_fee_allowed() {
         cancellation_fee_basis_points: 10000,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     let match_id = client.create_match(
@@ -71,17 +83,12 @@ fn test_high_cancellation_fee_allowed() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "high_fee_game"),
+        &String::from_str(&env, "aad6692e"),
         &Platform::Lichess,
     );
 
     client.deposit(&match_id, &player1);
-    let result = client.cancel_match(&match_id);
-
-    assert!(
-        result.is_ok(),
-        "cancellation with high fee (100%) must be allowed"
-    );
+    client.cancel_match(&match_id, &player1);
 }
 
 #[test]
@@ -95,6 +102,11 @@ fn test_fee_applied_to_deposited_amount() {
         cancellation_fee_basis_points: fee_basis_points,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     let stake = 1000i128;
@@ -103,12 +115,12 @@ fn test_fee_applied_to_deposited_amount() {
         &player2,
         &stake,
         &token,
-        &String::from_str(&env, "fee_amount_game"),
+        &String::from_str(&env, "4abbe896"),
         &Platform::Lichess,
     );
 
     client.deposit(&match_id, &player1);
-    client.cancel_match(&match_id);
+    client.cancel_match(&match_id, &player1);
 
     let escrow_balance = client.get_escrow_balance(&match_id);
     assert_eq!(escrow_balance, 0, "escrow must be cleared after cancellation");
@@ -130,7 +142,7 @@ fn test_token_swap_fee_considerations() {
         &player2,
         &100,
         &token2_addr,
-        &String::from_str(&env, "token_swap_game"),
+        &String::from_str(&env, "fcd1f28a"),
         &Platform::Lichess,
     );
 
@@ -154,6 +166,11 @@ fn test_tier_based_fee_adjustment() {
         cancellation_fee_basis_points: 500,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     let bronze_match = client.create_match(
@@ -161,15 +178,10 @@ fn test_tier_based_fee_adjustment() {
         &player2,
         &50,
         &token,
-        &String::from_str(&env, "bronze_fee_game"),
+        &String::from_str(&env, "db4b64c3"),
         &Platform::Lichess,
     );
 
     client.deposit(&bronze_match, &player1);
-    let result = client.cancel_match(&bronze_match);
-
-    assert!(
-        result.is_ok(),
-        "fee calculation must handle bronze tier stakes"
-    );
+    client.cancel_match(&bronze_match, &player1);
 }

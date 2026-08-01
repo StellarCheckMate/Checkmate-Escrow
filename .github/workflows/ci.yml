@@ -170,3 +170,20 @@ jobs:
         with:
           name: benchmark-results
           path: reports/performance/benchmark-results.json
+
+  validate-openapi:
+    name: Validate OpenAPI Schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Install @redocly/cli
+        run: npm install -g @redocly/cli@1.25.14
+
+      - name: Validate OpenAPI schema
+        run: redocly lint docs/openapi.yaml --format=stylish

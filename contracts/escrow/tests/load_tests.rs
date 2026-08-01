@@ -31,7 +31,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use escrow::types::{Platform, ProtocolConfig, Winner};
-use escrow::{EscrowContract, EscrowContractClient};
+use escrow::{DEFAULT_MINIMUM_STAKE, EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::Address as _,
     token::StellarAssetClient,
@@ -110,6 +110,7 @@ impl LoadHarness {
             vesting_duration_seconds: 0,
             cancellation_fee_basis_points: 0,
             treasury: admin.clone(),
+            minimum_stake: DEFAULT_MINIMUM_STAKE,
         });
 
         Self { env, contract_id, token }
