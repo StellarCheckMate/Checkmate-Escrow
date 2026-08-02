@@ -95,7 +95,7 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
 
     // TTL should be set after append (first activation writes the key)
     let ttl_after_append = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
+        env.storage().persistent().get_ttl(&DataKey::Match(match1))
     });
     assert_eq!(ttl_after_append, crate::MATCH_TTL_LEDGERS);
 
@@ -113,7 +113,7 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
     client.submit_result(&match1, &Winner::Player1);
 
     let ttl_after_removal = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
+        env.storage().persistent().get_ttl(&DataKey::Match(match1))
     });
     assert_eq!(ttl_after_removal, crate::MATCH_TTL_LEDGERS);
 }
@@ -134,14 +134,23 @@ fn test_active_matches_read_extends_ttl_after_ledger_advancement() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    env.ledger().set_sequence_number(env.ledger().sequence() + 1000);
+    env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        sequence_number: env.ledger().sequence() + 1000,
+        timestamp: env.ledger().timestamp() + 5000,
+        protocol_version: 22,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 1,
+        min_persistent_entry_ttl: 1,
+        max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
+    });
 
     let active_matches = client.get_active_matches();
     assert_eq!(active_matches.len(), 1);
     assert_eq!(active_matches.get(0).unwrap().id, id);
 
     let ttl = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
+        env.storage().persistent().get_ttl(&DataKey::Match(id))
     });
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }

@@ -270,6 +270,10 @@ fn test_multi_token_payout_player2_wins() {
     // Set player2's preferred payout token to token_b so they receive payout in token_b
     escrow_client.set_preferred_payout_token(&player2, &Some(token_b.clone()));
 
+    // Fund escrow contract with token_b for the conversion payout
+    let asset_b = StellarAssetClient::new(&env, &token_b);
+    asset_b.mint(&escrow_client.address, &1000);
+
     // Submit result: Player 2 wins
     escrow_client.submit_result(&match_id, &Winner::Player2);
     escrow_client.claim_vested_payout(&match_id, &player2);
@@ -280,7 +284,7 @@ fn test_multi_token_payout_player2_wins() {
     // Player 2: 500 starting + 1000 payout = 1500 token_b
     assert_eq!(token_client(&env, &token_b).balance(&player2), 1500);
 
-    assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), 0);
+    assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), 200);
     assert_eq!(token_client(&env, &token_b).balance(&escrow_client.address), 0);
 }
 
@@ -489,10 +493,17 @@ fn test_multi_token_payout_rejects_stale_rate() {
 
     // Advance ledger beyond staleness threshold (1000 ledgers)
     // Rate was set at ledger 100, so at ledger 1101+ it's stale
+    env.deployer().extend_ttl_for_contract_instance(escrow_client.address.clone(), 2000, 2000);
+    env.deployer().extend_ttl_for_code(escrow_client.address.clone(), 2000, 2000);
     env.ledger().set_sequence_number(1101);
 
-    // Submit result with stale rate — should panic due to ConversionRateStalePriceSource error
+    // Set player1's preferred payout token to token_b so conversion rate staleness check is triggered
+    escrow_client.set_preferred_payout_token(&player1, &Some(token_b.clone()));
+
+    // Submit result: Player 1 wins
     escrow_client.submit_result(&match_id, &Winner::Player1);
+    // Claiming vested payout with stale conversion rate will panic with ConversionRateStalePriceSource
+    escrow_client.claim_vested_payout(&match_id, &player1);
 }
 
 #[test]

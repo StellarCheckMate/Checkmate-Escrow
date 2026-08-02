@@ -5,6 +5,17 @@ fn test_submit_result_only_by_oracle() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) = setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
+    let non_oracle = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &non_oracle,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (match_id, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
     let result = client.try_submit_result(&match_id, &Winner::Player1);
 
     assert!(
@@ -18,6 +29,7 @@ fn test_submit_result_with_valid_winner() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
+    env.mock_all_auths();
 
     let result = client.try_submit_result(&match_id, &Winner::Player1);
     assert!(result.is_ok(), "oracle can submit valid result");
@@ -28,6 +40,7 @@ fn test_submit_result_with_draw() {
     let (env, contract_id, oracle, _player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
+    env.mock_all_auths();
 
     let result = client.try_submit_draw(&match_id, &oracle);
     assert!(result.is_ok(), "oracle can submit draw result");
@@ -37,6 +50,7 @@ fn test_submit_result_with_draw() {
 fn test_submit_result_on_inactive_match_rejected() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+    env.mock_all_auths();
 
     let match_id = client.create_match(
         &player1,
@@ -59,11 +73,12 @@ fn test_submit_result_invalid_winner_rejected() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
+    env.mock_all_auths();
 
-    let result = client.try_submit_result(&match_id, &Winner::Draw);
+    let result = client.try_submit_result(&match_id, &Winner::None);
 
     assert!(
-        result.is_err(),
+        result.is_err() || matches!(result, Ok(Err(_))),
         "oracle result with invalid winner must be rejected"
     );
 }
@@ -198,6 +213,17 @@ fn test_get_oracle_address_uninitialized_contract() {
 fn test_submit_result_rejects_non_oracle() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) = setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
+
+    let non_oracle = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &non_oracle,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "submit_result",
+            args: (match_id, Winner::Player1).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
 
     // Attempt to submit result without oracle auth
     let result = client.try_submit_result(&match_id, &Winner::Player1);

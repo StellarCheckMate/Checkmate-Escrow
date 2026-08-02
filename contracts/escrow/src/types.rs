@@ -6,6 +6,7 @@ pub enum MatchState {
     Pending,       // created, awaiting deposits
     Active,        // both players deposited, game in progress
     PendingResult, // oracle submitted result, awaiting dispute window or finalization
+    Disputed,      // dispute actively raised
     Completed,     // payout executed
     Cancelled,     // cancelled before activation
     Paused,        // match paused by player
@@ -199,6 +200,10 @@ pub enum DataKey {
     PlayerPreferredToken(Address),
     /// Platform-wide aggregated statistics (total matches, volume, payouts).
     Stats,
+    DepositInProgress(u64),
+    TempOracleRotation,
+    PendingOracleRotation,
+    DisputeDeadline(u64),
 }
 
 /// The lifecycle event that triggered a balance snapshot.

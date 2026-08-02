@@ -252,7 +252,7 @@ fn prop_completed_match_never_transitions(op: u8) -> TestResult {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "state_invariant_game"),
+        &String::from_str(&env, "stinvg01"),
         &Platform::Lichess,
     );
 
@@ -278,7 +278,7 @@ fn prop_completed_match_never_transitions(op: u8) -> TestResult {
             // Try to cancel (should fail: invalid state)
             client.try_cancel_match(&match_id, &player1)
         }
-        _ => TestResult::discard(),
+        _ => unreachable!(),
     };
 
     TestResult::from_bool(result.is_err())
@@ -292,7 +292,7 @@ fn prop_cancelled_match_never_pays_out(game_id_variant: u8) -> TestResult {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Create match and move to Cancelled via early timeout
-    let game_id = format!("cancel_no_payout_{}", game_id_variant);
+    let game_id = format!("cnp{:05}", game_id_variant);
     let match_id = client.create_match(
         &player1,
         &player2,
@@ -328,7 +328,7 @@ fn prop_active_match_can_complete_or_pause(transition: u8) -> TestResult {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "active_transition_test"),
+        &String::from_str(&env, "actmch01"),
         &Platform::Lichess,
     );
 
@@ -349,7 +349,7 @@ fn prop_active_match_can_complete_or_pause(transition: u8) -> TestResult {
             // Pause the match (should succeed, moving to Paused)
             client.try_pause_match(&match_id, &player1)
         }
-        _ => TestResult::discard(),
+        _ => unreachable!(),
     };
 
     TestResult::from_bool(result.is_ok())
@@ -367,7 +367,7 @@ fn prop_pending_match_limited_transitions() -> bool {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "pending_transitions"),
+        &String::from_str(&env, "pndtrn01"),
         &Platform::Lichess,
     );
 

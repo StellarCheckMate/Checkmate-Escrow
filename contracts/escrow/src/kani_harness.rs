@@ -109,7 +109,7 @@ mod kani_verification {
         let escrow_after = 0;
 
         assert!(
-            InvariantValidator::check_no_fund_loss(&context, payout_amount, contract_balance_after),
+            InvariantValidator::check_no_fund_loss(&context, escrow_after, contract_balance_after),
             "VIOLATION: Fund loss detected"
         );
 

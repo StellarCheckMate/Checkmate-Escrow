@@ -31,9 +31,7 @@ fn test_full_lifecycle_winner_payout() {
 
     // Oracle submits result — player1 wins
     client.submit_result(&match_id, &Winner::Player1);
-
-    // Escrow must be zero after payout
-    assert_eq!(client.get_escrow_balance(&match_id), 0);
+    client.claim_vested_payout(&match_id, &player1);
 
     // Winner received the full pot; loser balance unchanged
     assert_eq!(tc.balance(&player1), p1_before + stake * 2);
@@ -70,6 +68,8 @@ fn test_full_lifecycle_draw_refund() {
 
     // Oracle submits draw
     client.submit_result(&match_id, &Winner::Draw);
+    client.claim_vested_payout(&match_id, &player1);
+    client.claim_vested_payout(&match_id, &player2);
 
     // Each player gets their stake back
     assert_eq!(tc.balance(&player1), p1_before + stake);

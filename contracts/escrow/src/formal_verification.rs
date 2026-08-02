@@ -187,6 +187,7 @@ impl FormalVerificationContext {
             MatchState::Pending => "Pending",
             MatchState::Active => "Active",
             MatchState::PendingResult => "PendingResult",
+            MatchState::Disputed => "Disputed",
             MatchState::Completed => "Completed",
             MatchState::Cancelled => "Cancelled",
             MatchState::Paused => "Paused",
@@ -198,6 +199,7 @@ impl FormalVerificationContext {
             MatchState::Pending => "Pending",
             MatchState::Active => "Active",
             MatchState::PendingResult => "PendingResult",
+            MatchState::Disputed => "Disputed",
             MatchState::Completed => "Completed",
             MatchState::Cancelled => "Cancelled",
             MatchState::Paused => "Paused",
@@ -245,6 +247,9 @@ impl InvariantValidator {
 
     /// INV-3: No Unreachable-But-Fundable States
     pub fn check_no_unreachable_states(context: &FormalVerificationContext) -> bool {
+        if context.current_state == MatchState::Active && !(context.player1_deposited && context.player2_deposited) {
+            return false;
+        }
         let escrow_balance = if context.player1_deposited { context.stake_amount } else { 0 }
             + if context.player2_deposited { context.stake_amount } else { 0 };
 
@@ -252,7 +257,7 @@ impl InvariantValidator {
             // Must be in a state with valid onward transition
             matches!(
                 context.current_state,
-                MatchState::Active | MatchState::PendingResult | MatchState::Paused
+                MatchState::Pending | MatchState::Active | MatchState::PendingResult | MatchState::Disputed | MatchState::Paused
             )
         } else {
             true
@@ -274,6 +279,9 @@ impl InvariantValidator {
             (Active, Paused) => true,
             (Paused, Active) => true,
             (PendingResult, Completed) => true,
+            (PendingResult, Disputed) => true,
+            (Disputed, Completed) => true,
+            (Disputed, Cancelled) => true,
             (Completed, Completed) => true,
             // Self-transitions
             (Cancelled, Cancelled) => true,
@@ -536,6 +544,7 @@ impl StateSpaceExplorer {
             MatchState::Pending,
             MatchState::Active,
             MatchState::PendingResult,
+            MatchState::Disputed,
             MatchState::Completed,
             MatchState::Cancelled,
             MatchState::Paused,
@@ -546,6 +555,7 @@ impl StateSpaceExplorer {
                 MatchState::Pending => "Pending",
                 MatchState::Active => "Active",
                 MatchState::PendingResult => "PendingResult",
+                MatchState::Disputed => "Disputed",
                 MatchState::Completed => "Completed",
                 MatchState::Cancelled => "Cancelled",
                 MatchState::Paused => "Paused",
@@ -559,6 +569,7 @@ impl StateSpaceExplorer {
                     MatchState::Pending => "Pending",
                     MatchState::Active => "Active",
                     MatchState::PendingResult => "PendingResult",
+                    MatchState::Disputed => "Disputed",
                     MatchState::Completed => "Completed",
                     MatchState::Cancelled => "Cancelled",
                     MatchState::Paused => "Paused",

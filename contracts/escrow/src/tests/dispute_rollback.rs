@@ -105,7 +105,7 @@ fn test_rollback_within_window_refunds_both_players() {
     let token_client = TokenClient::new(&env, &token);
 
     env.ledger().set_timestamp(10_000);
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_within");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbwith01");
 
     assert_eq!(token_client.balance(&player1), 900);
     assert_eq!(token_client.balance(&player2), 900);
@@ -150,7 +150,7 @@ fn test_rollback_at_exact_window_boundary_succeeds() {
     let token_client = TokenClient::new(&env, &token);
 
     env.ledger().set_timestamp(0);
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_boundary");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbbond01");
 
     // Advance exactly the window length — must still be allowed.
     advance_timestamp(&env, ROLLBACK_WINDOW_SECONDS);
@@ -178,7 +178,7 @@ fn test_rollback_by_either_player_succeeds() {
     let (env, contract_id, _oracle, p1a, p2a, token_a, _admin) = setup();
     let client_a = EscrowContractClient::new(&env, &contract_id);
     env.ledger().set_timestamp(100);
-    let match_a = create_active_match(&client_a, &env, &p1a, &p2a, &token_a, "rb_p1_path");
+    let match_a = create_active_match(&client_a, &env, &p1a, &p2a, &token_a, "rbp1path");
     client_a.dispute_and_rollback_match(
         &match_a,
         &p1a,
@@ -192,7 +192,7 @@ fn test_rollback_by_either_player_succeeds() {
     let (env, contract_id, _oracle, p1b, p2b, token_b, _admin) = setup();
     let client_b = EscrowContractClient::new(&env, &contract_id);
     env.ledger().set_timestamp(100);
-    let match_b = create_active_match(&client_b, &env, &p1b, &p2b, &token_b, "rb_p2_path");
+    let match_b = create_active_match(&client_b, &env, &p1b, &p2b, &token_b, "rbp2path");
     client_b.dispute_and_rollback_match(
         &match_b,
         &p2b,
@@ -212,8 +212,8 @@ fn test_rollback_after_window_returns_rollback_window_expired() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
-    env.ledger().set_timestamp(10_000);
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_after");
+    env.ledger().set_timestamp(0);
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbafter1");
 
     // Advance past the 24h window.
     advance_timestamp(&env, ROLLBACK_WINDOW_SECONDS + 1);
@@ -225,7 +225,7 @@ fn test_rollback_after_window_returns_rollback_window_expired() {
     );
     assert_eq!(
         result,
-        Err(Ok(Error::VotingPeriodElapsed)),
+        Err(Ok(Error::RollbackWindowExpired)),
         "rollback past the window must be rejected with RollbackWindowExpired"
     );
 
@@ -251,7 +251,7 @@ fn test_rollback_24h1s_after_heartbeat_is_rejected() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.ledger().set_timestamp(0);
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_well_past");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbwellp1");
 
     // Advance 24h + 1s, no heartbeat refresh in between.
     advance_timestamp(&env, ROLLBACK_WINDOW_SECONDS + 1);
@@ -261,7 +261,7 @@ fn test_rollback_24h1s_after_heartbeat_is_rejected() {
         &player2,
         &String::from_str(&env, "078c3210"),
     );
-    assert_eq!(result, Err(Ok(Error::VotingPeriodElapsed)));
+    assert_eq!(result, Err(Ok(Error::RollbackWindowExpired)));
 }
 
 // ── Authorization ────────────────────────────────────────────────────────────
@@ -271,7 +271,7 @@ fn test_rollback_rejects_non_player_address() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_unauth");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbunau01");
 
     let stranger = Address::generate(&env);
     let result = client.try_dispute_and_rollback_match(
@@ -321,7 +321,7 @@ fn test_rollback_rejects_completed_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_completed");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbcomp01");
     client.submit_result(&id, &Winner::Player1);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 
@@ -342,7 +342,7 @@ fn test_rollback_rejects_paused_match() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_paused");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbpaus01");
     client.pause_match(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Paused);
 
@@ -366,7 +366,7 @@ fn test_rollback_rejects_already_cancelled_match() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.ledger().set_timestamp(100);
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_replay_guard");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbrepl01");
     client.dispute_and_rollback_match(
         &id,
         &player1,
@@ -393,7 +393,7 @@ fn test_rollback_rejects_empty_reason() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_empty_reason");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbempt01");
 
     let result = client.try_dispute_and_rollback_match(
         &id,
@@ -413,7 +413,7 @@ fn test_rollback_rejects_oversize_reason() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_big_reason");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbrsn001");
 
     // Build a 257-byte reason — one over the 256-byte cap.
     let oversize = "a".repeat(257);
@@ -438,7 +438,7 @@ fn test_rollback_emits_match_rollback_event() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.ledger().set_timestamp(50_000);
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_event");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbevent1");
 
     let reason = String::from_str(&env, "64d7cfda");
     client.dispute_and_rollback_match(&id, &player1, &reason);
@@ -473,7 +473,7 @@ fn test_rollback_event_not_emitted_when_window_expired() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "rb_no_event");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "rbnoev01");
     advance_timestamp(&env, ROLLBACK_WINDOW_SECONDS + 10);
 
     let _ = client.try_dispute_and_rollback_match(
@@ -587,7 +587,7 @@ fn test_rollback_multi_token_match_refunds_each_player_in_their_token() {
     let oracle_rate = 50_000_000; // 1 token_a = 5 token_b at 1e7 scale
     oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
 
-    let stake_amount = 100_0000000; // 100 token_a
+    let stake_amount = 100; // 100 token_a
     let rate = 50_000_000; // 5.0 multiplier
 
     let match_id = escrow_client.create_match_with_conversion(
@@ -620,12 +620,15 @@ fn test_rollback_multi_token_match_refunds_each_player_in_their_token() {
     // refund branch has the funds available to transfer back to player2.
     // In production this budget would arrive through the oracle's
     // on-chain `swap`, but for a deterministic unit test we mint directly.
-    StellarAssetClient::new(&env, &token_b).mint(&escrow_client.address, &500_0000000);
+    StellarAssetClient::new(&env, &token_b).mint(&escrow_client.address, &500);
+
+    let player1_a_before = token_client(&env, &token_a).balance(&player1);
+    let player2_b_before = token_client(&env, &token_b).balance(&player2);
 
     escrow_client.dispute_and_rollback_match(
         &match_id,
         &player1,
-        &String::from_str(&env, "5dfd0223"),
+        &String::from_str(&env, "3b7b3b3b"),
     );
 
     let m_after = escrow_client.get_match(&match_id);
@@ -638,21 +641,21 @@ fn test_rollback_multi_token_match_refunds_each_player_in_their_token() {
     // Player1 refunded in token_a (m.token path): 100 token_a back.
     assert_eq!(
         token_client(&env, &token_a).balance(&player1),
-        1000_0000000,
-        "player1 must be refunded their full token_a stake on multi-token rollback"
+        player1_a_before + stake_amount,
+        "player1 must receive their exact token_a stake back on multi-token rollback"
     );
     // Player2 refunded in token_b (m.token_b path): 500 token_b. amount_b =
     // stake * conversion_rate / 10_000_000 = 100 * 5 = 500.
     assert_eq!(
         token_client(&env, &token_b).balance(&player2),
-        1000_0000000,
-        "player2 must be refunded the converted full token_b stake on multi-token rollback"
+        player2_b_before + 500,
+        "player2 must receive their converted token_b stake back on multi-token rollback"
     );
     // Escrow balances: token_a drained by the player1 refund (200 - 100 = 100);
     // token_b drained by the player2 refund (500 - 500 = 0).
     assert_eq!(
         token_client(&env, &token_a).balance(&escrow_client.address),
-        100_0000000,
+        100,
         "escrow token_a balance must drop by exactly one stake after multi-token rollback"
     );
     assert_eq!(
@@ -685,7 +688,7 @@ fn test_rollback_multi_token_emits_match_rollback_event() {
     let match_id = escrow_client.create_match_with_conversion(
         &player1,
         &player2,
-        &100_0000000,
+        &100,
         &token_a,
         &token_b,
         &50_000_000,
@@ -695,7 +698,7 @@ fn test_rollback_multi_token_emits_match_rollback_event() {
     escrow_client.deposit(&match_id, &player1);
     escrow_client.deposit(&match_id, &player2);
 
-    StellarAssetClient::new(&env, &token_b).mint(&escrow_client.address, &500_0000000);
+    StellarAssetClient::new(&env, &token_b).mint(&escrow_client.address, &500);
 
     let reason = String::from_str(&env, "a09e238d");
     env.ledger().set_timestamp(0);
@@ -798,7 +801,7 @@ fn test_heartbeat_match_rejects_non_player() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.ledger().set_timestamp(123_456);
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "hb_unauth");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "hbunau01");
     let before = client.get_match(&id).last_heartbeat;
 
     let stranger = Address::generate(&env);
@@ -839,7 +842,7 @@ fn test_heartbeat_match_rejects_non_active_states() {
     );
 
     // Paused state — heartbeat rejected (resume_match is the right tool).
-    let paused_id = create_active_match(&client, &env, &player1, &player2, &token, "hb_paused");
+    let paused_id = create_active_match(&client, &env, &player1, &player2, &token, "hbpaus01");
     client.pause_match(&paused_id, &player1);
     let r = client.try_heartbeat_match(&paused_id, &player1);
     assert_eq!(
@@ -849,7 +852,7 @@ fn test_heartbeat_match_rejects_non_active_states() {
     );
 
     // Completed state — heartbeat rejected.
-    let done_id = create_active_match(&client, &env, &player1, &player2, &token, "hb_completed");
+    let done_id = create_active_match(&client, &env, &player1, &player2, &token, "hbcomp01");
     client.submit_result(&done_id, &Winner::Player1);
     let r = client.try_heartbeat_match(&done_id, &player1);
     assert_eq!(
@@ -859,7 +862,7 @@ fn test_heartbeat_match_rejects_non_active_states() {
     );
 
     // Cancelled state — heartbeat rejected.
-    let cancel_id = create_active_match(&client, &env, &player1, &player2, &token, "hb_cancelled");
+    let cancel_id = create_active_match(&client, &env, &player1, &player2, &token, "hbcanc01");
     client.dispute_and_rollback_match(
         &cancel_id,
         &player1,
@@ -879,7 +882,7 @@ fn test_heartbeat_match_emits_event_with_match_id_player_and_timestamp() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.ledger().set_timestamp(42_000);
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "hb_event");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "hbevent1");
 
     env.ledger().set_timestamp(99_999);
     client.heartbeat_match(&id, &player2);
@@ -916,7 +919,7 @@ fn test_heartbeat_match_keeps_rollback_window_alive_past_24h() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.ledger().set_timestamp(0);
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "hb_keep_alive");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "hbkeep01");
 
     // Advance to just inside the window, heartbeat, then advance past the
     // original 24h bound — the post-heartbeat window is the new bound,
@@ -926,7 +929,7 @@ fn test_heartbeat_match_keeps_rollback_window_alive_past_24h() {
 
     // Past the original 24h mark where the original deposit heartbeat
     // would have been stale — but the heartbeat refreshed it.
-    adv_to(&env, ROLLBACK_WINDOW_SECONDS + 60);
+    env.ledger().set_timestamp(ROLLBACK_WINDOW_SECONDS + 60);
 
     client.dispute_and_rollback_match(
         &id,
@@ -950,7 +953,7 @@ fn test_heartbeat_match_does_not_move_escrow_balance() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.ledger().set_timestamp(0);
-    let id = create_active_match(&client, &env, &player1, &player2, &token, "hb_no_xfer");
+    let id = create_active_match(&client, &env, &player1, &player2, &token, "hbnoxf01");
     let escrow_before = client.get_escrow_balance(&id);
     assert_eq!(
         escrow_before, 200,

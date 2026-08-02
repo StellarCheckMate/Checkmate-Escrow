@@ -152,6 +152,7 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
 #[test]
 fn test_active_pagination_handles_empty_and_partial_pages() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    env.budget().reset_unlimited();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Mint extra tokens so players can fund all 25 matches (25 × 100 = 2500 each)
@@ -167,7 +168,7 @@ fn test_active_pagination_handles_empty_and_partial_pages() {
             &player2,
             &100,
             &token,
-            &String::from_str(&env, &format!("game_{}", i)),
+            &String::from_str(&env, &format!("gm{:06}", i)),
             &Platform::Lichess,
         );
         match_ids.push(match_id);

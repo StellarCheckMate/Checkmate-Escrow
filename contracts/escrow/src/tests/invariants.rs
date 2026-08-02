@@ -158,7 +158,7 @@ fn test_balance_conservation_after_cancel_with_both_deposits() {
 fn test_escrow_balance_tracks_deposits_exactly() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    let stake = 250i128;
+    let stake = 100i128;
 
     let match_id = client.create_match(
         &player1,

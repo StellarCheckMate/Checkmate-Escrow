@@ -14,7 +14,7 @@ fn test_player_match_pagination_handles_empty_and_partial_pages() {
             &player2,
             &100,
             &token,
-            &String::from_str(&env, &format!("game_{}", i)),
+            &String::from_str(&env, &format!("gm{:06}", i)),
             &Platform::Lichess,
         );
         match_ids.push(match_id);
@@ -70,7 +70,7 @@ fn test_player_match_pagination_zero_limit_and_offset_beyond_end() {
             &player2,
             &100,
             &token,
-            &String::from_str(&env, &format!("game_{}", i)),
+            &String::from_str(&env, &format!("gt{:06}", i)),
             &Platform::Lichess,
         );
         match_ids.push(match_id);
@@ -289,7 +289,7 @@ fn test_get_pending_matches_pagination() {
             &player2,
             &100,
             &token,
-            &String::from_str(&env, &format!("pending_game_{}", i)),
+            &String::from_str(&env, &format!("pd{:06}", i)),
             &Platform::Lichess,
         );
         pending_match_ids.push(match_id);
@@ -372,7 +372,7 @@ fn test_get_match_history_pagination() {
             &player2,
             &100,
             &token,
-            &String::from_str(&env, &format!("history_page_{}", i)),
+            &String::from_str(&env, &format!("hs{:06}", i)),
             &Platform::Lichess,
         );
         client.cancel_match(&id, &player1);

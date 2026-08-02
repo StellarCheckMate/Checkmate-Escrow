@@ -88,7 +88,7 @@ fn test_balance_snapshot_records_correct_amounts() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let stake = 150i128;
+    let stake = 100i128;
     let match_id = client.create_match(
         &player1,
         &player2,
@@ -114,7 +114,7 @@ fn test_player_balance_history_with_multiple_matches() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let game_ids = ["game001", "game002", "game003"];
+    let game_ids = ["game0001", "game0002", "game0003"];
     for i in 0..3 {
         let match_id = client.create_match(
             &player1,

@@ -703,9 +703,11 @@ fn test_submit_result_fails_when_contract_token_balance_is_zero() {
 
     let contract_balance = token_client.balance(&contract_id);
     if contract_balance > 0 {
+        env.mock_all_auths();
         env.as_contract(&contract_id, || {
             token_client.transfer(&contract_id, &player1, &contract_balance);
         });
+        env.mock_auths(&[]);
     }
 
     assert_eq!(token_client.balance(&contract_id), 0);
@@ -903,6 +905,17 @@ fn test_concurrent_matches_remain_isolated() {
     let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 0,
+        treasury: admin.clone(),
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
+    });
 
     let match_one = client.create_match(
         &player1,
@@ -917,7 +930,7 @@ fn test_concurrent_matches_remain_isolated() {
         &player4,
         &60,
         &token,
-        &String::from_str(&env, "1305012345"),
+        &String::from_str(&env, "13050123"),
         &Platform::ChessDotCom,
     );
 
@@ -940,7 +953,10 @@ fn test_concurrent_matches_remain_isolated() {
     assert_eq!(client.get_escrow_balance(&match_two), 120);
 
     client.submit_result(&match_one, &Winner::Player1);
+    client.claim_vested_payout(&match_one, &player1);
     client.submit_result(&match_two, &Winner::Draw);
+    client.claim_vested_payout(&match_two, &player3);
+    client.claim_vested_payout(&match_two, &player4);
 
     assert_eq!(client.get_match(&match_one).state, MatchState::Completed);
     assert_eq!(client.get_match(&match_two).state, MatchState::Completed);
@@ -1096,7 +1112,7 @@ fn test_match_count_increments_sequentially() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let game_ids = ["seq0", "seq1", "seq2", "seq3", "seq4"];
+    let game_ids = ["seq00001", "seq00002", "seq00003", "seq00004", "seq00005"];
     for (expected_id, game_id_str) in game_ids.iter().enumerate() {
         let id = client.create_match(
             &player1,
@@ -1362,7 +1378,7 @@ fn test_deposit_fails_on_paused_match() {
     );
 
     client.deposit(&id, &player1);
-    client.pause_match(&id, &player1);
+    client.pause();
 
     // Cannot deposit on paused match
     let result = client.try_deposit(&id, &player2);
@@ -1389,18 +1405,21 @@ fn test_multiple_pause_resume_cycles() {
     // Cycle 1
     client.pause_match(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Paused);
+    env.ledger().set_sequence_number(env.ledger().sequence() + 10);
     client.resume_match(&id, &player2);
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
     // Cycle 2
     client.pause_match(&id, &player2);
     assert_eq!(client.get_match(&id).state, MatchState::Paused);
+    env.ledger().set_sequence_number(env.ledger().sequence() + 10);
     client.resume_match(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
     // Cycle 3
     client.pause_match(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Paused);
+    env.ledger().set_sequence_number(env.ledger().sequence() + 10);
     client.resume_match(&id, &player2);
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
@@ -2090,8 +2109,8 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     env.as_contract(&contract_id, || {
         env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
-            MATCH_TTL_LEDGERS,
+            &DataKey::Match(id),
+            1,
             MATCH_TTL_LEDGERS,
         );
     });
@@ -2114,8 +2133,8 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     env.as_contract(&contract_id, || {
         env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
-            MATCH_TTL_LEDGERS,
+            &DataKey::Match(id),
+            1,
             MATCH_TTL_LEDGERS,
         );
     });
@@ -2416,8 +2435,8 @@ fn test_expire_match_before_and_after_timeout() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = token::Client::new(&env, &token);
 
-    // Use a short timeout so the test does not have to jump 518_400 ledgers.
-    client.set_match_timeout(&17_280);
+    // Use MIN_MATCH_TIMEOUT_SECONDS for the timeout.
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
     env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
@@ -2477,8 +2496,9 @@ fn test_expire_match_before_and_after_timeout() {
         }
     });
 
-    // Jump to exactly the timeout boundary (created_ledger=100, timeout=17_280).
-    env.ledger().set_sequence_number(100 + 17_280);
+    // Jump to past timeout (created_ledger=100, timeout=MIN_MATCH_TIMEOUT_SECONDS / 5).
+    let timeout_ledgers = (MIN_MATCH_TIMEOUT_SECONDS / 5) as u32 + 10;
+    env.ledger().set_sequence_number(100 + timeout_ledgers);
 
     env.deployer().extend_ttl_for_contract_instance(
         contract_id.clone(),
@@ -2549,7 +2569,7 @@ fn test_expire_match_rejects_before_timeout() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Create a match in Pending state
-    let match_id = create_default_match(&client, &env, &player1, &player2, &token, "expire_timeout_test");
+    let match_id = create_default_match(&client, &env, &player1, &player2, &token, "exptime1");
 
     // The match is created at the current ledger sequence
     let m = client.get_match(&match_id);
@@ -2593,8 +2613,10 @@ fn test_expire_match_succeeds_after_timeout() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
+
     // Create a match in Pending state
-    let match_id = create_default_match(&client, &env, &player1, &player2, &token, "expire_success_test");
+    let match_id = create_default_match(&client, &env, &player1, &player2, &token, "exptime2");
 
     let m = client.get_match(&match_id);
     assert_eq!(m.state, MatchState::Pending);
@@ -2604,10 +2626,8 @@ fn test_expire_match_succeeds_after_timeout() {
     let timeout_seconds = config.match_timeout_seconds;
     let timeout_ledgers = ((timeout_seconds / 5) as u32) + 1; // SECONDS_PER_LEDGER = 5
 
-    // Advance the ledger beyond the timeout threshold
-    env.ledger().with_sequence(|_| {
-        m.created_ledger + timeout_ledgers + 1
-    });
+    let seq = env.ledger().sequence() + timeout_ledgers + 1;
+    env.ledger().set_sequence_number(seq);
 
     // Now expire_match should succeed
     let result = client.try_expire_match(&match_id);

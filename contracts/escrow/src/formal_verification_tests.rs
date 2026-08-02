@@ -19,17 +19,18 @@ mod formal_verification {
         let mut explorer = StateSpaceExplorer::new();
         let contexts = explorer.explore_all_paths();
 
-        // Verify all 6 states are explored
-        assert_eq!(explorer.explored_states.len(), 6, "Expected 6 states");
+        // Verify all 7 states are explored
+        assert_eq!(explorer.explored_states.len(), 7, "Expected 7 states");
         assert!(explorer.explored_states.contains("Pending"));
         assert!(explorer.explored_states.contains("Active"));
         assert!(explorer.explored_states.contains("PendingResult"));
+        assert!(explorer.explored_states.contains("Disputed"));
         assert!(explorer.explored_states.contains("Completed"));
         assert!(explorer.explored_states.contains("Cancelled"));
         assert!(explorer.explored_states.contains("Paused"));
 
         // Verify contexts for each state
-        assert_eq!(contexts.len(), 6, "Expected context for each state");
+        assert_eq!(contexts.len(), 7, "Expected context for each state");
 
         println!("✓ State-space exploration complete");
         println!("  States explored: {}", explorer.explored_states.len());

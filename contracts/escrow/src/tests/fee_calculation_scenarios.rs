@@ -20,7 +20,7 @@ fn test_cancellation_fee_calculation_correct() {
     let match_id = client.create_match(
         &player1,
         &player2,
-        &1000,
+        &100,
         &token,
         &String::from_str(&env, "c178ad12"),
         &Platform::Lichess,
@@ -109,7 +109,7 @@ fn test_fee_applied_to_deposited_amount() {
         minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
-    let stake = 1000i128;
+    let stake = 100i128;
     let match_id = client.create_match(
         &player1,
         &player2,

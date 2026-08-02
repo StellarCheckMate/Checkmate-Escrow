@@ -305,16 +305,16 @@ fn test_vote_on_dispute_uptake_by_stakers() {
     client.vote_on_dispute(&dispute_id, &player2, &true);
 
     let dispute = client.get_dispute(&dispute_id);
-    // player2 has 900 tokens left after deposit
-    assert_eq!(dispute.yes_votes, 900);
+    // player2 has 100 tokens escrow stake snapshot
+    assert_eq!(dispute.yes_votes, 100);
     assert_eq!(dispute.no_votes, 0);
 
-    // player1 votes to uphold (false), has 900 tokens
+    // player1 votes to uphold (false), has 100 tokens stake snapshot
     client.vote_on_dispute(&dispute_id, &player1, &false);
 
     let dispute = client.get_dispute(&dispute_id);
-    assert_eq!(dispute.yes_votes, 900);
-    assert_eq!(dispute.no_votes, 900);
+    assert_eq!(dispute.yes_votes, 100);
+    assert_eq!(dispute.no_votes, 100);
 }
 
 #[test]
@@ -421,7 +421,7 @@ fn test_resolve_dispute_upholds_oracle_result() {
     assert_eq!(m.state, MatchState::Completed);
     // Player1 (original oracle winner) gets the pot
     assert_eq!(token_client.balance(&player1), 1100);
-    assert_eq!(token_client.balance(&player2), 900);
+    assert_eq!(token_client.balance(&player2), 899); // 900 minus 1 token forfeited bond
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.state, DisputeState::ResolvedUpheld);
@@ -831,7 +831,7 @@ fn test_dispute_bond_refunded_on_overturn() {
 
     // Bond should be refunded to player2
     let player2_after = token_client.balance(&player2);
-    assert_eq!(player2_after, player2_before_vote + 1); // Bond refunded
+    assert_eq!(player2_after, player2_before_vote + 101); // 100 stake refund + 1 bond refund
 }
 
 #[test]
@@ -985,4 +985,49 @@ fn test_get_governance_parameters() {
     assert_eq!(client.get_dispute_bond_basis_points(), 50);
     assert_eq!(client.get_minimum_hold_duration(), 50);
     assert_eq!(client.get_quorum_basis_points(), 3000);
+}
+
+#[test]
+fn test_auto_refund_fires_after_dispute_deadline_elapses() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "game1231");
+    client.submit_result(&match_id, &Winner::Player1);
+
+    let evidence_hash = String::from_str(&env, "ipfs://QmEvidenceHashTest1");
+    let _dispute_id = client.dispute_oracle_result(&match_id, &player2, &evidence_hash);
+
+    // Fast-forward timestamp past 72 hours (259_200 seconds)
+    env.ledger().set_timestamp(259_300);
+
+    let res = client.try_resolve_dispute_with_deadline(&match_id, &Winner::Player1);
+    assert!(res.is_ok());
+
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Cancelled);
+}
+
+#[test]
+fn test_admin_can_override_auto_refund_before_deadline() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = create_funded_active_match(&client, &env, &player1, &player2, &token, "game1232");
+    client.submit_result(&match_id, &Winner::Player1);
+
+    let evidence_hash = String::from_str(&env, "ipfs://QmEvidenceHashTest2");
+    let _dispute_id = client.dispute_oracle_result(&match_id, &player2, &evidence_hash);
+
+    // Timestamp still before 72h deadline
+    env.ledger().set_timestamp(10_000);
+
+    let res = client.try_resolve_dispute_with_deadline(&match_id, &Winner::Player2);
+    assert!(res.is_ok());
+
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Completed);
+    assert_eq!(m.winner, Winner::Player2);
 }

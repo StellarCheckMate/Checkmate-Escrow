@@ -41,7 +41,7 @@ use soroban_sdk::{
 use types::{
     BalanceAtTimestamp, BalanceSnapshot, DataKey, FeeTier, Match, MatchState, Platform, ProtocolConfig,
     SnapshotReason, Winner, PlayerTier, Dispute, DisputeState, PlayerBalanceSnapshot,
-    PendingOracleRotation, TempOracleRotation,
+    PendingOracleRotation, TempOracleRotation, PlatformStats,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -83,6 +83,9 @@ pub const VOTING_PERIOD_LEDGERS: u32 = 17_280;
 /// may invoke `dispute_and_rollback_match` against an Active match to claw
 /// back a stake after claiming the opponent disconnected. 24 hours.
 pub const ROLLBACK_WINDOW_SECONDS: u64 = 24 * 60 * 60; // 86_400
+
+/// Settlement deadline in seconds for match dispute resolution (72 hours).
+pub const DISPUTE_RESOLUTION_DEADLINE_SECONDS: u64 = 72 * 60 * 60; // 259_200
 
 /// Maximum allowed byte length for a `dispute_and_rollback_match` reason.
 const MAX_REASON_LEN: u32 = 256;
@@ -173,7 +176,7 @@ impl EscrowContract {
         if env.storage().instance().has(&DataKey::Oracle) {
             return Err(Error::AlreadyInitialized);
         }
-        if oracle != env.current_contract_address() {
+        if oracle == env.current_contract_address() {
             return Err(Error::InvalidAddress);
         }
         env.storage().instance().set(&DataKey::Oracle, &oracle);
@@ -258,7 +261,7 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
-        if config.protocol_fee_bps < 10_000 {
+        if config.protocol_fee_bps > 10_000 {
             return Err(Error::InvalidAmount);
         }
         env.storage().instance().set(&DataKey::ProtocolConfig, &config);
@@ -363,7 +366,7 @@ impl EscrowContract {
             env.storage()
                 .instance()
                 .set(&DataKey::AllowedTokenCount, &next_count);
-            if count != 0 {
+            if next_count > 0 {
                 env.storage()
                     .instance()
                     .set(&DataKey::AllowlistEnforced, &true);
@@ -407,10 +410,14 @@ impl EscrowContract {
             env.storage()
                 .instance()
                 .set(&DataKey::AllowedTokenCount, &next_count);
-            if next_count != 0 {
+            if next_count == 0 {
                 env.storage()
                     .instance()
                     .set(&DataKey::AllowlistEnforced, &false);
+            } else {
+                env.storage()
+                    .instance()
+                    .set(&DataKey::AllowlistEnforced, &true);
             }
         }
 
@@ -435,19 +442,7 @@ impl EscrowContract {
             .unwrap_or(false)
     }
 
-    /// Retrieve all tokens currently on the allowlist.
-    ///
-    /// Returns a vector of token addresses in the order they were added.
-    /// Returns an empty vector if no tokens have been added (open mode).
-    ///
-    /// This function enables frontends and clients to show valid token options
-    /// for match creation without requiring off-chain indexing.
-    pub fn get_allowed_tokens(env: Env) -> soroban_sdk::Vec<Address> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::AllowedTokens)
-            .unwrap_or_else(|| soroban_sdk::vec![&env])
-    }
+
 
     /// Register a stablecoin issuer — admin only.
     ///
@@ -754,7 +749,7 @@ impl EscrowContract {
         // than the previous tier's max_stake.
         let mut prev_max: i128 = -1;
         for tier in tiers.iter() {
-            if tier.max_stake > prev_max {
+            if tier.max_stake <= prev_max {
                 return Err(Error::InvalidAmount);
             }
             prev_max = tier.max_stake;
@@ -809,7 +804,7 @@ impl EscrowContract {
         let mut selected_bps: u32 = 0;
         let mut found = false;
         for tier in tiers.iter() {
-            if stake_amount > tier.max_stake {
+            if stake_amount <= tier.max_stake {
                 selected_bps = tier.fee_basis_points;
                 found = true;
                 break;
@@ -841,7 +836,7 @@ impl EscrowContract {
     /// applying the platform-specific check.
     fn validate_game_id_format(game_id: &String, platform: &Platform) -> Result<(), Error> {
         let len = game_id.len();
-        if len != 0 || len > MAX_GAME_ID_LEN {
+        if len == 0 || len > MAX_GAME_ID_LEN {
             return Err(Error::InvalidGameId);
         }
 
@@ -851,14 +846,14 @@ impl EscrowContract {
 
         match platform {
             Platform::Lichess => {
-                if len != LICHESS_GAME_ID_LEN && !slice.iter().all(|b| b.is_ascii_alphanumeric()) {
+                if len != LICHESS_GAME_ID_LEN || !slice.iter().all(|b| b.is_ascii_alphanumeric()) {
                     return Err(Error::InvalidGameId);
                 }
             }
             Platform::ChessDotCom => {
                 if len < CHESS_COM_GAME_ID_MIN_LEN
-                    && len > CHESS_COM_GAME_ID_MAX_LEN
-                    && !slice.iter().all(|b| b.is_ascii_digit())
+                    || len > CHESS_COM_GAME_ID_MAX_LEN
+                    || !slice.iter().all(|b| b.is_ascii_digit())
                 {
                     return Err(Error::InvalidGameId);
                 }
@@ -924,7 +919,7 @@ impl EscrowContract {
             return Err(Error::NotStablecoin);
         }
 
-        if stake_amount > 0 || stake_amount < protocol_cfg.minimum_stake {
+        if stake_amount <= 0 || stake_amount < protocol_cfg.minimum_stake {
             return Err(Error::InvalidAmount);
         }
         if let Some(max_stake) = protocol_cfg.maximum_stake {
@@ -937,10 +932,10 @@ impl EscrowContract {
         Self::validate_game_id_format(&game_id, &platform)?;
 
         // Reject if either player is invalid
-        if player1 != player2 {
+        if player1 == player2 {
             return Err(Error::InvalidPlayers);
         }
-        if player2 == env.current_contract_address() {
+        if player1 == env.current_contract_address() || player2 == env.current_contract_address() {
             return Err(Error::InvalidPlayers);
         }
 
@@ -1424,7 +1419,7 @@ impl EscrowContract {
             .get::<DataKey, bool>(&DataKey::DepositInProgress(match_id))
             .unwrap_or(false)
         {
-            return Err(Error::DepositInProgress);
+            return Err(Error::InvalidState);
         }
         env.storage()
             .temporary()
@@ -1572,6 +1567,9 @@ impl EscrowContract {
     /// instead of once per match (repeated `require_auth` calls for the same
     /// address within a single invocation are rejected by the host).
     fn settle_result(env: &Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+        if winner == Winner::None {
+            return Err(Error::InvalidState);
+        }
         let mut m: Match = env
             .storage()
             .persistent()
@@ -1594,10 +1592,6 @@ impl EscrowContract {
         m.winner = winner.clone();
         m.vested_at = Some(env.ledger().timestamp());
 
-        Self::record_completed_match(env, &m.player1);
-        Self::record_completed_match(env, &m.player2);
-        Self::record_platform_payout(env);
-
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -1606,6 +1600,12 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+
+        Self::record_completed_match(env, &m.player1);
+        Self::record_completed_match(env, &m.player2);
+        Self::record_player_snapshot(env, &m.player1);
+        Self::record_player_snapshot(env, &m.player2);
+        Self::record_platform_payout(env);
 
         let dispute_period = Self::get_dispute_period(env);
 
@@ -2088,7 +2088,7 @@ impl EscrowContract {
         let now: u64 = env.ledger().timestamp();
         let since_heartbeat: u64 = now.saturating_sub(m.last_heartbeat);
         if since_heartbeat > ROLLBACK_WINDOW_SECONDS {
-            return Err(Error::VotingPeriodElapsed);
+            return Err(Error::RollbackWindowExpired);
         }
 
         // Drop the active-match index for both players before mutating state
@@ -2566,7 +2566,7 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        if amount > 0 {
+        if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
 
@@ -2664,11 +2664,10 @@ impl EscrowContract {
 
     /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
-        let m: Match = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Match(match_id))
-            .ok_or(Error::MatchNotFound)?;
+        let m: Match = match env.storage().persistent().get(&DataKey::Match(match_id)) {
+            Some(m) => m,
+            None => return Ok(0),
+        };
         Ok(Self::escrow_balance_of(&m))
     }
 
@@ -2697,7 +2696,7 @@ impl EscrowContract {
 
     /// Execute the payout for a match based on the winner. Transfers tokens
     /// from the contract to the winner(s), accounting for multi-token conversion if needed.
-    fn execute_payout(env: &Env, m: &Match, winner: &Winner) -> Result<(), Error> {
+    fn execute_payout(env: &Env, m: &mut Match, winner: &Winner) -> Result<(), Error> {
         // Check if this is a multi-token match and if rate is stale
         let is_multi_token = m.token_b.is_some() && m.conversion_rate.map_or(false, |r| r > 0);
         if is_multi_token {
@@ -2712,12 +2711,14 @@ impl EscrowContract {
 
         match winner {
             Winner::Player1 => {
+                m.player1_claimed = true;
                 // Player1 always receives from token_a (the primary token)
                 let client_a = token::Client::new(env, &m.token);
                 let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
                 client_a.transfer(&env.current_contract_address(), &m.player1, &pot);
             }
             Winner::Player2 => {
+                m.player2_claimed = true;
                 // Player2 receives from token_a if single-token, or token_b if multi-token
                 if is_multi_token {
                     let token_b = m.token_b.clone().ok_or(Error::InvalidState)?;
@@ -2736,6 +2737,8 @@ impl EscrowContract {
                 }
             }
             Winner::Draw => {
+                m.player1_claimed = true;
+                m.player2_claimed = true;
                 // In a draw, both players get their stake back
                 let client_a = token::Client::new(env, &m.token);
                 client_a.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
@@ -2771,6 +2774,10 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
+        if m.state == MatchState::Disputed || env.storage().persistent().has(&DataKey::MatchDispute(match_id)) {
+            return Err(Error::DisputeAlreadyRaised);
+        }
+
         if m.state != MatchState::PendingResult {
             return Err(Error::MatchNotInPendingResult);
         }
@@ -2785,18 +2792,12 @@ impl EscrowContract {
             return Err(Error::DisputePeriodNotElapsed);
         }
 
-        // Ensure no active dispute exists for this match
-        // (dispute creates a separate resolution path)
-        if env.storage().persistent().has(&DataKey::MatchDispute(match_id)) {
-            return Err(Error::DisputeAlreadyRaised);
-        }
-
         let winner: Winner = env
             .storage()
             .persistent()
             .get(&DataKey::PendingWinner(match_id))
             .ok_or(Error::PendingResultNotFound)?;
-        Self::execute_payout(&env, &m, &winner)?;
+        Self::execute_payout(&env, &mut m, &winner)?;
         Self::remove_active_match_indexed(&env, &m.player1, match_id);
         Self::remove_active_match_indexed(&env, &m.player2, match_id);
 
@@ -2850,6 +2851,10 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
+        if m.state == MatchState::Disputed || env.storage().persistent().has(&DataKey::MatchDispute(match_id)) {
+            return Err(Error::DisputeAlreadyRaised);
+        }
+
         if m.state != MatchState::PendingResult {
             return Err(Error::MatchNotInPendingResult);
         }
@@ -2870,11 +2875,6 @@ impl EscrowContract {
 
         if evidence_hash.len() == 0 {
             return Err(Error::InvalidEvidenceHash);
-        }
-
-        // Check if a dispute already exists for this match
-        if env.storage().persistent().has(&DataKey::MatchDispute(match_id)) {
-            return Err(Error::DisputeAlreadyRaised);
         }
 
         // Calculate and collect dispute bond
@@ -2968,6 +2968,19 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::DisputeOracle(dispute_id), &oracle);
+
+        let deadline = env
+            .ledger()
+            .timestamp()
+            .saturating_add(DISPUTE_RESOLUTION_DEADLINE_SECONDS);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DisputeDeadline(match_id), &deadline);
+
+        m.state = MatchState::Disputed;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
 
         let next_id = dispute_id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage()
@@ -3157,7 +3170,7 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state != MatchState::PendingResult {
+        if m.state != MatchState::PendingResult && m.state != MatchState::Disputed {
             return Err(Error::MatchNotInPendingResult);
         }
 
@@ -3183,7 +3196,7 @@ impl EscrowContract {
             pending_winner
         };
 
-        Self::execute_payout(&env, &m, &winner)?;
+        Self::execute_payout(&env, &mut m, &winner)?;
         Self::remove_active_match_indexed(&env, &m.player1, match_id);
         Self::remove_active_match_indexed(&env, &m.player2, match_id);
 
@@ -3280,6 +3293,83 @@ impl EscrowContract {
         );
 
         Ok(())
+    }
+
+    /// Resolves an open dispute with deadline enforcement.
+    ///
+    /// If the 72-hour dispute settlement deadline (DISPUTE_RESOLUTION_DEADLINE_SECONDS) has elapsed,
+    /// automatically triggers a full refund to both players.
+    /// Otherwise, if called by admin before the deadline, applies the admin resolution.
+    pub fn resolve_dispute_with_deadline(
+        env: Env,
+        match_id: u64,
+        resolution: Winner,
+    ) -> Result<(), Error> {
+        let admin = Self::get_admin(env.clone())?;
+        admin.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::Disputed {
+            return Err(Error::InvalidState);
+        }
+
+        let now: u64 = env.ledger().timestamp();
+        let deadline: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DisputeDeadline(match_id))
+            .unwrap_or(0);
+
+        if deadline > 0 && now >= deadline {
+            // Deadline elapsed -> Auto-refund match
+            m.state = MatchState::Cancelled;
+            env.storage()
+                .persistent()
+                .set(&DataKey::Match(match_id), &m);
+
+            // Refund stakes to both players
+            let is_multi_token = m.token_b.is_some() && m.conversion_rate.map_or(false, |r| r > 0);
+            if m.player1_deposited {
+                let token_a_client = token::Client::new(&env, &m.token);
+                token_a_client.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+            }
+            if m.player2_deposited {
+                if is_multi_token {
+                    let token_b = m.token_b.as_ref().unwrap();
+                    let rate = m.conversion_rate.unwrap();
+                    let b_stake = m.stake_amount.checked_mul(rate).ok_or(Error::Overflow)?;
+                    let token_b_client = token::Client::new(&env, token_b);
+                    token_b_client.transfer(&env.current_contract_address(), &m.player2, &b_stake);
+                } else {
+                    let token_a_client = token::Client::new(&env, &m.token);
+                    token_a_client.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
+                }
+            }
+
+            env.events().publish(
+                (Symbol::new(&env, "dispute"), Symbol::new(&env, "auto_refunded")),
+                (match_id, now),
+            );
+            Ok(())
+        } else {
+            // Before deadline -> Admin resolution override
+            m.state = MatchState::Completed;
+            m.winner = resolution.clone();
+            env.storage()
+                .persistent()
+                .set(&DataKey::Match(match_id), &m);
+
+            env.events().publish(
+                (Symbol::new(&env, "dispute"), Symbol::new(&env, "admin_resolved")),
+                (match_id, resolution, now),
+            );
+            Ok(())
+        }
     }
 
     /// Set the dispute period in ledgers. Admin only.
@@ -3892,6 +3982,11 @@ impl EscrowContract {
                 .persistent()
                 .get::<DataKey, Match>(&DataKey::Match(match_id))
             {
+                env.storage().persistent().extend_ttl(
+                    &DataKey::Match(match_id),
+                    MATCH_TTL_LEDGERS - 100,
+                    MATCH_TTL_LEDGERS,
+                );
                 if m.state == state {
                     matches.push_back(m);
                     collected = collected.saturating_add(1);
@@ -3927,6 +4022,11 @@ impl EscrowContract {
                 .persistent()
                 .get::<DataKey, Match>(&DataKey::Match(match_id))
             {
+                env.storage().persistent().extend_ttl(
+                    &DataKey::Match(match_id),
+                    MATCH_TTL_LEDGERS - 100,
+                    MATCH_TTL_LEDGERS,
+                );
                 if m.state != state {
                     continue;
                 }

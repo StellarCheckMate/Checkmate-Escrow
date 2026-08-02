@@ -48,7 +48,7 @@ fn test_tier_progression_tracks_completed_matches() {
             &player1,
             &player2,
             &token,
-            &format!("bronze_progress_{}", i),
+            &format!("bz{:06}", i),
             100,
         );
     }
@@ -61,7 +61,7 @@ fn test_tier_progression_tracks_completed_matches() {
             &player1,
             &player2,
             &token,
-            &format!("silver_progress_{}", i),
+            &format!("sv{:06}", i),
             500,
         );
     }
@@ -74,7 +74,7 @@ fn test_tier_progression_tracks_completed_matches() {
             &player1,
             &player2,
             &token,
-            &format!("gold_progress_{}", i),
+            &format!("gd{:06}", i),
             1_000,
         );
     }
@@ -125,7 +125,7 @@ fn test_deposit_rechecks_current_player_tier() {
             &player1,
             &player3,
             &token,
-            &format!("promotion_match_{}", i),
+            &format!("pr{:06}", i),
             100,
         );
     }
