@@ -511,8 +511,8 @@ fn test_expire_match_emits_event() {
         &Platform::Lichess,
     );
 
-    // Advance ledger past the timeout so expire_match succeeds.
-    env.ledger().set_sequence_number(100 + 17_280);
+    // Advance ledger past the configured timeout.
+    env.ledger().set_sequence_number(17_281);
     client.expire_match(&id);
 
     let events = env.events().all();
