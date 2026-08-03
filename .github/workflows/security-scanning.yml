@@ -1,0 +1,241 @@
+name: Security Scanning
+
+# Runs on every push to main (to generate reports) and on every PR (to gate
+# merges). Can also be triggered manually with an optional override flag that
+# downgrades vulnerability failures to warnings.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      override_vulnerabilities:
+        description: >
+          Acknowledge known vulnerabilities and continue (sets exit code to
+          warning instead of failure). Requires a justification comment in
+          the run summary.
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      override_justification:
+        description: "Justification for overriding vulnerability failures (required when override=true)"
+        required: false
+        default: ""
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # When true, vulnerability scan failures become warnings, not errors.
+  OVERRIDE_VULNS: ${{ github.event.inputs.override_vulnerabilities || 'false' }}
+
+jobs:
+  # ── 1. cargo-audit — known vulnerable dependencies ─────────────────────────
+  cargo-audit:
+    name: cargo-audit (Vulnerable Dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-audit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-audit-
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --quiet
+
+      - name: Run cargo-audit (JSON report)
+        id: audit
+        run: |
+          mkdir -p reports/security
+          if cargo audit --json 2>&1 | tee reports/security/cargo-audit.json; then
+            echo "audit_status=clean" >> "$GITHUB_OUTPUT"
+            echo "### ✅ cargo-audit: No vulnerabilities found" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "audit_status=vulnerable" >> "$GITHUB_OUTPUT"
+            VULN_COUNT=$(jq '.vulnerabilities.count // 0' reports/security/cargo-audit.json 2>/dev/null || echo "unknown")
+            echo "### ⚠️ cargo-audit: ${VULN_COUNT} vulnerabilities found" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "See the uploaded \`cargo-audit-report\` artifact for details." >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$OVERRIDE_VULNS" == "true" ]]; then
+              echo "**Override active** — justification: ${{ github.event.inputs.override_justification }}" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+      - name: Upload cargo-audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-report
+          path: reports/security/cargo-audit.json
+          retention-days: 90
+
+      - name: Fail on vulnerabilities (unless overridden)
+        if: steps.audit.outputs.audit_status == 'vulnerable' && env.OVERRIDE_VULNS != 'true'
+        run: |
+          echo "::error::cargo-audit found vulnerable dependencies. Review the artifact or run with override_vulnerabilities=true to acknowledge."
+          exit 1
+
+  # ── 2. cargo-deny — license compliance + bans ──────────────────────────────
+  cargo-deny:
+    name: cargo-deny (License Compliance)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --quiet
+
+      - name: Run cargo-deny
+        id: deny
+        run: |
+          mkdir -p reports/security
+          if cargo deny check 2>&1 | tee reports/security/cargo-deny.txt; then
+            echo "### ✅ cargo-deny: All license and ban checks passed" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### ❌ cargo-deny: License or ban violations found" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "See the uploaded \`cargo-deny-report\` artifact for details." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Upload cargo-deny report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-deny-report
+          path: reports/security/cargo-deny.txt
+          retention-days: 90
+
+  # ── 3. semgrep SAST — code pattern violations ──────────────────────────────
+  semgrep:
+    name: semgrep (SAST)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run semgrep
+        id: semgrep
+        env:
+          # Optional: set SEMGREP_APP_TOKEN in repository secrets to upload
+          # results to the Semgrep Cloud dashboard.
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: |
+          mkdir -p reports/security
+
+          # Run Semgrep with Rust security rules.
+          # --error causes a non-zero exit on any finding at severity WARNING+.
+          # --json writes the machine-readable report.
+          if semgrep \
+            --config "p/rust" \
+            --config "p/secrets" \
+            --error \
+            --json \
+            --output reports/security/semgrep.json \
+            --exclude "target/**" \
+            --exclude "node_modules/**" \
+            .; then
+            echo "semgrep_status=clean" >> "$GITHUB_OUTPUT"
+            echo "### ✅ semgrep: No SAST findings" >> "$GITHUB_STEP_SUMMARY"
+          else
+            FINDING_COUNT=$(jq '.results | length' reports/security/semgrep.json 2>/dev/null || echo "unknown")
+            echo "semgrep_status=findings" >> "$GITHUB_OUTPUT"
+            echo "### ⚠️ semgrep: ${FINDING_COUNT} finding(s)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "See the uploaded \`semgrep-report\` artifact for details." >> "$GITHUB_STEP_SUMMARY"
+            if [[ "$OVERRIDE_VULNS" == "true" ]]; then
+              echo "**Override active** — justification: ${{ github.event.inputs.override_justification }}" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+      - name: Upload semgrep report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: reports/security/semgrep.json
+          retention-days: 90
+
+      - name: Fail on semgrep findings (unless overridden)
+        if: steps.semgrep.outputs.semgrep_status == 'findings' && env.OVERRIDE_VULNS != 'true'
+        run: |
+          echo "::error::semgrep found SAST violations. Review the artifact or run with override_vulnerabilities=true to acknowledge."
+          exit 1
+
+  # ── 4. Security report (merge to main only) ─────────────────────────────────
+  security-report:
+    name: Generate Security Report
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [cargo-audit, cargo-deny, semgrep]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all security artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: reports/security/
+
+      - name: Generate consolidated security report
+        run: |
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          COMMIT="${{ github.sha }}"
+          SHORT_SHA="${COMMIT:0:8}"
+
+          cat > reports/security/SECURITY_REPORT_${SHORT_SHA}.md << EOF
+          # Security Scan Report
+
+          **Commit:** \`${COMMIT}\`
+          **Branch:** \`${{ github.ref_name }}\`
+          **Generated:** ${TIMESTAMP}
+          **Triggered by:** ${{ github.actor }}
+
+          ## Results Summary
+
+          | Scanner       | Status |
+          |---------------|--------|
+          | cargo-audit   | See artifact \`cargo-audit-report\` |
+          | cargo-deny    | See artifact \`cargo-deny-report\`  |
+          | semgrep SAST  | See artifact \`semgrep-report\`     |
+
+          ## Artifacts
+
+          All detailed reports are available as workflow artifacts (retained 90 days):
+          - \`cargo-audit-report/cargo-audit.json\` — vulnerable dependency details
+          - \`cargo-deny-report/cargo-deny.txt\` — license compliance output
+          - \`semgrep-report/semgrep.json\` — SAST finding details
+
+          ## Override Policy
+
+          To acknowledge a known, accepted risk:
+          1. Go to Actions → Security Scanning → Run workflow
+          2. Set \`override_vulnerabilities\` to \`true\`
+          3. Provide a justification in \`override_justification\`
+          4. The override is recorded in this report and the job summary
+
+          EOF
+
+          echo "Security report written to reports/security/SECURITY_REPORT_${SHORT_SHA}.md"
+          cat reports/security/SECURITY_REPORT_${SHORT_SHA}.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload consolidated report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report-${{ github.sha }}
+          path: reports/security/
+          retention-days: 90

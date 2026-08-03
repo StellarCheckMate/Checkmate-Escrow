@@ -1,5 +1,4 @@
 pub mod chess_com_client;
-pub mod lichess_client;
 pub mod errors;
 pub mod lichess_client;
 pub mod provider;

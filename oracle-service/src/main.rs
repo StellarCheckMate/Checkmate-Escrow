@@ -26,7 +26,14 @@ use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use oracle_service::{
-    config, health::HealthChecker, oracle::{ChessComClient, LichessClient}, poller::Poller,
+    config,
+    health::HealthChecker,
+    middleware::{
+        rate_limit::RateLimitState,
+        waf::WafState,
+    },
+    oracle::{ChessComClient, LichessClient},
+    poller::Poller,
     soroban_client::SorobanClient,
 };
 
@@ -125,14 +132,7 @@ async fn main() {
         }
     };
 
-    // ── Health checker ────────────────────────────────────────────────────
-    let health_checker = Arc::new(HealthChecker::new(cfg.clone(), soroban, chess_com, lichess));
-
-    // Perform initial health check
-    info!("performing initial health check");
-    health_checker.check_all().await;
-
-    // ── Pipeline poller ───────────────────────────────────────────────────
+    // ── Pipeline poller (constructed before cfg is moved) ─────────────────
     let poller = match Poller::new(&cfg) {
         Ok(p) => p,
         Err(e) => {
@@ -141,10 +141,20 @@ async fn main() {
         }
     };
 
+    // ── Health checker (consumes cfg) ─────────────────────────────────────
+    let health_checker = Arc::new(HealthChecker::new(cfg, soroban, chess_com, lichess));
+
+    // Perform initial health check
+    info!("performing initial health check");
+    health_checker.check_all().await;
+
     // ── HTTP server state ─────────────────────────────────────────────────
     let app_state = AppState {
         health_checker: health_checker.clone(),
     };
+
+    let rate_limiter_state = RateLimitState::new();
+    let waf_state = WafState::new();
 
     let app = Router::new()
         .route("/health", get(health_check))
