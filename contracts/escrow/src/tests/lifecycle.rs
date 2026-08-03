@@ -2539,84 +2539,110 @@ fn test_expire_match_before_and_after_timeout() {
     );
 }
 
-// ── Test for expire_match timeout validation ────────────────────────────────
-
-/// Test that expire_match rejects calls made before the configured timeout has elapsed.
-/// This ensures the timeout guard is properly enforced.
+// #1176 — cancel_match must be rejected once both players have deposited (Active state)
 #[test]
-fn test_expire_match_rejects_before_timeout() {
+fn test_cancel_match_rejects_when_active() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    // Create a match in Pending state
-    let match_id = create_default_match(&client, &env, &player1, &player2, &token, "expire_timeout_test");
-
-    // The match is created at the current ledger sequence
-    let m = client.get_match(&match_id);
-    assert_eq!(m.state, MatchState::Pending, "match should start in Pending state");
-
-    // Get the current ledger for reference
-    let start_ledger = env.ledger().sequence();
-
-    // Attempt to expire the match immediately (before any time has passed)
-    let result = client.try_expire_match(&match_id);
-
-    // Should fail because the timeout has not elapsed
-    assert!(
-        result.is_err(),
-        "expire_match must reject calls before timeout expires"
+    // Create a match and have both players deposit so it transitions to Active.
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "active_cancel_guard"),
+        &Platform::Lichess,
     );
 
-    // Verify the error is MatchNotExpired
-    match result {
-        Err(Ok(err)) => {
-            assert_eq!(
-                err, Error::MatchNotExpired,
-                "expected MatchNotExpired error, got {:?}",
-                err
-            );
-        }
-        other => panic!("unexpected result: {:?}", other),
-    }
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
 
-    // Verify the match state is still Pending (unchanged)
-    let m_after = client.get_match(&match_id);
+    // Confirm the match is now Active before attempting the cancel.
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    // Attempt to cancel as player1 — must be rejected with MatchAlreadyActive.
+    let result = client.try_cancel_match(&id, &player1);
     assert_eq!(
-        m_after.state, MatchState::Pending,
-        "match must remain in Pending state after failed expire_match"
+        result,
+        Err(Ok(Error::MatchAlreadyActive)),
+        "cancel_match must return MatchAlreadyActive when the match is in Active state"
+    );
+
+    // The match state must remain Active (no side-effects from the failed call).
+    assert_eq!(
+        client.get_match(&id).state,
+        MatchState::Active,
+        "match state must remain Active after a rejected cancel attempt"
     );
 }
 
-/// Test that expire_match succeeds once the timeout threshold is reached.
+// #1177 — draw refund must return exactly stake_amount to each player and
+//          leave the escrow balance at zero.
 #[test]
-fn test_expire_match_succeeds_after_timeout() {
+fn test_draw_refund_correct_amounts() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
 
-    // Create a match in Pending state
-    let match_id = create_default_match(&client, &env, &player1, &player2, &token, "expire_success_test");
+    let stake_amount: i128 = 250;
 
-    let m = client.get_match(&match_id);
-    assert_eq!(m.state, MatchState::Pending);
+    // Record balances before the match so the assertions are stake-amount
+    // independent (setup mints 1000 to each player).
+    let p1_before = token_client.balance(&player1);
+    let p2_before = token_client.balance(&player2);
 
-    // Get the match timeout from protocol config
-    let config = client.get_protocol_config();
-    let timeout_seconds = config.match_timeout_seconds;
-    let timeout_ledgers = ((timeout_seconds / 5) as u32) + 1; // SECONDS_PER_LEDGER = 5
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &stake_amount,
+        &token,
+        &String::from_str(&env, "draw_refund_amounts"),
+        &Platform::Lichess,
+    );
 
-    // Advance the ledger beyond the timeout threshold
-    env.ledger().with_sequence(|_| {
-        m.created_ledger + timeout_ledgers + 1
-    });
+    // Both players deposit.
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
 
-    // Now expire_match should succeed
-    let result = client.try_expire_match(&match_id);
-    assert!(result.is_ok(), "expire_match should succeed after timeout");
-
-    // Verify the match state is now Cancelled
-    let m_after = client.get_match(&match_id);
+    // Escrow holds both stakes.
     assert_eq!(
-        m_after.state, MatchState::Cancelled,
-        "match must transition to Cancelled after expire_match"
+        client.get_escrow_balance(&id),
+        stake_amount * 2,
+        "escrow must hold both stakes after both players deposit"
+    );
+
+    // Oracle submits a draw result.
+    client.submit_result(&id, &Winner::Draw);
+
+    // Claim vested payouts (vesting_duration_seconds = 0 in setup, so
+    // claim_vested_payout is available immediately).
+    client.claim_vested_payout(&id, &player1);
+    client.claim_vested_payout(&id, &player2);
+
+    // Each player must have received exactly their stake_amount back.
+    assert_eq!(
+        token_client.balance(&player1),
+        p1_before,
+        "player1's balance must be restored to its pre-match value after a draw"
+    );
+    assert_eq!(
+        token_client.balance(&player2),
+        p2_before,
+        "player2's balance must be restored to its pre-match value after a draw"
+    );
+
+    // The escrow must be empty after both refunds.
+    assert_eq!(
+        client.get_escrow_balance(&id),
+        0,
+        "escrow balance must be 0 after both draw refunds are claimed"
+    );
+
+    // The match must be in Completed state.
+    assert_eq!(
+        client.get_match(&id).state,
+        MatchState::Completed,
+        "match state must be Completed after a draw result is submitted"
     );
 }
