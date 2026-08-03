@@ -14,7 +14,7 @@ fn test_ttl_extended_on_create_match() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_game1"),
+        &String::from_str(&env, "0cf4aed7"),
         &Platform::Lichess,
     );
 
@@ -28,7 +28,7 @@ fn test_ttl_extended_on_create_match() {
 fn test_game_id_ttl_extended_on_match_reservation() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    let game_id = String::from_str(&env, "reserved_game_ttl");
+    let game_id = String::from_str(&env, "3db705b0");
 
     client.create_match(
         &player1,
@@ -55,7 +55,7 @@ fn test_ttl_extended_on_deposit() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_game2"),
+        &String::from_str(&env, "badc5086"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -76,7 +76,7 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_active_append_remove_1"),
+        &String::from_str(&env, "3ddc215a"),
         &Platform::Lichess,
     );
 
@@ -85,7 +85,7 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_active_append_remove_2"),
+        &String::from_str(&env, "d6539cbe"),
         &Platform::Lichess,
     );
 
@@ -128,7 +128,7 @@ fn test_active_matches_read_extends_ttl_after_ledger_advancement() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_active_read"),
+        &String::from_str(&env, "95c78e0c"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -156,7 +156,7 @@ fn test_ttl_extended_on_submit_result() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_game3"),
+        &String::from_str(&env, "b615c463"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -179,7 +179,7 @@ fn test_ttl_extended_on_cancel() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_game4"),
+        &String::from_str(&env, "07b1d378"),
         &Platform::Lichess,
     );
 
@@ -212,7 +212,7 @@ fn test_is_funded_extends_ttl() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_is_funded"),
+        &String::from_str(&env, "fb36b5c0"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
@@ -247,7 +247,7 @@ fn test_ttl_extended_on_get_escrow_balance() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_balance_game"),
+        &String::from_str(&env, "3a2ad9a0"),
         &Platform::Lichess,
     );
 
@@ -279,7 +279,7 @@ fn test_get_match_extends_ttl_on_read() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_read_test"),
+        &String::from_str(&env, "ac157bb4"),
         &Platform::Lichess,
     );
 
@@ -301,7 +301,7 @@ fn test_get_match_resets_ttl_after_ledger_advance() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_get_match"),
+        &String::from_str(&env, "3a93aa2a"),
         &Platform::Lichess,
     );
 
@@ -334,7 +334,7 @@ fn test_player_match_index_ttl_refreshes_on_append() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_index_append_1"),
+        &String::from_str(&env, "377c9285"),
         &Platform::Lichess,
     );
 
@@ -354,7 +354,7 @@ fn test_player_match_index_ttl_refreshes_on_append() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_index_append_2"),
+        &String::from_str(&env, "12bf42e3"),
         &Platform::Lichess,
     );
 
@@ -376,7 +376,7 @@ fn test_player_match_index_ttl_refreshes_on_read() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_index_read"),
+        &String::from_str(&env, "a9abc8a8"),
         &Platform::Lichess,
     );
 
@@ -422,7 +422,7 @@ fn test_get_player_matches_ttl_returns_correct_value() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_getter_test"),
+        &String::from_str(&env, "888cbb28"),
         &Platform::Lichess,
     );
 
@@ -480,7 +480,7 @@ fn test_submit_result_extends_match_ttl() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "ttl_submit_result_game"),
+        &String::from_str(&env, "1edf395a"),
         &Platform::Lichess,
     );
     client.deposit(&id, &player1);
