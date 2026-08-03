@@ -1,0 +1,228 @@
+# Checkmate-Escrow — Prometheus Alerting Rules
+#
+# Deploy this file to your Prometheus rules directory and reload Prometheus.
+# See docs/monitoring-setup.md for the full setup guide.
+
+groups:
+
+  # ── Contract Operational Alerts ──────────────────────────────────────────
+  - name: checkmate_contract_operations
+    interval: 30s
+    rules:
+
+      # High error rate — >5% of operations failing in the last 5 minutes
+      - alert: HighContractErrorRate
+        expr: |
+          (
+            rate(checkmate_operations_failed_total[5m])
+            /
+            (rate(checkmate_operations_total[5m]) + 1e-10)
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          component: escrow_contract
+        annotations:
+          summary: "Checkmate contract error rate exceeds 5%"
+          description: >
+            Contract operation error rate is {{ printf "%.1f" (mul $value 100) }}%
+            over the last 5 minutes (threshold: 5%).
+            Investigate recent transactions for systematic failures.
+          runbook_url: "https://github.com/StellarCheckMate/Checkmate-Escrow/blob/main/docs/runbook-pause.md"
+
+      # Warning: rising error rate, not yet critical
+      - alert: ElevatedContractErrorRate
+        expr: |
+          (
+            rate(checkmate_operations_failed_total[5m])
+            /
+            (rate(checkmate_operations_total[5m]) + 1e-10)
+          ) > 0.02
+        for: 5m
+        labels:
+          severity: warning
+          component: escrow_contract
+        annotations:
+          summary: "Checkmate contract error rate elevated (>2%)"
+          description: >
+            Contract operation error rate is {{ printf "%.1f" (mul $value 100) }}%
+            over the last 5 minutes.
+          runbook_url: "https://github.com/StellarCheckMate/Checkmate-Escrow/blob/main/docs/runbook-pause.md"
+
+  # ── Contract State Alerts ────────────────────────────────────────────────
+  - name: checkmate_contract_state
+    interval: 30s
+    rules:
+
+      # Contract has been paused — typically an emergency admin action
+      - alert: ContractPaused
+        expr: checkmate_contract_paused == 1
+        for: 0m
+        labels:
+          severity: critical
+          component: escrow_contract
+        annotations:
+          summary: "Checkmate escrow contract is PAUSED"
+          description: >
+            The escrow contract has been paused by an admin.
+            No new matches can be created and no deposits or result submissions
+            are accepted. Review admin actions immediately.
+          runbook_url: "https://github.com/StellarCheckMate/Checkmate-Escrow/blob/main/docs/runbook-pause.md"
+
+      # Contract has been paused for an extended period
+      - alert: ContractPausedExtended
+        expr: checkmate_contract_paused == 1
+        for: 30m
+        labels:
+          severity: critical
+          component: escrow_contract
+        annotations:
+          summary: "Checkmate escrow contract has been PAUSED for over 30 minutes"
+          description: >
+            The escrow contract has been paused for more than 30 minutes.
+            Ensure this is intentional. Active matches cannot be completed while paused.
+
+  # ── Suspicious Activity Alerts ───────────────────────────────────────────
+  - name: checkmate_suspicious_activity
+    interval: 60s
+    rules:
+
+      # Abnormally large single-match stake: flags unusually high TVL spikes
+      - alert: AbnormallyLargeStake
+        expr: checkmate_largest_active_stake_stroops > 100000000000
+        for: 1m
+        labels:
+          severity: warning
+          component: escrow_contract
+        annotations:
+          summary: "Unusually large single match stake detected"
+          description: >
+            A match stake exceeding 10,000 XLM is currently active.
+            Stake size: {{ $value | humanize }} stroops.
+            Verify this is an expected high-stakes match.
+
+      # Rapid match creation spike — possible automated abuse
+      - alert: MatchCreationSpike
+        expr: rate(checkmate_matches_created_total[1m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          component: escrow_contract
+        annotations:
+          summary: "Abnormal match creation rate"
+          description: >
+            Match creation rate is {{ printf "%.1f" $value }} matches/sec over
+            the last minute. This may indicate automated or abusive activity.
+
+      # Many cancellations could indicate players gaming the escrow timing
+      - alert: HighCancellationRate
+        expr: |
+          rate(checkmate_matches_cancelled_total[10m])
+          /
+          (rate(checkmate_matches_created_total[10m]) + 1e-10)
+          > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          component: escrow_contract
+        annotations:
+          summary: "High match cancellation rate (>50% of created matches)"
+          description: >
+            More than 50% of recently created matches are being cancelled.
+            This may indicate a client bug, griefing, or escrow timing abuse.
+
+      # Oracle rotation — admin changed oracle address (potential key compromise response)
+      - alert: OracleAddressRotated
+        expr: increase(checkmate_oracle_rotations_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+          component: oracle
+        annotations:
+          summary: "Oracle address was rotated"
+          description: >
+            The oracle address was changed. If this was not an expected rotation,
+            investigate for possible oracle key compromise.
+          runbook_url: "https://github.com/StellarCheckMate/Checkmate-Escrow/blob/main/docs/runbook-rotation.md"
+
+      # Oracle submission errors spiking
+      - alert: OracleSubmissionErrorSpike
+        expr: rate(checkmate_oracle_submission_errors_total[5m]) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          component: oracle
+        annotations:
+          summary: "Oracle result submission errors spiking"
+          description: >
+            Oracle is failing to submit results at rate {{ printf "%.2f" $value }}/sec.
+            Check oracle service logs and Stellar RPC connectivity.
+
+  # ── TVL / Fund Safety Alerts ─────────────────────────────────────────────
+  - name: checkmate_fund_safety
+    interval: 60s
+    rules:
+
+      # TVL drops to zero unexpectedly — could indicate a drain or payout bug
+      - alert: TVLDroppedToZero
+        expr: checkmate_tvl_stroops == 0 and checkmate_matches_active > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: escrow_contract
+        annotations:
+          summary: "TVL is zero while active matches exist"
+          description: >
+            The contract reports zero TVL but there are {{ $value }} active matches.
+            This may indicate a payout accounting bug or token drain. Investigate immediately.
+
+      # Sudden large TVL drop (>50% within 5 minutes)
+      - alert: LargeTVLDrop
+        expr: |
+          (
+            checkmate_tvl_stroops
+            /
+            checkmate_tvl_stroops offset 5m
+          ) < 0.5
+          and checkmate_tvl_stroops offset 5m > 10000000
+        for: 1m
+        labels:
+          severity: warning
+          component: escrow_contract
+        annotations:
+          summary: "TVL dropped more than 50% in 5 minutes"
+          description: >
+            TVL decreased from {{ with query "checkmate_tvl_stroops offset 5m" }}{{ . | first | value | humanize }}{{ end }}
+            to {{ $value | humanize }} stroops — a drop of over 50%.
+            Verify this corresponds to expected match completions.
+
+  # ── Oracle Service Availability ──────────────────────────────────────────
+  - name: checkmate_oracle_availability
+    interval: 30s
+    rules:
+
+      # Oracle service hasn't scraped recently — may be down
+      - alert: OracleServiceDown
+        expr: up{job="checkmate-oracle"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: oracle
+        annotations:
+          summary: "Oracle service is down or unreachable"
+          description: >
+            Prometheus cannot scrape the oracle service at job=checkmate-oracle.
+            Active matches will not receive result submissions until the oracle recovers.
+
+      # Stellar RPC health degraded
+      - alert: StellarRPCDegraded
+        expr: checkmate_stellar_rpc_health != 1
+        for: 3m
+        labels:
+          severity: warning
+          component: stellar_rpc
+        annotations:
+          summary: "Stellar RPC connectivity degraded"
+          description: >
+            The oracle service reports Stellar RPC health is degraded.
+            Result submissions and fund transfers may be delayed.

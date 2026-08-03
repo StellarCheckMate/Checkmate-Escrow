@@ -1,0 +1,186 @@
+{
+  "specification_version": "1.0",
+  "entry_points_continued": [
+    {
+      "name": "get_admin",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_oracle",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_match_timeout",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only"],
+      "events": ["None"]
+    },
+    {
+      "name": "tier_from_match_count",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only, counts completed matches"],
+      "events": ["None"]
+    },
+    {
+      "name": "min_tier_stake",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only, returns: Bronze=1, Silver=101, Gold=501, Platinum=1001"],
+      "events": ["None"]
+    },
+    {
+      "name": "max_tier_stake",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only, returns: Bronze=100, Silver=500, Gold=1000, Platinum=i128::MAX"],
+      "events": ["None"]
+    },
+    {
+      "name": "set_match_timeout",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["MatchTimeout"],
+      "auth_required": ["Admin"],
+      "conditions": ["Admin authorization", "MIN_MATCH_TIMEOUT_LEDGERS (17280) <= timeout <= MAX_MATCH_TIMEOUT_LEDGERS (1555200)"],
+      "events": ["(admin, timeout)"]
+    },
+    {
+      "name": "propose_admin",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["PendingAdmin"],
+      "auth_required": ["Admin"],
+      "conditions": ["Current admin authorization required", "Stores new_admin as pending (not active)"],
+      "events": ["(admin, propose)"]
+    },
+    {
+      "name": "accept_admin",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["Admin", "PendingAdmin removed"],
+      "auth_required": ["PendingAdmin"],
+      "conditions": ["Pending admin authorization required", "Finalizes admin transfer"],
+      "events": ["(admin, xfer)"]
+    },
+    {
+      "name": "get_match",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only, returns Match or MatchNotFound error"],
+      "events": ["None"]
+    },
+    {
+      "name": "is_funded",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only, returns true if both player1_deposited and player2_deposited flags set (remains true after payout)"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_depositor_count",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only, returns 0, 1, or 2"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_escrow_balance",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only", "Returns 0 if Completed or Cancelled", "Returns depositor_count * stake_amount otherwise"],
+      "events": ["None"]
+    },
+    {
+      "name": "finalize_match",
+      "state_from": ["PendingResult"],
+      "state_to": ["Completed"],
+      "mutations": ["Match.state=Completed", "Match.completed_ledger", "Snapshot"],
+      "auth_required": ["None (anyone can call)"],
+      "conditions": ["Match in PendingResult state", "Current ledger >= ResultDeadline", "No active dispute exists"],
+      "events": ["(match, finalized)"]
+    },
+    {
+      "name": "dispute_oracle_result",
+      "state_from": ["PendingResult"],
+      "state_to": ["PendingResult (with dispute)"],
+      "mutations": ["Dispute(dispute_id)", "MatchDispute(match_id)", "DisputeCount++"],
+      "auth_required": ["player1 or player2"],
+      "conditions": ["Match in PendingResult state", "Caller is player1 or player2", "Current ledger < ResultDeadline", "evidence_hash.len() > 0", "No existing dispute for match"],
+      "events": ["(dispute, created)"]
+    },
+    {
+      "name": "vote_on_dispute",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["DisputeVote recorded", "Dispute.yes_votes or Dispute.no_votes"],
+      "auth_required": ["voter"],
+      "conditions": ["Dispute in Active state", "Current ledger < voting_deadline", "Voter hasn't already voted", "Voter holds positive balance of match token"],
+      "events": ["(dispute, voted)"]
+    },
+    {
+      "name": "resolve_dispute_by_vote",
+      "state_from": ["PendingResult"],
+      "state_to": ["Completed"],
+      "mutations": ["Match.state=Completed", "Dispute.state", "Match.completed_ledger", "Snapshot"],
+      "auth_required": ["None (anyone can call)"],
+      "conditions": ["Dispute in Active state", "Current ledger >= voting_deadline", "Match in PendingResult state"],
+      "events": ["(dispute, resolved)"]
+    },
+    {
+      "name": "set_dispute_period",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["DisputePeriod"],
+      "auth_required": ["Admin"],
+      "conditions": ["Admin authorization required", "Set to 0 for immediate payout"],
+      "events": ["(admin, dispute_period)"]
+    },
+    {
+      "name": "get_dispute_period",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only"],
+      "events": ["None"]
+    },
+    {
+      "name": "get_dispute",
+      "state_from": ["N/A"],
+      "state_to": "N/A",
+      "mutations": ["None"],
+      "auth_required": ["None"],
+      "conditions": ["Read-only"],
+      "events": ["None"]
+    }
+  ],
+  "note": "Part 2/3 - Entry points 21-40 of 55"
+}

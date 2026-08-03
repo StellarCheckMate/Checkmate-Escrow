@@ -1,14 +1,35 @@
 #![no_std]
 
+/// Oracle Contract for Checkmate — verification and consensus for chess match results.
+///
+/// For a comprehensive reference of all error codes (their numeric values, causes, and recovery
+/// actions), see [`Error Codes Reference`](../../docs/error-codes.md).
+///
+/// # Error Codes Quick Reference
+///
+/// Every function that returns a `Result<T, Error>` surfaces errors as numeric discriminants.
+/// Common errors:
+/// - `#1` — `Unauthorized` — Caller is not the configured admin or contract not initialized
+/// - `#2` — `AlreadySubmitted` — Result already recorded for this match
+/// - `#3` — `ResultNotFound` — No result stored for this match
+/// - `#5` — `ContractPaused` — Contract paused; submissions blocked
+/// - `#9` — `RateLimitExceeded` — Oracle exceeded hourly/daily submission quota
+///
+/// See [`docs/error-codes.md`](../../docs/error-codes.md) for all 21 error codes with causes and recovery actions.
 mod errors;
 pub mod types;
 
 use errors::Error;
-use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol, Vec};
-use types::{
-    BatchResultEntry, DataKey, Platform, RateLimitConfig, RateLimitStatus, RateWindow, ResultEntry,
-    Winner,
+use soroban_sdk::{
+    contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec,
 };
+use types::{
+    BatchResultEntry, CandidateTally, ConsensusState, DataKey, OracleMetrics, OracleRegistration,
+    OracleVoteRecord, Platform, RateLimitConfig, RateLimitStatus, RateWindow, ResultEntry, Winner,
+};
+
+/// Maximum response time SLA threshold, in milliseconds (5 seconds).
+const SLA_MAX_RESPONSE_TIME_MS: u64 = 5_000;
 
 /// Maximum number of entries accepted in a single batch submission.
 /// Designed for v2.0 tournament use; future versions may raise this limit.
@@ -16,6 +37,9 @@ const MAX_BATCH_SIZE: u32 = 100;
 
 /// ~30 days at 5s/ledger.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
+
+/// Default TTL for cached oracle game results (1 hour).
+const DEFAULT_CACHE_TTL_SECS: u64 = 3_600;
 
 /// Default maximum submissions accepted from a single oracle per rolling hour.
 const DEFAULT_HOURLY_LIMIT: u32 = 100;
@@ -33,6 +57,25 @@ const RATE_LIMIT_ALERT_THRESHOLD_PCT: u64 = 80;
 /// TTL for rate-limit window storage: ~2 days at 5s/ledger, comfortably longer
 /// than the daily window so counters never expire mid-window.
 const RATE_LIMIT_TTL_LEDGERS: u32 = 34_560;
+
+/// Default m-of-n consensus threshold: a single matching submission finalizes
+/// a result. This is the degenerate n=1 configuration that reproduces the
+/// original single-admin-oracle deployment via `submit_oracle_result`.
+const DEFAULT_CONSENSUS_THRESHOLD: u32 = 1;
+
+/// Basis points of an oracle's remaining stake slashed automatically when it
+/// is caught equivocating (submitting two conflicting results for the same
+/// match_id). Equivocation is unambiguous and provable on-chain, so it is
+/// slashed at the maximum: the oracle's entire remaining stake.
+const EQUIVOCATION_SLASH_BPS: i128 = 10_000;
+
+/// Basis points of an oracle's remaining stake automatically slashed when its
+/// submission ends up on the losing side of a finalized consensus vote (a
+/// minority result contradicted by a threshold-strong majority), or on the
+/// losing side of an admin's resolution of a deadlocked (disputed) match.
+/// Lower than the equivocation penalty because being outvoted can reflect an
+/// honest disagreement (e.g. a stale platform API read) rather than malice.
+const MINORITY_SLASH_BPS: i128 = 1_000;
 
 /// Extend instance storage TTL on every invocation so Admin and Paused never expire.
 fn extend_instance_ttl(env: &Env) {
@@ -61,6 +104,89 @@ impl OracleContract {
         Ok(())
     }
 
+    /// Register an oracle with a token stake that can be slashed if needed.
+    pub fn register_oracle_with_stake(
+        env: Env,
+        oracle_address: Address,
+        stake_amount: i128,
+        token: Address,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        oracle_address.require_auth();
+
+        if stake_amount <= 0 {
+            return Err(Error::InsufficientStake);
+        }
+
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&oracle_address, &env.current_contract_address(), &stake_amount);
+
+        env.storage().instance().set(
+            &DataKey::OracleRegistration(oracle_address.clone()),
+            &OracleRegistration {
+                oracle_address: oracle_address.clone(),
+                oracle_stake: stake_amount,
+                token: token.clone(),
+            },
+        );
+
+        let mut oracle_set: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleSet)
+            .unwrap_or(Vec::new(&env));
+        if !oracle_set.contains(&oracle_address) {
+            oracle_set.push_back(oracle_address.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::OracleSet, &oracle_set);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("stake")),
+            (oracle_address, stake_amount, token),
+        );
+
+        Ok(())
+    }
+
+    /// Slash a registered oracle's stake. Admin-only.
+    pub fn slash_oracle(env: Env, oracle_address: Address, slash_amount: i128) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let mut registration: OracleRegistration = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_address.clone()))
+            .ok_or(Error::InsufficientStake)?;
+
+        if slash_amount <= 0 || slash_amount > registration.oracle_stake {
+            return Err(Error::InsufficientStake);
+        }
+
+        registration.oracle_stake -= slash_amount;
+        env.storage().instance().set(
+            &DataKey::OracleRegistration(oracle_address.clone()),
+            &registration,
+        );
+
+        let token_client = token::Client::new(&env, &registration.token);
+        token_client.transfer(&env.current_contract_address(), &admin, &slash_amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("slash")),
+            (oracle_address, slash_amount),
+        );
+
+        Ok(())
+    }
+
     /// Admin submits a verified match result on-chain.
     /// Invariant: No results can be submitted while the contract is paused.
     ///
@@ -76,6 +202,7 @@ impl OracleContract {
         game_id: String,
         platform: Platform,
         result: Winner,
+        response_time_ms: u64,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
         // Check if contract is paused first
@@ -94,7 +221,19 @@ impl OracleContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+
+        let registration: Option<OracleRegistration> = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(admin.clone()));
+        if let Some(registration) = registration {
+            if registration.oracle_stake <= 0 {
+                return Err(Error::InsufficientStake);
+            }
+        }
+
         Self::check_oracle_rate_limit(&env, &admin, 1)?;
+        Self::update_oracle_metrics(&env, &admin, response_time_ms)?;
 
         if env.storage().persistent().has(&DataKey::Result(match_id)) {
             return Err(Error::AlreadySubmitted);
@@ -107,8 +246,8 @@ impl OracleContract {
         env.storage().persistent().set(
             &DataKey::Result(match_id),
             &ResultEntry {
-                game_id,
-                platform,
+                game_id: game_id.clone(),
+                platform: platform.clone(),
                 result: result.clone(),
                 submitted_ledger: env.ledger().sequence(),
                 submitter: admin.clone(),
@@ -116,6 +255,17 @@ impl OracleContract {
         );
         env.storage().persistent().extend_ttl(
             &DataKey::Result(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let expiry = env.ledger().timestamp() + DEFAULT_CACHE_TTL_SECS;
+        let cache_key = DataKey::OracleCache(game_id, platform);
+        env.storage()
+            .persistent()
+            .set(&cache_key, &(result.clone(), expiry));
+        env.storage().persistent().extend_ttl(
+            &cache_key,
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
@@ -163,6 +313,16 @@ impl OracleContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
+        let registration: Option<OracleRegistration> = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(admin.clone()));
+        if let Some(registration) = registration {
+            if registration.oracle_stake <= 0 {
+                return Err(Error::InsufficientStake);
+            }
+        }
+
         let len = entries.len();
         if len > MAX_BATCH_SIZE {
             return Err(Error::BatchTooLarge);
@@ -198,13 +358,14 @@ impl OracleContract {
 
         // All checks passed — commit atomically.
         let current_ledger = env.ledger().sequence();
+        let expiry = env.ledger().timestamp() + DEFAULT_CACHE_TTL_SECS;
         for i in 0..len {
             let entry = entries.get(i).unwrap();
             env.storage().persistent().set(
                 &DataKey::Result(entry.match_id),
                 &ResultEntry {
-                    game_id: entry.game_id,
-                    platform: entry.platform,
+                    game_id: entry.game_id.clone(),
+                    platform: entry.platform.clone(),
                     result: entry.result.clone(),
                     submitted_ledger: current_ledger,
                     submitter: admin.clone(),
@@ -215,6 +376,17 @@ impl OracleContract {
                 MATCH_TTL_LEDGERS,
                 MATCH_TTL_LEDGERS,
             );
+
+            let cache_key = DataKey::OracleCache(entry.game_id, entry.platform);
+            env.storage()
+                .persistent()
+                .set(&cache_key, &(entry.result.clone(), expiry));
+            env.storage().persistent().extend_ttl(
+                &cache_key,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+
             env.events().publish(
                 (Symbol::new(&env, "oracle"), symbol_short!("result")),
                 (entry.match_id, entry.result),
@@ -227,6 +399,609 @@ impl OracleContract {
         );
 
         Ok(())
+    }
+
+    /// Submit a match result as one vote in an m-of-n oracle consensus.
+    ///
+    /// Unlike [`submit_result`], which is gated by admin auth alone, this is
+    /// the genuine multi-oracle path: any address independently registered
+    /// via [`register_oracle_with_stake`] with a positive stake may call this
+    /// directly (it authenticates itself, not the admin). A match result is
+    /// finalized into [`get_result`]-visible storage only once a candidate
+    /// (game_id, platform, result) has been submitted by at least
+    /// [`get_consensus_threshold`] distinct registered oracles.
+    ///
+    /// With the default threshold of 1, a single registered oracle's
+    /// submission finalizes immediately — the degenerate n=1 configuration
+    /// that mirrors the original single-admin-oracle deployment.
+    ///
+    /// # Disagreement handling
+    /// - If a submission's (game_id, platform, result) doesn't yet have
+    ///   enough matching votes, it is recorded and the match stays pending.
+    /// - If a candidate reaches the threshold, it is finalized and every
+    ///   oracle that had already voted for a *different* candidate for this
+    ///   match is automatically slashed [`MINORITY_SLASH_BPS`] of its
+    ///   remaining stake — majority wins, minority is slashed.
+    /// - If votes split enough that no remaining eligible oracle could still
+    ///   push any candidate over the threshold (a deadlock), the match is
+    ///   flagged disputed and awaits admin resolution via
+    ///   [`resolve_disputed_match`].
+    /// - If the same oracle submits two different candidates for the same
+    ///   match (equivocation), the vote is discarded and the oracle's entire
+    ///   remaining stake is slashed immediately. This case returns `Ok(())`
+    ///   rather than an error — a contract call that returns `Err` reverts
+    ///   every storage write made during it, which would undo the slash. The
+    ///   caller detects it via the `oracle/equivoc` event.
+    ///
+    /// # Errors
+    /// - [`Error::ContractPaused`] — contract is paused.
+    /// - [`Error::Unauthorized`] — contract has not been initialized.
+    /// - [`Error::InvalidGameId`] — `game_id` is empty.
+    /// - [`Error::NotRegisteredOracle`] — `oracle` has never registered stake.
+    /// - [`Error::InsufficientStake`] — `oracle`'s stake has been slashed to zero.
+    /// - [`Error::AlreadySubmitted`] — the match is already finalized, or this
+    ///   oracle already cast this exact vote.
+    /// - [`Error::RateLimitExceeded`] — `oracle` has exceeded its submission quota.
+    /// - [`Error::MatchDisputed`] — the match has already deadlocked and is
+    ///   awaiting admin resolution.
+    pub fn submit_oracle_result(
+        env: Env,
+        oracle: Address,
+        match_id: u64,
+        game_id: String,
+        platform: Platform,
+        result: Winner,
+        response_time_ms: u64,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::Unauthorized);
+        }
+
+        oracle.require_auth();
+
+        if game_id.is_empty() {
+            return Err(Error::InvalidGameId);
+        }
+
+        let registration: OracleRegistration = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle.clone()))
+            .ok_or(Error::NotRegisteredOracle)?;
+        if registration.oracle_stake <= 0 {
+            return Err(Error::InsufficientStake);
+        }
+
+        if env.storage().persistent().has(&DataKey::Result(match_id)) {
+            return Err(Error::AlreadySubmitted);
+        }
+
+        Self::check_oracle_rate_limit(&env, &oracle, 1)?;
+        Self::update_oracle_metrics(&env, &oracle, response_time_ms)?;
+
+        let vote_key = DataKey::OracleVote(match_id, oracle.clone());
+        let vote = OracleVoteRecord {
+            game_id: game_id.clone(),
+            platform: platform.clone(),
+            result: result.clone(),
+        };
+        if let Some(prev) = env
+            .storage()
+            .persistent()
+            .get::<_, OracleVoteRecord>(&vote_key)
+        {
+            if prev == vote {
+                return Err(Error::AlreadySubmitted);
+            }
+            // A contract call that returns `Err` reverts *all* storage writes
+            // made during the call, including the slash below — so proven
+            // equivocation must return `Ok` for the penalty to actually
+            // commit. Callers detect it via the `oracle/equivoc` event (and
+            // the resulting drop in the oracle's stake) rather than an error.
+            Self::slash_bps(&env, &oracle, EQUIVOCATION_SLASH_BPS);
+            env.events().publish(
+                (Symbol::new(&env, "oracle"), symbol_short!("equivoc")),
+                (match_id, oracle),
+            );
+            return Ok(());
+        }
+
+        let mut state: ConsensusState = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MatchVotes(match_id))
+            .unwrap_or(ConsensusState {
+                candidates: Vec::new(&env),
+                disputed: false,
+            });
+
+        if state.disputed {
+            return Err(Error::MatchDisputed);
+        }
+
+        env.storage().persistent().set(&vote_key, &vote);
+        env.storage()
+            .persistent()
+            .extend_ttl(&vote_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        let threshold = Self::consensus_threshold(&env);
+        let mut winning_idx: Option<u32> = None;
+        let mut found_existing = false;
+
+        for i in 0..state.candidates.len() {
+            let mut candidate = state.candidates.get(i).unwrap();
+            if candidate.result == result
+                && candidate.platform == platform
+                && candidate.game_id == game_id
+            {
+                candidate.submitters.push_back(oracle.clone());
+                if candidate.submitters.len() >= threshold {
+                    winning_idx = Some(i);
+                }
+                state.candidates.set(i, candidate);
+                found_existing = true;
+                break;
+            }
+        }
+
+        if !found_existing {
+            let mut submitters = Vec::new(&env);
+            submitters.push_back(oracle.clone());
+            let reached = submitters.len() >= threshold;
+            let idx = state.candidates.len();
+            state.candidates.push_back(CandidateTally {
+                game_id: game_id.clone(),
+                platform: platform.clone(),
+                result: result.clone(),
+                submitters,
+            });
+            if reached {
+                winning_idx = Some(idx);
+            }
+        }
+
+        if let Some(idx) = winning_idx {
+            let winning = state.candidates.get(idx).unwrap();
+
+            env.storage().persistent().set(
+                &DataKey::Result(match_id),
+                &ResultEntry {
+                    game_id: winning.game_id.clone(),
+                    platform: winning.platform.clone(),
+                    result: winning.result.clone(),
+                    submitted_ledger: env.ledger().sequence(),
+                    submitter: oracle,
+                },
+            );
+            env.storage().persistent().extend_ttl(
+                &DataKey::Result(match_id),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+
+            let expiry = env.ledger().timestamp() + DEFAULT_CACHE_TTL_SECS;
+            let cache_key = DataKey::OracleCache(winning.game_id.clone(), winning.platform.clone());
+            env.storage()
+                .persistent()
+                .set(&cache_key, &(winning.result.clone(), expiry));
+            env.storage().persistent().extend_ttl(
+                &cache_key,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+
+            // Majority wins, minority is slashed: every oracle that voted for
+            // a losing candidate is automatically penalized.
+            for i in 0..state.candidates.len() {
+                if i == idx {
+                    continue;
+                }
+                let losing = state.candidates.get(i).unwrap();
+                for j in 0..losing.submitters.len() {
+                    let minority_oracle = losing.submitters.get(j).unwrap();
+                    Self::slash_bps(&env, &minority_oracle, MINORITY_SLASH_BPS);
+                    env.events().publish(
+                        (Symbol::new(&env, "oracle"), symbol_short!("minority")),
+                        (match_id, minority_oracle),
+                    );
+                }
+            }
+
+            env.storage()
+                .persistent()
+                .remove(&DataKey::MatchVotes(match_id));
+
+            env.events().publish(
+                (Symbol::new(&env, "oracle"), symbol_short!("result")),
+                (match_id, winning.result),
+            );
+            env.events().publish(
+                (Symbol::new(&env, "oracle"), symbol_short!("finalzd")),
+                (match_id, winning.submitters.len(), threshold),
+            );
+        } else {
+            let remaining = Self::remaining_eligible_oracles(&env, match_id);
+            let mut still_possible = false;
+            for i in 0..state.candidates.len() {
+                let candidate = state.candidates.get(i).unwrap();
+                if candidate.submitters.len().saturating_add(remaining) >= threshold {
+                    still_possible = true;
+                    break;
+                }
+            }
+
+            if !still_possible {
+                state.disputed = true;
+                env.storage()
+                    .persistent()
+                    .remove(&DataKey::OracleCache(game_id, platform));
+                env.events().publish(
+                    (Symbol::new(&env, "oracle"), symbol_short!("disputed")),
+                    match_id,
+                );
+            }
+
+            env.storage()
+                .persistent()
+                .set(&DataKey::MatchVotes(match_id), &state);
+            env.storage().persistent().extend_ttl(
+                &DataKey::MatchVotes(match_id),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+
+            env.events().publish(
+                (Symbol::new(&env, "oracle"), symbol_short!("vote")),
+                (match_id, oracle, result),
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Admin resolves a match whose m-of-n consensus deadlocked (see
+    /// [`submit_oracle_result`]): no remaining eligible oracle vote could
+    /// still push any candidate result over the configured threshold.
+    ///
+    /// Finalizes the match with the admin's chosen result and slashes every
+    /// oracle whose recorded vote disagreed with it — the admin acts as the
+    /// tie-breaker of last resort, consistent with the admin's existing
+    /// ultimate authority elsewhere in this contract (`slash_oracle`,
+    /// `update_admin`, `pause`). See docs/oracle.md for the full consensus
+    /// protocol and its migration path from single-oracle deployments.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
+    /// - [`Error::AlreadySubmitted`] — the match already has a finalized result.
+    /// - [`Error::MatchNotDisputed`] — the match has no consensus votes recorded,
+    ///   or its consensus has not deadlocked.
+    pub fn resolve_disputed_match(
+        env: Env,
+        match_id: u64,
+        game_id: String,
+        platform: Platform,
+        result: Winner,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if env.storage().persistent().has(&DataKey::Result(match_id)) {
+            return Err(Error::AlreadySubmitted);
+        }
+
+        let state: ConsensusState = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MatchVotes(match_id))
+            .ok_or(Error::MatchNotDisputed)?;
+        if !state.disputed {
+            return Err(Error::MatchNotDisputed);
+        }
+
+        for i in 0..state.candidates.len() {
+            let candidate = state.candidates.get(i).unwrap();
+            let agrees = candidate.result == result
+                && candidate.platform == platform
+                && candidate.game_id == game_id;
+            if !agrees {
+                for j in 0..candidate.submitters.len() {
+                    let wrong_oracle = candidate.submitters.get(j).unwrap();
+                    Self::slash_bps(&env, &wrong_oracle, MINORITY_SLASH_BPS);
+                    env.events().publish(
+                        (Symbol::new(&env, "oracle"), symbol_short!("minority")),
+                        (match_id, wrong_oracle),
+                    );
+                }
+            }
+        }
+
+        env.storage().persistent().set(
+            &DataKey::Result(match_id),
+            &ResultEntry {
+                game_id: game_id.clone(),
+                platform: platform.clone(),
+                result: result.clone(),
+                submitted_ledger: env.ledger().sequence(),
+                submitter: admin,
+            },
+        );
+        env.storage().persistent().extend_ttl(
+            &DataKey::Result(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let expiry = env.ledger().timestamp() + DEFAULT_CACHE_TTL_SECS;
+        let cache_key = DataKey::OracleCache(game_id, platform);
+        env.storage()
+            .persistent()
+            .set(&cache_key, &(result.clone(), expiry));
+        env.storage().persistent().extend_ttl(
+            &cache_key,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::MatchVotes(match_id));
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("resolved")),
+            (match_id, result),
+        );
+
+        Ok(())
+    }
+
+    /// Configure the m-of-n consensus threshold — admin only. The number of
+    /// distinct, independently-registered oracles that must submit a matching
+    /// result before `submit_oracle_result` finalizes a match. Pass `1` to
+    /// restore the degenerate single-oracle configuration.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
+    /// - [`Error::InvalidThreshold`] — `threshold` is 0.
+    pub fn set_consensus_threshold(env: Env, threshold: u32) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if threshold == 0 {
+            return Err(Error::InvalidThreshold);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::ConsensusThreshold, &threshold);
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("thresh")),
+            threshold,
+        );
+        Ok(())
+    }
+
+    /// Return the currently configured m-of-n consensus threshold. Defaults
+    /// to 1 (degenerate single-oracle configuration) if never explicitly set.
+    pub fn get_consensus_threshold(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        Self::consensus_threshold(&env)
+    }
+
+    /// Return the number of distinct addresses ever registered via
+    /// `register_oracle_with_stake`. Does not account for stake subsequently
+    /// slashed to zero — see `get_oracle_rate_limit_status`-style per-oracle
+    /// queries, or read the `OracleRegistration` directly, to check whether a
+    /// specific oracle is currently eligible to vote.
+    pub fn get_registered_oracle_count(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        let set: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleSet)
+            .unwrap_or(Vec::new(&env));
+        set.len()
+    }
+
+    /// Returns performance metrics and SLA status for a registered oracle.
+    pub fn get_oracle_metrics(env: Env, oracle_address: Address) -> OracleMetrics {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OracleMetrics(oracle_address))
+            .unwrap_or(OracleMetrics {
+                last_response_time_ms: 0,
+                avg_response_time_ms: 0,
+                uptime_percentage: 100,
+                total_submissions: 0,
+                successful_submissions: 0,
+                active: true,
+            })
+    }
+
+    /// Admin-only function to deactivate an oracle whose average response time exceeds the SLA target (> 5s).
+    pub fn deactivate_slow_oracle(env: Env, oracle_address: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let mut metrics: OracleMetrics = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleMetrics(oracle_address.clone()))
+            .ok_or(Error::ResultNotFound)?;
+
+        if metrics.avg_response_time_ms <= SLA_MAX_RESPONSE_TIME_MS {
+            return Err(Error::OracleNotSlow);
+        }
+
+        metrics.active = false;
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleMetrics(oracle_address.clone()), &metrics);
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("deact")),
+            oracle_address,
+        );
+
+        Ok(())
+    }
+
+    fn update_oracle_metrics(
+        env: &Env,
+        oracle: &Address,
+        response_time_ms: u64,
+    ) -> Result<(), Error> {
+        let mut metrics: OracleMetrics = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleMetrics(oracle.clone()))
+            .unwrap_or(OracleMetrics {
+                last_response_time_ms: 0,
+                avg_response_time_ms: 0,
+                uptime_percentage: 100,
+                total_submissions: 0,
+                successful_submissions: 0,
+                active: true,
+            });
+
+        if !metrics.active {
+            return Err(Error::OracleDeactivated);
+        }
+
+        metrics.last_response_time_ms = response_time_ms;
+        let new_total = metrics.total_submissions.saturating_add(1);
+        let prev_sum = (metrics.avg_response_time_ms as u128) * (metrics.total_submissions as u128);
+        let new_sum = prev_sum + (response_time_ms as u128);
+        metrics.avg_response_time_ms = (new_sum / (new_total as u128)) as u64;
+        metrics.total_submissions = new_total;
+
+        if response_time_ms <= SLA_MAX_RESPONSE_TIME_MS {
+            metrics.successful_submissions = metrics.successful_submissions.saturating_add(1);
+        }
+
+        metrics.uptime_percentage =
+            (((metrics.successful_submissions as u64) * 100) / (new_total as u64)) as u32;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleMetrics(oracle.clone()), &metrics);
+        env.storage().persistent().extend_ttl(
+            &DataKey::OracleMetrics(oracle.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Ok(())
+    }
+
+    /// Return the in-progress consensus tally for a match: every distinct
+    /// candidate result submitted so far and whether the match has deadlocked
+    /// into a disputed state. Returns `None` once the match is finalized
+    /// (its tally is cleared) or if no oracle has voted on it yet.
+    pub fn get_match_votes(env: Env, match_id: u64) -> Option<ConsensusState> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::MatchVotes(match_id))
+    }
+
+    /// Read the configured consensus threshold, defaulting to 1.
+    fn consensus_threshold(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::ConsensusThreshold)
+            .unwrap_or(DEFAULT_CONSENSUS_THRESHOLD)
+    }
+
+    /// Count registered oracles that (a) still hold a positive stake and
+    /// (b) have not yet voted on `match_id` — the maximum number of
+    /// additional votes any candidate could still receive. Used to detect an
+    /// irreconcilable deadlock: if no candidate's current tally plus this
+    /// count can reach the threshold, consensus is no longer achievable.
+    fn remaining_eligible_oracles(env: &Env, match_id: u64) -> u32 {
+        let set: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleSet)
+            .unwrap_or(Vec::new(env));
+
+        let mut remaining = 0u32;
+        for i in 0..set.len() {
+            let addr = set.get(i).unwrap();
+            if env
+                .storage()
+                .persistent()
+                .has(&DataKey::OracleVote(match_id, addr.clone()))
+            {
+                continue;
+            }
+            if let Some(registration) = env
+                .storage()
+                .instance()
+                .get::<_, OracleRegistration>(&DataKey::OracleRegistration(addr))
+            {
+                if registration.oracle_stake > 0 {
+                    remaining += 1;
+                }
+            }
+        }
+        remaining
+    }
+
+    /// Slash `bps` basis points of `oracle`'s remaining stake, transferring
+    /// the slashed amount to the admin (treasury). No-op if the oracle is not
+    /// registered or has no remaining stake. Returns the amount slashed.
+    fn slash_bps(env: &Env, oracle: &Address, bps: i128) -> i128 {
+        let key = DataKey::OracleRegistration(oracle.clone());
+        let mut registration: OracleRegistration = match env.storage().instance().get(&key) {
+            Some(r) => r,
+            None => return 0,
+        };
+        if registration.oracle_stake <= 0 {
+            return 0;
+        }
+
+        let amount = (registration.oracle_stake * bps) / 10_000;
+        let amount = amount.clamp(0, registration.oracle_stake);
+        if amount == 0 {
+            return 0;
+        }
+
+        registration.oracle_stake -= amount;
+        let token = registration.token.clone();
+        env.storage().instance().set(&key, &registration);
+
+        if let Some(admin) = env.storage().instance().get::<_, Address>(&DataKey::Admin) {
+            let token_client = token::Client::new(env, &token);
+            token_client.transfer(&env.current_contract_address(), &admin, &amount);
+        }
+
+        amount
     }
 
     /// Retrieve the stored result for a match.    /// TTL is extended on every read to prevent active results from expiring.
@@ -278,6 +1053,41 @@ impl OracleContract {
         Ok(env.storage().persistent().has(&DataKey::Result(match_id)))
     }
 
+    /// Return cached result for a game if available and not expired.
+    /// Returns `Some((result, expiry_timestamp))` if a valid non-expired cache entry exists,
+    /// or `None` if missing or expired.
+    pub fn get_cached_result(
+        env: Env,
+        game_id: String,
+        platform: Platform,
+    ) -> Option<(Winner, u64)> {
+        extend_instance_ttl(&env);
+        let cache_key = DataKey::OracleCache(game_id, platform);
+        if let Some((result, expiry)) = env
+            .storage()
+            .persistent()
+            .get::<_, (Winner, u64)>(&cache_key)
+        {
+            let now = env.ledger().timestamp();
+            if now >= expiry {
+                env.storage().persistent().remove(&cache_key);
+                None
+            } else {
+                Some((result, expiry))
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Invalidate/remove a cached result for a specific game and platform.
+    pub fn invalidate_cache(env: Env, game_id: String, platform: Platform) {
+        extend_instance_ttl(&env);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::OracleCache(game_id, platform));
+    }
+
     /// Return the admin address stored in the contract.
     ///
     /// # Errors
@@ -315,9 +1125,15 @@ impl OracleContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        if !env.storage().persistent().has(&DataKey::Result(match_id)) {
-            return Err(Error::ResultNotFound);
-        }
+        let entry: ResultEntry = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Result(match_id))
+            .ok_or(Error::ResultNotFound)?;
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::OracleCache(entry.game_id, entry.platform));
 
         env.storage()
             .persistent()
@@ -611,6 +1427,137 @@ impl OracleContract {
                 (oracle.clone(), window_label, used, limit),
             );
         }
+    }
+
+    pub fn set_rate(
+        env: Env,
+        token_a: Address,
+        token_b: Address,
+        rate: i128,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if rate <= 0 {
+            return Err(Error::InvalidRateLimit);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Rate(token_a.clone(), token_b.clone()), &rate);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Rate(token_a, token_b),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        Ok(())
+    }
+
+    pub fn get_rate(
+        env: Env,
+        token_a: Address,
+        token_b: Address,
+    ) -> Result<i128, Error> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::Rate(token_a, token_b))
+            .ok_or(Error::ResultNotFound)
+    }
+
+    /// Atomically swap `token_in` for `token_out` using an on-chain exchange rate.
+    ///
+    /// # Flow (atomic, single transaction):
+    /// 1. Caller authorizes the swap and provides `amount_in` via `caller.require_auth()`.
+    /// 2. Compute `amount_out` using the stored rate between `token_in` and `token_out`.
+    /// 3. Verify `amount_out ≥ min_amount_out` (slippage bound).
+    /// 4. Transfer `amount_in` of `token_in` **from the caller** into the contract.
+    /// 5. Transfer `amount_out` of `token_out` **from the contract** to the recipient.
+    ///
+    /// If step 3 or 4 fails, the transaction aborts with no state changes (checks-effects-interactions).
+    ///
+    /// # Parameters
+    /// - `caller: Address` — the account authorizing and providing `token_in`.
+    /// - `token_in: Address` — the token contract for the input token.
+    /// - `token_out: Address` — the token contract for the output token.
+    /// - `amount_in: i128` — quantity of `token_in` the caller provides. Must be > 0.
+    /// - `min_amount_out: i128` — minimum `token_out` acceptable to the caller.
+    ///   If the computed `amount_out` is less, the swap is rejected.
+    /// - `recipient: Address` — address to receive `amount_out` of `token_out`.
+    ///
+    /// # Errors
+    /// - [`Error::InvalidAmount`] — `amount_in` ≤ 0.
+    /// - [`Error::ResultNotFound`] — no rate exists for the `(token_in, token_out)` pair.
+    /// - [`Error::Overflow`] — numeric overflow during rate multiplication/division.
+    /// - [`Error::SlippageExceeded`] — computed `amount_out` < `min_amount_out`.
+    pub fn swap(
+        env: Env,
+        caller: Address,
+        token_in: Address,
+        token_out: Address,
+        amount_in: i128,
+        min_amount_out: i128,
+        recipient: Address,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        // Caller must authorize and provide token_in.
+        caller.require_auth();
+
+        if amount_in <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        // Look up the exchange rate (token_out per token_in, scaled 1e7).
+        let amount_out = if let Some(rate) = env
+            .storage()
+            .persistent()
+            .get::<_, i128>(&DataKey::Rate(token_out.clone(), token_in.clone()))
+        {
+            // Rate is token_out/token_in; compute amount_in * rate / 1e7
+            let amt = amount_in
+                .checked_mul(rate)
+                .ok_or(Error::Overflow)?
+                .checked_div(10_000_000)
+                .ok_or(Error::Overflow)?;
+            if amt < min_amount_out {
+                return Err(Error::SlippageExceeded);
+            }
+            amt
+        } else if let Some(rate) = env
+            .storage()
+            .persistent()
+            .get::<_, i128>(&DataKey::Rate(token_in.clone(), token_out.clone()))
+        {
+            // Rate is token_in/token_out; compute amount_in * 1e7 / rate
+            let amt = amount_in
+                .checked_mul(10_000_000)
+                .ok_or(Error::Overflow)?
+                .checked_div(rate)
+                .ok_or(Error::Overflow)?;
+            if amt < min_amount_out {
+                return Err(Error::SlippageExceeded);
+            }
+            amt
+        } else {
+            return Err(Error::ResultNotFound);
+        };
+
+        // Checks passed. Now effects (atomic): collect token_in, then transfer token_out.
+        // Order matters: collect first, then distribute (checks-effects-interactions).
+
+        let client_in = soroban_sdk::token::Client::new(&env, &token_in);
+        client_in.transfer(&caller, &env.current_contract_address(), &amount_in);
+
+        let client_out = soroban_sdk::token::Client::new(&env, &token_out);
+        client_out.transfer(&env.current_contract_address(), &recipient, &amount_out);
+
+        Ok(())
     }
 }
 

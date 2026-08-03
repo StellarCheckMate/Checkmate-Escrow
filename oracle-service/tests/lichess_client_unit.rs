@@ -1,4 +1,4 @@
-use oracle_service::oracle::{ChessComError, LichessClient, LichessGameResult};
+use oracle_service::oracle::{LichessClient, LichessError, LichessGameResult};
 
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -109,7 +109,7 @@ async fn fetch_result_404_maps_to_game_not_found() {
     .unwrap();
 
     let err = client.fetch_result("notfound").await.unwrap_err();
-    assert!(matches!(err, ChessComError::GameNotFound));
+    assert!(matches!(err, LichessError::GameNotFound));
 }
 
 #[tokio::test]
@@ -131,5 +131,100 @@ async fn fetch_result_unknown_winner_errors() {
     .unwrap();
 
     let err = client.fetch_result("unk12345").await.unwrap_err();
-    assert!(matches!(err, ChessComError::InvalidResponse));
+    assert!(matches!(err, LichessError::InvalidResponse));
+}
+
+#[tokio::test]
+async fn fetch_result_non_2xx_maps_to_http_status() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/game/export/err12345"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let client = LichessClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+
+    let err = client.fetch_result("err12345").await.unwrap_err();
+    assert!(matches!(err, LichessError::HttpStatus { .. }));
+}
+
+#[tokio::test]
+async fn test_lichess_missing_winner_field() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/game/export/miss1234"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "finished"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = LichessClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+
+    let err = client.fetch_result("miss1234").await.unwrap_err();
+    assert!(matches!(err, LichessError::InvalidResponse));
+}
+
+#[tokio::test]
+async fn test_lichess_rate_limit_retry() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/game/export/rate1234"))
+        .respond_with(ResponseTemplate::new(429).append_header("Retry-After", "1"))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/game/export/rate1234"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "winner": "white"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = LichessClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+
+    let start = std::time::Instant::now();
+    let result = client.fetch_result("rate1234").await;
+    let elapsed = start.elapsed();
+
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().winner, contracts_oracle::types::Winner::Player1);
+}
+
+#[tokio::test]
+async fn test_lichess_game_not_found() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/game/export/notfnd1"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let client = LichessClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+
+    let err = client.fetch_result("notfnd1").await.unwrap_err();
+    assert!(matches!(err, LichessError::GameNotFound));
 }

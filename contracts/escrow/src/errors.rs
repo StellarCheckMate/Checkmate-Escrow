@@ -1,5 +1,15 @@
 use soroban_sdk::contracterror;
 
+/// Escrow contract error codes and variants.
+///
+/// Every error is represented as a small integer (`u32`) discriminant. When a contract call fails,
+/// the CLI/SDK returns something like `Error(Contract, #4)`.
+///
+/// **For the complete error reference with causes, recovery actions, and examples,**
+/// **see [`docs/error-codes.md`](../../../docs/error-codes.md).**
+///
+/// This document is kept in lockstep with this enum — if you add or remove a variant,
+/// update `docs/error-codes.md` in the same PR.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -13,8 +23,13 @@ pub enum Error {
     Overflow = 8,
     ContractPaused = 9,
     InvalidAmount = 10,
-    MatchCancelled = 11,
-    MatchCompleted = 12,
+    /// `dispute_and_rollback_match` was called after the 24h heartbeat window
+    /// had elapsed — outside the timeframe within which a player may dispute
+    /// a connection-loss result against an active match.
+    RollbackWindowExpired = 11,
+    /// `dispute_and_rollback_match` was called with an empty `reason` or a
+    /// `reason` longer than `MAX_REASON_LEN`.
+    ReasonTooLong = 12,
     DuplicateGameId = 13,
     MatchNotExpired = 14,
     InvalidGameId = 15,
@@ -24,12 +39,42 @@ pub enum Error {
     MatchAlreadyActive = 19,
     InvalidTimeout = 20,
     SnapshotNotFound = 21,
+    VestingNotExpired = 22,
+    AlreadyClaimed = 23,
+    DisputeNotFound = 24,
+    PendingResultNotFound = 25,
+    DisputeAlreadyResolved = 26,
+    VotingPeriodElapsed = 27,
+    AlreadyVoted = 28,
+    NotStaker = 29,
+    VotingPeriodNotElapsed = 30,
+    MatchNotInPendingResult = 31,
+    DisputePeriodNotElapsed = 32,
+    DisputeAlreadyRaised = 33,
+    InvalidEvidenceHash = 34,
+    TierStakeNotAllowed = 35,
+    NotInitialized = 36,
+    InvalidPauseState = 37,
+    InvalidConversionRate = 38,
+    ConversionRateOutOfBounds = 39,
+    ConversionRateStalePriceSource = 40,
+    InsufficientBond = 41,
+    QuorumNotMet = 42,
+    InsufficientHoldingDuration = 43,
+    OracleSlashFailed = 44,
+    TooManyActiveMatches = 45,
+    /// Token is not issued by a registered stablecoin issuer and stablecoin-only mode is enabled.
+    NotStablecoin = 46,
+    UpgradeNotScheduled = 47,
+    UpgradeReviewPeriodNotElapsed = 48,
+    InvalidVersion = 49,
+    UpgradeAlreadyScheduled = 50,
     /// Oracle has already submitted a confirmation for this match.
-    OracleAlreadyConfirmed = 22,
+    OracleAlreadyConfirmed = 51,
     /// Oracle submitted a result that conflicts with a previously recorded majority result.
-    ConflictingResult = 23,
+    ConflictingResult = 52,
     /// The required number of oracle confirmations has not been reached yet.
-    NotEnoughConfirmations = 24,
+    NotEnoughConfirmations = 53,
     /// The caller is not a registered oracle.
-    NotAnOracle = 25,
+    NotAnOracle = 54,
 }

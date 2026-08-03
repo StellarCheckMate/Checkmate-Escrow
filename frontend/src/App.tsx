@@ -1,9 +1,16 @@
 import { useWallet } from './hooks/useWallet'
 import { WalletConnector } from './components/wallet/WalletConnector'
+import { AdminPanel } from './pages/AdminPanel'
 import './App.css'
 
 function App() {
   const wallet = useWallet()
+  const isAdmin = new URLSearchParams(window.location.search).get('admin') === '1'
+    || window.location.pathname === '/admin'
+
+  if (isAdmin) {
+    return <AdminPanel wallet={wallet} />
+  }
 
   return (
     <main id="landing">

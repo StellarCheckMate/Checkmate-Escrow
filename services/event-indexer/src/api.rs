@@ -1,27 +1,67 @@
+//! REST API server.
+//!
+//! All query handlers use `db.query_*` methods which route through the
+//! **read pool** (`read_pool` in `Database`).  If a read-replica DSN is
+//! configured (`DATABASE_READ_URL`), read traffic is automatically spread
+//! across replicas without any code changes here.
+//!
+//! ## Response caching
+//! The high-traffic read endpoints are memoised in [`crate::api_cache`]:
+//! the match list for 10 s, a single match for 5 s and analytics for 60 s.
+//! Match entries are invalidated eagerly by the poller whenever a contract
+//! event for that match is ingested, so a state change never waits for a TTL.
+//! Cache failures are logged and treated as misses — a cache outage costs
+//! latency, never correctness.
+//!
+//! ## Input validation
+//! Every request passes through [`crate::validation::validate_request`] before
+//! reaching a handler, so malformed addresses, amounts, ids, dates and page
+//! windows are answered with a `400` and a field-scoped message instead of
+//! reaching the database.  Handlers re-validate the values they need to parse;
+//! validation is idempotent.
+
 use axum::{
-    extract::{Query, Path, State},
-    http::StatusCode,
-    routing::{get, post},
+    async_trait,
+    extract::{rejection::QueryRejection, FromRequestParts, Path, Query, Request, State},
+    http::{header, request::Parts, StatusCode},
+    middleware::Next,
+    response::{Html, IntoResponse, Response},
+    routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::info;
 
 use crate::{
+    api_cache::{self, ApiCache},
     cache::EventCache,
     db::Database,
-    models::{IndexedEvent, MatchInfo, QueryFilters, MatchStatus},
+    models::{AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters, TokenAnalytics},
+    request_id,
     rpc::SorobanRpcClient,
+    transactions::{
+        SortOrder, TransactionHistoryFilters, TransactionPage, TransactionSortField,
+        DEFAULT_PAGE_LIMIT,
+    },
+    validation::{self, ValidationError},
 };
+
+// ── State ─────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 pub struct AppState {
-    db: Arc<Database>,
-    cache: Arc<RwLock<EventCache>>,
-    rpc: Arc<SorobanRpcClient>,
+    pub db: Arc<Database>,
+    pub cache: Arc<RwLock<EventCache>>,
+    pub rpc: Arc<SorobanRpcClient>,
+    /// Shared TTL response cache (Redis, or process-local when unconfigured).
+    pub api_cache: Arc<ApiCache>,
 }
+
+// ── Response envelope ─────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
 pub struct ApiResponse<T> {
@@ -30,26 +70,160 @@ pub struct ApiResponse<T> {
     pub error: Option<String>,
 }
 
+// ── Custom query extractor ────────────────────────────────────────────────────
+
+/// A custom `Query` extractor that returns a `400 ApiResponse` on
+/// deserialization failure instead of axum's default 422 plain-text body.
+pub struct TypedQuery<T>(pub T);
+
+#[async_trait]
+impl<T, S> FromRequestParts<S> for TypedQuery<T>
+where
+    T: serde::de::DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, Json<ApiResponse<()>>);
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        axum::extract::Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|axum::extract::Query(inner)| TypedQuery(inner))
+            .map_err(|e: QueryRejection| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        error: Some(format!("Invalid query parameter: {}", e.body_text())),
+                    }),
+                )
+            })
+    }
+}
+
+// ── Query param types ─────────────────────────────────────────────────────────
+
 #[derive(Deserialize)]
 pub struct EventQuery {
     pub player_address: Option<String>,
-    pub status: Option<String>,
+    pub status: Option<MatchStatus>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
+
+#[derive(Deserialize)]
+pub struct MatchQuery {
+    pub status: Option<MatchStatus>,
+}
+
+#[derive(Deserialize)]
+pub struct PaginationQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct ActiveMatchesQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct AnalyticsQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub start_date: Option<chrono::DateTime<chrono::Utc>>,
+    pub end_date: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Transaction-history query parameters.
+///
+/// Every field is received as a raw string so the validators can produce a
+/// field-scoped message instead of serde's generic "failed to deserialize"
+/// rejection.
+#[derive(Deserialize, Default)]
+pub struct TransactionHistoryQuery {
+    pub from_date: Option<String>,
+    pub to_date: Option<String>,
+    pub limit: Option<String>,
+    pub offset: Option<String>,
+    /// Accepted as either `type` (documented) or `tx_type`.
+    #[serde(alias = "type")]
+    pub tx_type: Option<String>,
+    pub token: Option<String>,
+    pub sort_by: Option<String>,
+    #[serde(alias = "order")]
+    pub sort_order: Option<String>,
+}
+
+// ── Structured request logging ─────────────────────────────────────────────────
+
+/// Logs one structured JSON line per request: `request_id`, `method`, `path`,
+/// `status_code` and `duration_ms`, alongside the `timestamp`/`level` every
+/// `tracing-subscriber` JSON line already carries. Wraps every other layer so
+/// the recorded status and duration reflect what the caller actually saw,
+/// including responses short-circuited by [`validation::validate_request`].
+async fn request_logging_middleware(req: Request, next: Next) -> Response {
+    let start = Instant::now();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+
+    let response = next.run(req).await;
+
+    let duration_ms = start.elapsed().as_millis();
+    let status_code = response.status().as_u16();
+
+    info!(
+        request_id = %request_id,
+        method = %method,
+        path = %path,
+        status_code = status_code,
+        duration_ms = duration_ms,
+        "request completed"
+    );
+
+    response
+}
+
+// ── Router ────────────────────────────────────────────────────────────────────
 
 pub fn build_router(
     db: Arc<Database>,
     cache: Arc<RwLock<EventCache>>,
     rpc: Arc<SorobanRpcClient>,
+    api_cache: Arc<ApiCache>,
 ) -> Router {
-    let state = AppState { db, cache, rpc };
+    let state = AppState {
+        db,
+        cache,
+        rpc,
+        api_cache,
+    };
     Router::new()
         .route("/health", get(health_check))
+        .route("/api/docs", get(api_docs_ui))
+        .route("/api/openapi.yaml", get(api_openapi_yaml))
         .route("/events", get(get_events))
         .route("/events/:match_id", get(get_match_events))
+        .route("/matches", get(get_matches))
+        .route("/matches/active", get(get_active_matches))
+        .route("/matches/pending", get(get_pending_matches))
         .route("/match/:match_id", get(get_match_info))
+        .route("/players/:address/matches", get(get_player_matches))
+        .route(
+            "/transactions/player/:player_address",
+            get(get_player_transactions),
+        )
         .route("/stats", get(get_stats))
+        // Request ID middleware must run first (outermost) to capture all requests
+        .layer(axum::middleware::from_fn(request_id::request_id_middleware))
+        // Validation runs before routing dispatches to a handler, so malformed
+        // input never reaches the database.
+        .layer(axum::middleware::from_fn(validation::validate_request))
+        // Outermost layer: logs every request, including ones rejected by
+        // validation above, with the status and latency the caller observed.
+        .layer(axum::middleware::from_fn(request_logging_middleware))
         .with_state(state)
 }
 
@@ -59,10 +233,12 @@ pub async fn start_server(
     db: Arc<Database>,
     cache: Arc<RwLock<EventCache>>,
     rpc: Arc<SorobanRpcClient>,
+    api_cache: Arc<ApiCache>,
 ) -> anyhow::Result<()> {
-    let app = build_router(db, cache, rpc);
+    let app = build_router(db, cache, rpc, api_cache);
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind_addr, bind_port)).await?;
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", bind_addr, bind_port)).await?;
 
     info!("API server listening on {}:{}", bind_addr, bind_port);
 
@@ -71,35 +247,73 @@ pub async fn start_server(
     Ok(())
 }
 
-async fn health_check() -> Json<ApiResponse<String>> {
-    Json(ApiResponse {
-        success: true,
-        data: Some("Event Indexer is healthy".to_string()),
-        error: None,
-    })
+// ── Handlers ──────────────────────────────────────────────────────────────────
+
+/// `GET /api/docs` — serves the Swagger UI HTML page.
+///
+/// The HTML page loads `swagger-ui-dist` from unpkg CDN and points it at
+/// `/api/openapi.yaml` so the interactive docs always reflect the canonical
+/// schema bundled with the service binary.
+async fn api_docs_ui() -> Html<&'static str> {
+    Html(include_str!("../../../../docs/swagger-ui.html"))
 }
 
+/// `GET /api/openapi.yaml` — serves the raw OpenAPI 3.0 schema.
+///
+/// Swagger UI (and any other tooling) fetches this file to render the
+/// interactive documentation. Clients can also download it directly for
+/// code-generation or schema validation.
+async fn api_openapi_yaml() -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/yaml")],
+        include_str!("../../../../docs/openapi.yaml"),
+    )
+        .into_response()
+}
+
+/// `GET /health` – health check for load balancers and monitoring tools.
+///
+/// Checks both database and RPC connectivity.
+/// Returns 200 OK with status "ok" when healthy.
+/// Returns 503 Service Unavailable with status "degraded" when RPC is unreachable.
+async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    let db_reachable = state.db.ping().await.is_ok();
+    let rpc_reachable = state.rpc.get_ledger().await.is_ok();
+
+    let (status_code, status_str) = if db_reachable && rpc_reachable {
+        (StatusCode::OK, "ok")
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "degraded")
+    };
+
+    (
+        status_code,
+        Json(HealthResponse {
+            status: status_str.to_string(),
+            db_reachable,
+            rpc_reachable,
+        }),
+    )
+}
+
+/// `GET /events` – query events with optional filters.
+///
+/// All filtering and sorting happens via the **read pool** so this endpoint
+/// scales horizontally when `DATABASE_READ_URL` points to a replica.
 async fn get_events(
     State(state): State<AppState>,
-    Query(query): Query<EventQuery>,
+    TypedQuery(query): TypedQuery<EventQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<IndexedEvent>>>) {
     let filters = QueryFilters {
         player_address: query.player_address,
-        status: query.status.as_ref().map(|s| match s.as_str() {
-            "pending" => MatchStatus::Pending,
-            "active" => MatchStatus::Active,
-            "completed" => MatchStatus::Completed,
-            "cancelled" => MatchStatus::Cancelled,
-            "expired" => MatchStatus::Expired,
-            _ => MatchStatus::Pending,
-        }),
+        status: query.status,
         start_date: None,
         end_date: None,
         limit: query.limit.or(Some(100)),
         offset: query.offset,
     };
 
-    match state.db.query_events(&filters) {
+    match state.db.query_events(&filters).await {
         Ok(events) => {
             if events.is_empty() {
                 (
@@ -132,26 +346,38 @@ async fn get_events(
     }
 }
 
+/// `GET /events/:match_id` – events for a single match with cache-first lookup.
 async fn get_match_events(
     State(state): State<AppState>,
     Path(match_id): Path<u64>,
+    Query(pagination): Query<PaginationQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<IndexedEvent>>>) {
-    let cache_lock = state.cache.read().await;
-    let cached_events = cache_lock.get_by_match(match_id);
-    drop(cache_lock);
+    let limit = pagination.limit.unwrap_or(100);
+    let offset = pagination.offset.unwrap_or(0);
 
-    if !cached_events.is_empty() {
-        return (
-            StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(cached_events),
-                error: None,
-            }),
-        );
+    // Cache-first: only bypass cache when explicit pagination params are given.
+    if pagination.limit.is_none() && pagination.offset.is_none() {
+        let cache_lock = state.cache.read().await;
+        let cached_events = cache_lock.get_by_match(match_id);
+        drop(cache_lock);
+
+        if !cached_events.is_empty() {
+            return (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(cached_events),
+                    error: None,
+                }),
+            );
+        }
     }
 
-    match state.db.get_events_by_match(match_id) {
+    match state
+        .db
+        .get_events_by_match_paginated(match_id, limit, offset)
+        .await
+    {
         Ok(events) => {
             if events.is_empty() {
                 (
@@ -184,19 +410,188 @@ async fn get_match_events(
     }
 }
 
+/// `GET /matches` – list matches, optionally filtered by status.
+///
+/// Cached for 10 seconds (`get_pending_matches` is the hot caller). Building the
+/// list fans out one `build_match_info` query per match, so this is the most
+/// expensive read the service serves and the one that benefits most from
+/// memoisation.
+async fn get_matches(
+    State(state): State<AppState>,
+    TypedQuery(query): TypedQuery<MatchQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
+    let status = query.status;
+    let cache_key = api_cache::matches_key(status.as_ref());
+
+    if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(cached),
+                error: None,
+            }),
+        );
+    }
+
+    match state.db.get_matches_by_status(status.as_ref()).await {
+        Ok(matches) => {
+            state
+                .api_cache
+                .set_json(&cache_key, &matches, api_cache::pending_matches_ttl())
+                .await;
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(matches),
+                    error: None,
+                }),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /matches/active` – list all active matches with pagination support.
+///
+/// Accepts `limit` (default 50) and `offset` (default 0) query parameters.
+/// Returns an empty array when no active matches exist.
+async fn get_active_matches(
+    State(state): State<AppState>,
+    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
+    let cache_key = api_cache::matches_key(Some(&MatchStatus::Active));
+
+    if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(cached),
+                error: None,
+            }),
+        );
+    }
+
+    match state.db.get_matches_by_status(Some(&MatchStatus::Active)).await {
+        Ok(matches) => {
+            state
+                .api_cache
+                .set_json(&cache_key, &matches, api_cache::pending_matches_ttl())
+                .await;
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(matches),
+                    error: None,
+                }),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /matches/pending` – list all pending matches with pagination support.
+///
+/// Accepts `limit` (default 50) and `offset` (default 0) query parameters.
+/// Returns an empty array when no pending matches exist.
+async fn get_pending_matches(
+    State(state): State<AppState>,
+    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
+    let cache_key = api_cache::matches_key(Some(&MatchStatus::Pending));
+
+    if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(cached),
+                error: None,
+            }),
+        );
+    }
+
+    match state.db.get_matches_by_status(Some(&MatchStatus::Pending)).await {
+        Ok(matches) => {
+            state
+                .api_cache
+                .set_json(&cache_key, &matches, api_cache::pending_matches_ttl())
+                .await;
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(matches),
+                    error: None,
+                }),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /match/:match_id` – full match summary with all events.
+///
+/// Cached for 5 seconds and invalidated eagerly on any contract event for this
+/// match, so the TTL only bounds staleness for matches nothing is happening to.
+/// Only successful lookups are cached — a `404` for a match that is about to be
+/// indexed must not be sticky.
 async fn get_match_info(
     State(state): State<AppState>,
     Path(match_id): Path<u64>,
 ) -> (StatusCode, Json<ApiResponse<MatchInfo>>) {
-    match state.db.build_match_info(match_id) {
-        Ok(Some(match_info)) => (
+    let cache_key = api_cache::match_key(match_id);
+
+    if let Some(cached) = state.api_cache.get_json::<MatchInfo>(&cache_key).await {
+        return (
             StatusCode::OK,
             Json(ApiResponse {
                 success: true,
-                data: Some(match_info),
+                data: Some(cached),
                 error: None,
             }),
-        ),
+        );
+    }
+
+    match state.db.build_match_info(match_id).await {
+        Ok(Some(match_info)) => {
+            state
+                .api_cache
+                .set_json(&cache_key, &match_info, api_cache::match_ttl())
+                .await;
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(match_info),
+                    error: None,
+                }),
+            )
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiResponse {
@@ -216,25 +611,340 @@ async fn get_match_info(
     }
 }
 
-#[derive(Serialize)]
+/// `GET /matches/:match_id` – single match lookup endpoint for frontends.
+///
+/// Returns the full match object including current state.
+/// Returns 404 with descriptive message if the match does not exist.
+///
+/// Cached for 5 seconds and invalidated eagerly on any contract event for this
+/// match, so the TTL only bounds staleness for matches nothing is happening to.
+/// Only successful lookups are cached — a `404` for a match that is about to be
+/// indexed must not be sticky.
+async fn get_match_by_id(
+    State(state): State<AppState>,
+    Path(match_id): Path<u64>,
+) -> (StatusCode, Json<ApiResponse<MatchInfo>>) {
+    let cache_key = api_cache::match_key(match_id);
+
+    if let Some(cached) = state.api_cache.get_json::<MatchInfo>(&cache_key).await {
+        return (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(cached),
+                error: None,
+            }),
+        );
+    }
+
+    match state.db.build_match_info(match_id).await {
+        Ok(Some(match_info)) => {
+            state
+                .api_cache
+                .set_json(&cache_key, &match_info, api_cache::match_ttl())
+                .await;
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(match_info),
+                    error: None,
+                }),
+            )
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Match {} not found", match_id)),
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+// ── Transaction history ───────────────────────────────────────────────────────
+
+/// `GET /transactions/player/:player_address` – a player's financial history.
+///
+/// Query parameters: `from_date`, `to_date`, `type` (`deposit`|`payout`|`fee`),
+/// `token`, `limit` (default 100, max 1000), `offset`, `sort_by`
+/// (`timestamp`|`amount`|`match_id`|`type`) and `sort_order` (`asc`|`desc`).
+///
+/// Not cached: the response is per-player and per-filter, so the hit rate would
+/// be poor while the staleness would be user-visible.
+async fn get_player_transactions(
+    State(state): State<AppState>,
+    Path(player_address): Path<String>,
+    TypedQuery(query): TypedQuery<TransactionHistoryQuery>,
+) -> (StatusCode, Json<ApiResponse<TransactionPage>>) {
+    let filters = match build_transaction_filters(&player_address, &query) {
+        Ok(filters) => filters,
+        Err(e) => {
+            let (status, Json(body)) = e.into_response_tuple();
+            return (
+                status,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: body.error,
+                }),
+            );
+        }
+    };
+
+    match state.db.query_player_transactions(&filters).await {
+        // An empty history is a valid answer, not a 404: the player may simply
+        // have no transactions in the requested window.
+        Ok((transactions, total)) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(TransactionPage::new(
+                    transactions,
+                    total,
+                    filters.limit,
+                    filters.offset,
+                )),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// Validate and convert raw history query parameters into typed filters.
+///
+/// Exposed within the crate so the tests can exercise the conversion (including
+/// every rejection message) without standing up a database.
+pub fn build_transaction_filters(
+    player_address: &str,
+    query: &TransactionHistoryQuery,
+) -> Result<TransactionHistoryFilters, ValidationError> {
+    let player = validation::validate_account_address("player_address", player_address)?;
+
+    let mut filters = TransactionHistoryFilters::new(player);
+
+    if let Some(raw) = non_empty(&query.tx_type) {
+        filters.tx_type = Some(validation::validate_transaction_type("type", raw)?);
+    }
+
+    if let Some(raw) = non_empty(&query.token) {
+        filters.token = Some(validation::validate_token("token", raw)?);
+    }
+
+    if let Some(raw) = non_empty(&query.from_date) {
+        filters.from_date = Some(validation::validate_date("from_date", raw)?);
+    }
+
+    if let Some(raw) = non_empty(&query.to_date) {
+        filters.to_date = Some(validation::validate_date("to_date", raw)?);
+    }
+
+    validation::validate_date_range(filters.from_date, filters.to_date)?;
+
+    filters.limit = match non_empty(&query.limit) {
+        Some(raw) => validation::validate_limit("limit", raw)?,
+        None => DEFAULT_PAGE_LIMIT,
+    };
+
+    filters.offset = match non_empty(&query.offset) {
+        Some(raw) => validation::validate_offset("offset", raw)?,
+        None => 0,
+    };
+
+    filters.sort_by = match non_empty(&query.sort_by) {
+        Some(raw) => validation::validate_sort_by("sort_by", raw)?,
+        None => TransactionSortField::Timestamp,
+    };
+
+    filters.sort_order = match non_empty(&query.sort_order) {
+        Some(raw) => validation::validate_sort_order("sort_order", raw)?,
+        None => SortOrder::Desc,
+    };
+
+    Ok(filters)
+}
+
+/// Treat a blank query value as absent, matching how an omitted field behaves.
+fn non_empty(value: &Option<String>) -> Option<&str> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
 pub struct Stats {
     pub total_events: i64,
     pub cache_size: usize,
 }
 
+#[derive(Serialize)]
+pub struct PlayerMatchesResponse {
+    pub matches: Vec<MatchInfo>,
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+/// `GET /stats` – service-level statistics.
+///
+/// Cached for 60 seconds: the counters are aggregates over the whole event table
+/// and no caller needs them fresher than a minute.  The cached value is
+/// invalidated whenever a contract event is ingested, so an idle service still
+/// reports accurate numbers immediately after new activity.
 async fn get_stats(State(state): State<AppState>) -> Json<ApiResponse<Stats>> {
+    let cache_key = api_cache::analytics_key(api_cache::ANALYTICS_STATS);
+
+    if let Some(cached) = state.api_cache.get_json::<Stats>(&cache_key).await {
+        return Json(ApiResponse {
+            success: true,
+            data: Some(cached),
+            error: None,
+        });
+    }
+
     let cache_lock = state.cache.read().await;
     let cache_size = cache_lock.size();
     drop(cache_lock);
 
-    let total_events = state.db.total_event_count().unwrap_or(0);
+    let total_events = state.db.total_event_count().await.unwrap_or(0);
+
+    let stats = Stats {
+        total_events,
+        cache_size,
+    };
+
+    state
+        .api_cache
+        .set_json(&cache_key, &stats, api_cache::analytics_ttl())
+        .await;
 
     Json(ApiResponse {
         success: true,
-        data: Some(Stats {
-            total_events,
-            cache_size,
-        }),
+        data: Some(stats),
         error: None,
     })
+}
+
+// ── Analytics ─────────────────────────────────────────────────────────────────
+
+/// `GET /analytics/overview` — platform-wide aggregate statistics.
+///
+/// Optional query params:
+/// - `start_date` / `end_date` — ISO-8601 timestamps for time-range filtering.
+async fn analytics_overview(
+    State(state): State<AppState>,
+    TypedQuery(query): TypedQuery<AnalyticsQuery>,
+) -> (StatusCode, Json<ApiResponse<AnalyticsOverview>>) {
+    match state.db.analytics_overview(query.start_date, query.end_date).await {
+        Ok(overview) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(overview),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /analytics/player/:player_address` — per-player statistics.
+///
+/// Optional query params:
+/// - `limit` / `offset` — pagination (default limit: 50).
+/// - `start_date` / `end_date` — time-range filter.
+async fn analytics_player(
+    State(state): State<AppState>,
+    Path(player_address): Path<String>,
+    TypedQuery(query): TypedQuery<AnalyticsQuery>,
+) -> (StatusCode, Json<ApiResponse<PlayerAnalytics>>) {
+    let limit = query.limit.unwrap_or(50).min(200);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    match state
+        .db
+        .analytics_player(&player_address, limit, offset, query.start_date, query.end_date)
+        .await
+    {
+        Ok(analytics) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(analytics),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /analytics/token/:token_address` — per-token statistics.
+///
+/// Optional query params:
+/// - `limit` / `offset` — pagination (default limit: 50).
+/// - `start_date` / `end_date` — time-range filter.
+async fn analytics_token(
+    State(state): State<AppState>,
+    Path(token_address): Path<String>,
+    TypedQuery(query): TypedQuery<AnalyticsQuery>,
+) -> (StatusCode, Json<ApiResponse<TokenAnalytics>>) {
+    let limit = query.limit.unwrap_or(50).min(200);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    match state
+        .db
+        .analytics_token(&token_address, limit, offset, query.start_date, query.end_date)
+        .await
+    {
+        Ok(analytics) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(analytics),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
 }
