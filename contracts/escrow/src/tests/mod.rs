@@ -29,6 +29,7 @@ mod security;
 mod snapshots;
 mod tier;
 mod token_allowlist;
+mod consensus;
 mod ttl;
 mod fee_tiers;
 mod validation;

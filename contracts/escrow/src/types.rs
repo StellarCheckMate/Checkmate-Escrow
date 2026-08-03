@@ -197,10 +197,17 @@ pub enum DataKey {
     BlacklistedTokens,
     FeeTiers,
     PlayerPreferredToken(Address),
-    /// Pending permanent oracle rotation proposal (requires confirmation).
-    PendingOracleRotation,
-    /// Temporary oracle rotation active until expiry timestamp.
-    TempOracleRotation,
+    /// Platform-wide aggregated statistics (total matches, volume, payouts).
+    Stats,
+    /// Stores the number of oracle confirmations received for a given match.
+    OracleConfirmations(u64),
+    /// Tracks the result (Winner) submitted by a specific oracle for a match.
+    /// Key: (match_id, oracle_address) → Winner
+    OracleVote(u64, Address),
+    /// Stores the approved oracle list (Vec<Address>) used by consensus.
+    ApprovedOracles,
+    /// Stores the required number of confirmations for consensus (u32).
+    RequiredOracleConfirmations,
 }
 
 /// The lifecycle event that triggered a balance snapshot.
