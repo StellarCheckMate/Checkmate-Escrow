@@ -84,10 +84,65 @@ cargo test -p oracle
 - Update relevant documentation in `docs/` for architectural changes
 - Add inline comments for non-obvious code
 - Add or update Soroban contract guidance in `docs/contributing-contracts.md` when changing contract storage, TTL, or auth behavior
+- Add or update oracle guidance in `docs/CONTRIBUTING_ORACLE.md` when changing the oracle service, adding platform clients, or modifying result verification
 - Update README.md if adding new features or changing setup steps
 - Check repository health and link validity with `./scripts/repository_health_check.sh`
 
 See [docs/repository-health-checklist.md](docs/repository-health-checklist.md) for checklist details.
+
+## Updating the Changelog
+
+Every pull request **must** include a changelog entry. This keeps the release history accurate and helps reviewers understand the impact of a change at a glance.
+
+### Where to add your entry
+
+Open `CHANGELOG.md` and add your entry under the `## [Unreleased]` section at the top of the file. If that section does not exist yet, add it directly below the introductory paragraph.
+
+### Entry format
+
+The project follows the [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) convention. Use one of these subsection headings — add only the ones that apply:
+
+```markdown
+## [Unreleased]
+
+### Added
+- Short description of a new feature or capability.
+
+### Changed
+- Short description of a change to existing behavior.
+
+### Fixed
+- Short description of a bug that was fixed.
+
+### Removed
+- Short description of something that was removed.
+```
+
+### Full entry template
+
+Copy the block below into `CHANGELOG.md` under `## [Unreleased]` and delete the subsections you don't need:
+
+```markdown
+### Added
+- <!-- Describe new features or functions introduced by this PR -->
+
+### Changed
+- <!-- Describe modifications to existing behavior, APIs, or configuration -->
+
+### Fixed
+- <!-- Describe bugs or incorrect behavior that this PR corrects -->
+
+### Removed
+- <!-- Describe features, flags, or APIs that were deleted -->
+```
+
+### Guidelines
+
+- Write entries from the perspective of a **user or integrator**, not an implementer. Explain *what changed* and *why it matters*, not *how* the code was restructured.
+- Use the past tense and start with a capital letter: `Added support for …`, `Fixed incorrect payout when …`
+- One bullet per logical change. If a PR touches multiple independent areas, add one bullet for each.
+- Do **not** include internal refactors or test-only changes unless they affect observable behavior.
+- When a version is released, maintainers will move `[Unreleased]` entries into a new versioned section (e.g. `## [1.1.0] - 2026-08-01`). You don't need to do this yourself.
 
 ## Submitting a Pull Request
 
@@ -111,9 +166,20 @@ See [docs/repository-health-checklist.md](docs/repository-health-checklist.md) f
 - Respond to review comments promptly
 - Squash commits if requested
 
+### Code Owners and Review Requirements
+
+The repository uses a [`CODEOWNERS`](.github/CODEOWNERS) file to automatically request reviews from designated maintainers when changes touch critical areas:
+
+- **Smart contracts** (`/contracts/escrow/`, `/contracts/oracle/`): Reviewed by @StellarCheckMate/contracts team
+- **CI/CD and build configuration** (`/.github/`, `/scripts/`): Reviewed by @StellarCheckMate/maintainers
+- **Documentation** (`/docs/`): Reviewed by @StellarCheckMate/docs team
+- **Other changes**: Reviewed by @StellarCheckMate/maintainers
+
+When a PR touches files in these paths, GitHub automatically requests review from the designated owners. This ensures that security-critical contract code and infrastructure changes receive appropriate scrutiny. All requested reviews must be approved before merging.
+
 ## Issue Labels
 
-We use a shared label taxonomy to keep issue and PR triage consistent. See [docs/label-taxonomy.md](docs/label-taxonomy.md) for definitions of labels like `good first issue`, `wave-ready`, and `high priority`.
+We use a shared label taxonomy to keep issue and PR triage consistent. See [docs/label-taxonomy.md](docs/label-taxonomy.md) for definitions of labels like `good first issue`, `wave-ready`, and `help-wanted`.
 
 ## Coding Standards
 
@@ -140,6 +206,12 @@ We use a shared label taxonomy to keep issue and PR triage consistent. See [docs
 - Use descriptive test names: `test_function_name_condition_expected_result`
 - Mock external dependencies
 - Verify events are emitted correctly
+
+For a comprehensive guide on writing tests, see [**Testing Guide**](docs/contributing-tests.md) which covers:
+- Soroban test environment setup
+- Mocking addresses and tokens
+- Test organization and patterns
+- Complete annotated example tests
 
 ### Testing Conventions: Prefer `try_` Over `#[should_panic]`
 
@@ -188,6 +260,26 @@ fn test_double_initialize_fails() {
     client.initialize(&oracle, &admin); // panics with a string, not a typed Error
 }
 ```
+
+## Contributing by Component
+
+### Smart Contract Changes
+
+For changes to `contracts/escrow` or `contracts/oracle`, see [docs/contributing-contracts.md](docs/contributing-contracts.md) for detailed guidance on:
+- Authorization patterns and `require_auth`
+- Storage tiers and state layout
+- TTL management
+- Contract initialization and upgrade safety
+- Events and observability
+
+### Oracle Service Changes
+
+For changes to the off-chain oracle service, see [docs/CONTRIBUTING_ORACLE.md](docs/CONTRIBUTING_ORACLE.md) for detailed guidance on:
+- Local oracle setup and environment configuration
+- Running and writing oracle integration tests
+- Adding support for new chess platform clients
+- Result verification and security patterns
+- API rate limiting and error handling
 
 ## Drips Wave Contributions
 

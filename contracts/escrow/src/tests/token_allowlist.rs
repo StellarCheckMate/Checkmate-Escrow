@@ -63,7 +63,7 @@ fn test_removed_tokens_are_rejected_when_other_allowed_tokens_remain() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "removed_token_game"),
+        &String::from_str(&env, "d67c215e"),
         &Platform::Lichess,
     );
     assert!(result.is_err(), "create_match should reject removed token");
@@ -73,7 +73,7 @@ fn test_removed_tokens_are_rejected_when_other_allowed_tokens_remain() {
         &player2,
         &100,
         &token2_addr,
-        &String::from_str(&env, "remaining_token_game"),
+        &String::from_str(&env, "3c362380"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0, "remaining allowed token should still be accepted");
@@ -138,7 +138,7 @@ fn test_removing_last_allowed_token_disables_allowlist_enforcement() {
         &player2,
         &100,
         &unknown_token,
-        &String::from_str(&env, "rollback_game"),
+        &String::from_str(&env, "e4f6ec85"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0, "create_match should accept any token after last allowed token is removed");
@@ -180,7 +180,7 @@ fn test_remove_last_allowed_token_disables_allowlist() {
         &player2,
         &100,
         &other_token,
-        &String::from_str(&env, "allowlist_disabled_game"),
+        &String::from_str(&env, "8bf7aba2"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0, "create_match should accept new token once the allowlist is disabled");
@@ -230,7 +230,7 @@ fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enab
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_token1"),
+        &String::from_str(&env, "a23a50ac"),
         &Platform::Lichess,
     );
     assert_eq!(id1, 0, "first match with token1 should succeed");
@@ -240,7 +240,7 @@ fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enab
         &player2,
         &100,
         &token2_addr,
-        &String::from_str(&env, "game_token2"),
+        &String::from_str(&env, "8e9fe189"),
         &Platform::Lichess,
     );
     assert_eq!(id2, 1, "second match with token2 should succeed");
@@ -251,7 +251,7 @@ fn test_multiple_approved_tokens_can_coexist_after_allowlist_enforcement_is_enab
         &player2,
         &100,
         &unknown_token,
-        &String::from_str(&env, "game_unknown"),
+        &String::from_str(&env, "640efaee"),
         &Platform::Lichess,
     );
     assert!(
@@ -284,4 +284,78 @@ fn test_allowlist_enforcement_clears_when_empty() {
         !client.is_allowlist_enforced(),
         "allowlist should not be enforced after removing the last token"
     );
+}
+
+
+#[test]
+fn test_get_allowed_tokens_returns_tokens_in_correct_order() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+    let token3_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token3_addr = token3_id.address();
+
+    // Initially empty
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 0);
+
+    // Add first token
+    client.add_allowed_token(&token);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 1);
+    assert_eq!(allowed.get(0).unwrap(), token);
+
+    // Add second token
+    client.add_allowed_token(&token2_addr);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 2);
+    assert_eq!(allowed.get(0).unwrap(), token);
+    assert_eq!(allowed.get(1).unwrap(), token2_addr);
+
+    // Add third token
+    client.add_allowed_token(&token3_addr);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 3);
+    assert_eq!(allowed.get(0).unwrap(), token);
+    assert_eq!(allowed.get(1).unwrap(), token2_addr);
+    assert_eq!(allowed.get(2).unwrap(), token3_addr);
+}
+
+#[test]
+fn test_get_allowed_tokens_reflects_removals() {
+    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let token2_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token2_addr = token2_id.address();
+    let token3_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let token3_addr = token3_id.address();
+
+    // Add three tokens
+    client.add_allowed_token(&token);
+    client.add_allowed_token(&token2_addr);
+    client.add_allowed_token(&token3_addr);
+
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 3);
+
+    // Remove middle token
+    client.remove_allowed_token(&token2_addr);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 2);
+    assert_eq!(allowed.get(0).unwrap(), token);
+    assert_eq!(allowed.get(1).unwrap(), token3_addr);
+
+    // Remove first token
+    client.remove_allowed_token(&token);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 1);
+    assert_eq!(allowed.get(0).unwrap(), token3_addr);
+
+    // Remove last token
+    client.remove_allowed_token(&token3_addr);
+    let allowed = client.get_allowed_tokens();
+    assert_eq!(allowed.len(), 0);
 }

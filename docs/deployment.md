@@ -127,6 +127,17 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match_timeout
 
 ---
 
+## Mainnet Deployment Checklist
+
+Before launching on mainnet, verify each item below. These checks are intended to reduce operational risk and confirm that the deployment is configured for production use.
+
+- [ ] Key management is locked down. Store deployer and admin keys in hardware-backed wallets or a secure multisig setup, and remove any temporary single-signature keys once the deployment is complete. This reduces the risk of losing access to the contracts or exposing a critical key.
+- [ ] Admin control has been transferred to a multisig. Confirm that the escrow and oracle admin roles are controlled by a multisig account rather than a single operator key. This prevents a single compromised key from changing critical contract parameters.
+- [ ] Oracle addresses have been verified. Double-check the oracle contract ID and any admin or authorized addresses used during initialization. This ensures results are routed to the intended oracle and avoids misconfiguration at launch.
+- [ ] The token allowlist has been reviewed. Confirm that the approved token set and contract IDs match the production plan. This prevents unintended assets from being accepted in matches.
+- [ ] Contract audit confirmation is recorded. Make sure the deployed contracts have passed a recent security review or audit and that any outstanding issues are understood and accepted. This lowers the chance of launching with an unresolved vulnerability.
+- [ ] Monitoring and alerting are in place. Configure alerts for deployment status, admin changes, oracle submissions, pause events, and unusual match activity. This gives operators early visibility into incidents or unexpected behavior.
+
 ## Security Notes
 
 - Steps 2 and 4 must be executed **in the same transaction or immediately after
@@ -141,17 +152,209 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match_timeout
 
 ## Verifying Initialization
 
-After initialization, confirm the stored admin and oracle addresses:
+### Automated Verification
+
+After initialization, use the automated verification script to confirm the deployment is functioning correctly:
+
+```bash
+./scripts/verify-deployment.sh <network> <escrow_contract_id> <oracle_contract_id>
+```
+
+**Example:**
+```bash
+./scripts/verify-deployment.sh testnet CBQS4IYHZS5Z7LCLTTQ7RIFTDBZTUCNBCBF7STJEDSTEVEYK2QY5OXS \
+  CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4
+```
+
+**What it checks:**
+- ✅ Escrow contract is deployed and responds to queries
+- ✅ Escrow admin address is set (not null)
+- ✅ Escrow oracle address is set and points to the oracle contract
+- ✅ Escrow match timeout is configured
+- ✅ Escrow can list pending and active matches
+- ✅ Oracle contract is deployed and responds to queries
+- ✅ Oracle admin address is set (not null)
+
+**Exit codes:**
+- `0` — All checks passed; deployment is ready for use
+- `1` — One or more checks failed; see error output and troubleshooting section below
+
+The script will exit with status 1 if any check fails, making it suitable for automated CI/CD pipelines.
+
+### Manual Verification
+
+For granular verification or debugging, manually inspect contract state:
 
 ```bash
 # Escrow: read admin
-stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_admin
+stellar contract invoke --id $ESCROW_CONTRACT_ID --network <network> -- get_admin
+
+# Escrow: read oracle address
+stellar contract invoke --id $ESCROW_CONTRACT_ID --network <network> -- get_oracle
+
+# Oracle: read admin
+stellar contract invoke --id $ORACLE_CONTRACT_ID --network <network> -- get_admin
 
 # Oracle: verify a result can be submitted (requires oracle admin auth)
-stellar contract invoke --id $ORACLE_CONTRACT_ID \
+stellar contract invoke --id $ORACLE_CONTRACT_ID --network <network> \
   --source <ORACLE_ADMIN_KEYPAIR> \
   -- has_result_admin --match_id 0
 ```
+
+---
+
+## Smoke Testing: End-to-End Verification
+
+After deployment, use the smoke test script to verify the entire match lifecycle works correctly on testnet before moving to production.
+
+### Prerequisites
+
+The smoke test requires:
+- Two funded testnet accounts (players)
+- One funded account with oracle admin privileges
+- A token contract address (native XLM or other testnet token)
+- `stellar` CLI and `jq` installed
+
+### Setup
+
+1. **Create or import keypairs** for testing:
+   ```bash
+   # Create test keypairs (or use existing ones)
+   stellar keys generate alice
+   stellar keys generate bob
+   stellar keys generate oracle_admin
+   
+   # Fund them via Friendbot (testnet only)
+   ALICE=$(stellar keys address alice)
+   BOB=$(stellar keys address bob)
+   ORACLE=$(stellar keys address oracle_admin)
+   
+   curl "https://friendbot.stellar.org?addr=$ALICE"
+   curl "https://friendbot.stellar.org?addr=$BOB"
+   curl "https://friendbot.stellar.org?addr=$ORACLE"
+   ```
+
+2. **Get the native XLM token address** on your network:
+   ```bash
+   # On testnet, retrieve the XLM contract ID
+   stellar contract asset info --network testnet --asset native XLM
+   # Output: ContractId: C...
+   ```
+
+3. **Set environment variables** in `.env`:
+   ```bash
+   export PLAYER1_KEYPAIR=alice
+   export PLAYER2_KEYPAIR=bob
+   export ORACLE_ADMIN_KEYPAIR=oracle_admin
+   export TEST_TOKEN=CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4  # XLM on testnet
+   ```
+
+### Running the Smoke Test
+
+```bash
+./scripts/smoke_test.sh testnet
+```
+
+**What it tests:**
+1. ✅ Creates a match with both players and a token
+2. ✅ Verifies match is in `Pending` state
+3. ✅ Player 1 deposits their stake
+4. ✅ Player 2 deposits their stake
+5. ✅ Verifies match transitions to `Active` state
+6. ✅ Verifies escrow balance = stake × 2
+7. ✅ Oracle submits result (Player 1 wins)
+8. ✅ Verifies escrow balance drops to 0 (payout complete)
+9. ✅ Verifies match transitions to `Completed` state
+
+**Example output:**
+```
+🔍 Smoke Test: Full Match Lifecycle
+
+Validating environment...
+   ✅ Required env vars present
+
+   Player 1: GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4
+   Player 2: GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBSC4
+   Oracle Admin: GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCSC4
+
+🎮 Match Configuration:
+   Network: testnet
+   Escrow: CEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEQZQ
+   Oracle: CFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF2XVA
+   Stake: 100
+   Game ID: smoke_test_1627584000
+
+📋 Step 1: Create Match
+   ✅ create_match (ID: 0)
+
+📋 Step 2: Verify Match State (Pending)
+   ✅ match state is Pending
+
+📋 Step 3: Player 1 Deposits
+   ✅ player 1 deposit
+
+📋 Step 4: Player 2 Deposits
+   ✅ player 2 deposit
+
+📋 Step 5: Verify Match State (Active)
+   ✅ match state is Active
+
+📋 Step 6: Verify Escrow Balance
+   ✅ escrow balance is 200 (correct)
+
+📋 Step 7: Submit Result (Player 1 Wins)
+   ✅ submit_result (Player1)
+
+📋 Step 8: Verify Payout (Escrow Balance = 0)
+   ✅ escrow balance is 0 (payout complete)
+
+📋 Step 9: Verify Match State (Completed)
+   ✅ match state is Completed
+
+✅ Smoke Test Passed!
+
+📊 Summary:
+   Network:         testnet
+   Match ID:        0
+   Game ID:         smoke_test_1627584000
+   Stake:           100
+   Final State:     Completed
+   Winner:          Player 1
+   Escrow Balance:  0 (all funds disbursed)
+
+🎉 Full lifecycle verified: create → deposit → result → payout
+```
+
+### Exit Codes
+
+- `0` — All tests passed; deployment is verified
+- `1` — One or more tests failed; check output to identify which step failed
+
+### Troubleshooting Smoke Test Failures
+
+**"Cannot access keypair: alice"**
+- Ensure the keypair exists: `stellar keys list`
+- Create it if missing: `stellar keys generate alice`
+- Verify it has XLM funds: `stellar account info alice --network testnet`
+
+**"Escrow balance is not 200"**
+- Verify players have sufficient token balance
+- Check that both deposits succeeded in the output
+- Ensure the token contract ID is correct
+
+**"match state is not Active"**
+- Verify both player deposits completed successfully
+- Check that the match exists: `stellar contract invoke --id $CONTRACT_ESCROW --network testnet -- get_match --match_id 0`
+
+**"submit_result failed"**
+- Verify oracle admin keypair has funds for fees
+- Check that the oracle contract ID is correct
+- Ensure oracle admin has been registered with the oracle contract
+
+**"Escrow balance is not 0 after payout"**
+- Oracle result submission may not have been processed yet
+- Verify result was submitted: `stellar contract invoke --id $CONTRACT_ORACLE --network testnet -- has_result --match_id 0`
+- Check match state to ensure it's `Completed`
 
 ---
 
@@ -189,3 +392,126 @@ from the transaction result (`Error(Contract, #N)`) using the
 variant for both contracts, including the symptom-based quick-lookup table
 for issues like "can't initialize," "deposit rejected," or "oracle can't
 submit a result."
+
+### `CONTRACT_ESCROW` (or `CONTRACT_ORACLE`) not set
+
+**Symptom:** Scripts fail with `stellar: error: --id: empty string` or a shell
+error like `Missing required argument`.
+
+**Cause:** The environment variable was never exported, or `.env` was not
+sourced before running the script.
+
+**Fix:**
+```bash
+cp .env.example .env
+# fill in CONTRACT_ESCROW and CONTRACT_ORACLE, then:
+source .env
+# or, inline for a single command:
+CONTRACT_ESCROW=C... stellar contract invoke --id $CONTRACT_ESCROW -- get_admin
+```
+
+---
+
+### Insufficient funds / fee bump required
+
+**Symptom:** Transaction submission returns `tx_insufficient_balance` or
+`op_underfunded`.
+
+**Cause:** The source account on testnet has run out of XLM, or on mainnet the
+account has insufficient XLM to cover the base reserve plus fees.
+
+**Fix (testnet):**
+```bash
+# Fund the deployer account via Friendbot
+curl "https://friendbot.stellar.org?addr=<DEPLOYER_ADDRESS>"
+```
+
+**Fix (mainnet):** Send additional XLM to the deployer account to cover the
+base reserve (0.5 XLM per account + 0.5 XLM per ledger entry) plus estimated
+transaction fees.
+
+---
+
+### WASM upload failure (`HostError: WasmInvalid` or file not found)
+
+**Symptom:** `stellar contract deploy` exits with `WasmInvalid`, a file-not-found
+error, or a size-limit error.
+
+**Causes and fixes:**
+
+| Cause | Fix |
+|-------|-----|
+| Contract was never built | Run `./scripts/build.sh` first |
+| Wrong target path | Verify `target/wasm32-unknown-unknown/release/*.wasm` exists |
+| WASM exceeds 64 KB limit | Rebuild with `--release` (debug builds are much larger) |
+| Corrupted build artifact | Run `cargo clean && ./scripts/build.sh` |
+
+---
+
+### `AlreadyInitialized` error on `initialize`
+
+**Symptom:** `Error(Contract, #1)` when calling `initialize`.
+
+**Cause:** The contract was already initialized (e.g., the script was run
+twice, or the contract ID belongs to a previously deployed instance).
+
+**Fix:** You cannot re-initialize an existing contract. Either:
+- use the existing deployment and skip the `initialize` step, or
+- deploy a fresh contract and initialize the new instance.
+
+---
+
+### `require_auth` failure / deployer mismatch
+
+**Symptom:** Transaction fails with `Error(Auth, InvalidAction)` or
+`Error(Contract, #N)` during `initialize`.
+
+**Cause:** The `--deployer` argument does not match the `--source` keypair that
+signed the deployment transaction.
+
+**Fix:** Ensure the `<DEPLOYER_ADDRESS>` passed to `--deployer` is the public
+key corresponding to `<DEPLOYER_KEYPAIR>`:
+```bash
+stellar keys address <DEPLOYER_KEYPAIR>   # prints the address; use this as --deployer
+```
+
+---
+
+### Oracle address rejected after escrow initialization
+
+**Symptom:** `submit_result` returns `UnauthorizedOracle` immediately after
+deployment.
+
+**Cause:** The `--oracle` argument in step 4 was set to a wallet address
+instead of the `ORACLE_CONTRACT_ID` from step 1, or the two IDs were swapped.
+
+**Fix:** Re-deploy (or, if the contract is still fresh and no funds have been
+deposited, re-initialize after a fresh deploy) ensuring `--oracle` is set to
+the `ORACLE_CONTRACT_ID`:
+```bash
+stellar contract invoke \
+  --id $ESCROW_CONTRACT_ID \
+  --source <DEPLOYER_KEYPAIR> \
+  -- initialize \
+  --oracle $ORACLE_CONTRACT_ID \        # ← must be the oracle CONTRACT id
+  --admin <ESCROW_ADMIN_ADDRESS> \
+  --deployer <DEPLOYER_ADDRESS>
+```
+
+---
+
+### Network / RPC connectivity issues
+
+**Symptom:** CLI hangs or returns `connection refused`, `timeout`, or
+`service unavailable`.
+
+**Cause:** The RPC URL in `.env` or `environments.toml` is incorrect, the
+testnet RPC is temporarily overloaded, or a local standalone node is not
+running.
+
+**Fix:**
+- Verify `STELLAR_RPC_URL` in `.env` matches the target network.
+- For testnet, the public endpoint is `https://soroban-testnet.stellar.org`.
+- For standalone, ensure `docker compose up` (or equivalent) is running before
+  deploying.
+- Check the [Stellar Status page](https://status.stellar.org) for known outages.

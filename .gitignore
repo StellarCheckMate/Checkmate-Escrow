@@ -1,6 +1,10 @@
 # Build artifacts
 target/
 
+# Python bytecode (scripts/doc_conformance)
+__pycache__/
+*.pyc
+
 # Environment secrets
 .env
 
@@ -20,6 +24,12 @@ Thumbs.db
 # Logs
 *.log
 
+# TLA+ model checking (scripts/check_tla.sh): cached tools and TLC scratch output
+specs/tla/.tools/
+specs/tla/states/
+specs/tla/*.old
+*.st
+
 # Wasm build output
 *.wasm
 
@@ -29,11 +39,27 @@ Thumbs.db
 # Task files
 task1.md
 
-# Task files
-task1.md
+# Mutation testing artifacts
+mutants.out/
+mutants.out.old/
 
 # Task files
 task1.md
 
+# Mutation testing artifacts
+mutants.out/
+mutants.out.old/
+
 # Task files
 task1.md
+
+# Mutation testing artifacts
+mutants.out/
+mutants.out.old/
+
+# Task files
+task1.md
+
+# Mutation testing artifacts
+mutants.out/
+mutants.out.old/

@@ -1,61 +1,37 @@
 ---
-name: "🐛 Bug Report"
-about: "Report a bug, security vulnerability, or unexpected contract behavior."
-title: "Fix: [Short description of the bug]"
-labels: ["bug"]
-assignees: ""
+name: Bug Report
+about: Report a reproducible bug in Checkmate-Escrow
+title: "[Bug] "
+labels: bug
+assignees: ''
 ---
 
-# 🐛 Bug Report
+## Description
 
-> [!IMPORTANT]
-> Please provide enough technical detail to reproduce the issue and evaluate the impact.
+A clear and concise description of the bug.
 
-### Summary
-*One-sentence summary of the bug.*
+## Steps to Reproduce
 
-### Affected Area
-- **Affected Contract:** `contracts/escrow` / `contracts/oracle` / `tooling` / `docs`
-- **Target Function(s):** e.g. `deposit`, `submit_result`, `create_match`
-- **Affected State/Mode:** `Pending` / `Active` / `Completed` / `Cancelled` / `Init`
-- **Severity:** High / Medium / Low
+1. 
+2. 
+3. 
 
-### Expected Behavior
-*What should happen when this code executes successfully?*
+## Expected Behavior
 
-### Actual Behavior
-*What happens instead? Include errors, state changes, or unexpected contract behavior.*
+What you expected to happen.
 
-### Reproduction Steps
-1. ...
-2. ...
-3. ...
+## Actual Behavior
 
-### Environment
-- **Rust Version:** `rustc --version`
-- **Soroban / Stellar CLI Version:** `stellar --version`
-- **Network:** Local Sandbox / Testnet / Futurenet / Other
-- **OS / Platform:** Linux / macOS / Windows / Other
+What actually happened. Include any error messages or contract error codes.
 
-### Diagnostic Output
-```text
-# Paste compiler errors, panic output, or terminal logs here
-```
+## Environment
 
-### Impact
-- [ ] Security
-- [ ] Correctness
-- [ ] Performance or gas
-- [ ] UX or tooling
-- [ ] Documentation
+- Network: <!-- testnet / mainnet -->
+- Soroban CLI version:
+- Rust version (`rustc --version`):
+- OS:
+- Contract version / commit:
 
-### Suggested Fix
-*If you have an idea for a fix, describe it here.*
+## Additional Context
 
-### Checklist
-- [ ] Reproduced the bug locally
-- [ ] Added a regression test covering this failure mode
-- [ ] Verified authorization and state guards
-- [ ] Confirmed event emission and storage behavior
-- [ ] Ran `cargo fmt` and `cargo clippy`
-- [ ] Ran `cargo test`
+Add any other context, logs, or screenshots here.

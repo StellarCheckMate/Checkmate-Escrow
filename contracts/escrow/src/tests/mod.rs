@@ -11,23 +11,42 @@ pub use std::{format, vec::Vec};
 pub mod helpers;
 
 mod admin;
+mod balance_history_edge_cases;
+mod dispute;
 mod events;
+mod fee_calculation_scenarios;
+mod fuzz;
 mod index;
+mod integration;
 mod invariants;
 mod lifecycle;
+mod match_validation;
+mod multi_token;
+mod oracle_validation;
 mod pagination;
+mod player_balance_history;
 mod security;
 mod snapshots;
-mod ttl;
+mod tier;
 mod token_allowlist;
 mod consensus;
+mod ttl;
+mod fee_tiers;
+mod validation;
 
 // ── Base fixture ─────────────────────────────────────────────────────────────
 
 /// Minimal initialized contract with two funded players and a token.
 /// Returns `(env, contract_id, oracle, player1, player2, token, admin)`.
 pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
-    let env = Env::default();
+    let mut env = Env::default();
+    // A genuine test failure (e.g. a host budget error) can otherwise turn into
+    // a second panic when soroban-sdk tries to write a debug snapshot on drop
+    // against an already-errored host, aborting the whole test binary instead
+    // of just failing the one test.
+    env.set_config(soroban_sdk::testutils::EnvTestConfig {
+        capture_snapshot_at_drop: false,
+    });
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
@@ -44,6 +63,17 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
     let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 0,
+        treasury: admin.clone(),
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
+    });
 
     (
         env,
@@ -86,13 +116,22 @@ pub fn setup_with_funded_match() -> (
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "funded_fixture_game"),
+        &String::from_str(&env, "aba1d0d0"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
 
-    (env, contract_id, oracle, player1, player2, token, admin, match_id)
+    (
+        env,
+        contract_id,
+        oracle,
+        player1,
+        player2,
+        token,
+        admin,
+        match_id,
+    )
 }
 
 /// Like `setup`, but mints tokens for two additional players (`player3`,
@@ -117,7 +156,17 @@ pub fn setup_with_four_players() -> (
     asset_client.mint(&player3, &1000);
     asset_client.mint(&player4, &1000);
 
-    (env, contract_id, oracle, player1, player2, player3, player4, token, admin)
+    (
+        env,
+        contract_id,
+        oracle,
+        player1,
+        player2,
+        player3,
+        player4,
+        token,
+        admin,
+    )
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -125,3 +174,8 @@ pub fn setup_with_four_players() -> (
 pub fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, amount: i128) {
     asset_client.mint(player, &amount);
 }
+mod cancellation_fee;
+mod stablecoin;
+mod dispute_rollback;
+mod protocol_config;
+mod platform_stats;
