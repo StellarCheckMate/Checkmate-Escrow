@@ -211,7 +211,7 @@ fn test_create_match_without_referrer_has_none() {
         &player2,
         &100,
         &token,
-        &soroban_sdk::String::from_str(&env, "no_ref_game"),
+        &soroban_sdk::String::from_str(&env, "b0911c7c"),
         &Platform::Lichess,
     );
 

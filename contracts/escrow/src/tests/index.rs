@@ -10,7 +10,7 @@ fn test_game_id_reservation_survives_ledger_advancement() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let game_id = String::from_str(&env, "game_123");
+    let game_id = String::from_str(&env, "7d03217e");
 
     // Reserve a game ID
     let _match_id_1 = client.create_match(
@@ -49,7 +49,7 @@ fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_1"),
+        &String::from_str(&env, "404da6de"),
         &Platform::Lichess,
     );
 
@@ -58,7 +58,7 @@ fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_2"),
+        &String::from_str(&env, "86b9ea0e"),
         &Platform::Lichess,
     );
 
@@ -67,7 +67,7 @@ fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_3"),
+        &String::from_str(&env, "fb595cfb"),
         &Platform::Lichess,
     );
 
@@ -100,7 +100,7 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_1"),
+        &String::from_str(&env, "404da6de"),
         &Platform::Lichess,
     );
 
@@ -109,7 +109,7 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_2"),
+        &String::from_str(&env, "86b9ea0e"),
         &Platform::Lichess,
     );
 
@@ -118,7 +118,7 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_3"),
+        &String::from_str(&env, "fb595cfb"),
         &Platform::Lichess,
     );
 
@@ -127,7 +127,7 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "game_4"),
+        &String::from_str(&env, "24a3f6f9"),
         &Platform::Lichess,
     );
 
@@ -199,7 +199,7 @@ fn test_get_pending_matches_returns_only_pending_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "pending_match"),
+        &String::from_str(&env, "fdc4cb3b"),
         &Platform::Lichess,
     );
 
@@ -208,7 +208,7 @@ fn test_get_pending_matches_returns_only_pending_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "active_match"),
+        &String::from_str(&env, "34eeb2af"),
         &Platform::Lichess,
     );
     client.deposit(&active_id, &player1);
@@ -233,7 +233,7 @@ fn test_match_transitions_from_pending_to_active_matches() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "transition_match"),
+        &String::from_str(&env, "41e95cf3"),
         &Platform::Lichess,
     );
 
@@ -266,6 +266,15 @@ fn test_get_pending_matches_empty() {
 }
 
 #[test]
+fn test_get_pending_matches_empty_on_init() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let pending_matches = client.get_pending_matches();
+    assert_eq!(pending_matches.len(), 0);
+}
+
+#[test]
 fn test_get_active_matches_after_deposits() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -275,7 +284,7 @@ fn test_get_active_matches_after_deposits() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "active_after_deposits"),
+        &String::from_str(&env, "b9429870"),
         &Platform::Lichess,
     );
 
@@ -291,4 +300,199 @@ fn test_get_active_matches_after_deposits() {
     // Pending matches should no longer contain it
     let pending_matches = client.get_pending_matches();
     assert_eq!(pending_matches.len(), 0);
+}
+
+#[test]
+fn test_get_player_matches_returns_ids() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id_1 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "ab5b2d0d"),
+        &Platform::Lichess,
+    );
+
+    let match_id_2 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "bd611cec"),
+        &Platform::Lichess,
+    );
+
+    let match_id_3 = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "907a4dee"),
+        &Platform::Lichess,
+    );
+
+    let player1_matches = client.get_player_matches(&player1);
+    assert_eq!(player1_matches.len(), 3);
+    assert_eq!(player1_matches.get(0).unwrap(), match_id_1);
+    assert_eq!(player1_matches.get(1).unwrap(), match_id_2);
+    assert_eq!(player1_matches.get(2).unwrap(), match_id_3);
+}
+
+// #1178 — get_completed_matches returns only Completed matches
+#[test]
+fn test_get_completed_matches_returns_only_completed() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // ── Create three matches ──────────────────────────────────────────────────
+
+    // match_a: will be completed (player1 wins)
+    let match_a = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_a"),
+        &Platform::Lichess,
+    );
+
+    // match_b: will be completed (draw)
+    let match_b = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "completed_b"),
+        &Platform::ChessDotCom,
+    );
+
+    // match_c: stays Pending (never funded) — must NOT appear in results
+    let match_c = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "pending_only"),
+        &Platform::Lichess,
+    );
+    let _ = match_c; // suppress unused warning — intentionally left Pending
+
+    // ── Fund and complete match_a ─────────────────────────────────────────────
+    client.deposit(&match_a, &player1);
+    client.deposit(&match_a, &player2);
+    client.submit_result(&match_a, &Winner::Player1);
+    client.claim_vested_payout(&match_a, &player1);
+
+    // ── Fund and complete match_b (draw) ──────────────────────────────────────
+    client.deposit(&match_b, &player1);
+    client.deposit(&match_b, &player2);
+    client.submit_result(&match_b, &Winner::Draw);
+    client.claim_vested_payout(&match_b, &player1);
+    client.claim_vested_payout(&match_b, &player2);
+
+    // ── Assertions ────────────────────────────────────────────────────────────
+    let completed = client.get_completed_matches();
+
+    assert_eq!(
+        completed.len(),
+        2,
+        "get_completed_matches must return exactly the two completed matches"
+    );
+    assert_eq!(
+        completed.get(0).unwrap().id,
+        match_a,
+        "first completed match must be match_a (lowest ID)"
+    );
+    assert_eq!(
+        completed.get(1).unwrap().id,
+        match_b,
+        "second completed match must be match_b"
+    );
+
+    // Verify returned matches are actually Completed.
+    for m in completed.iter() {
+        assert_eq!(
+            m.state,
+            MatchState::Completed,
+            "every entry returned by get_completed_matches must be in Completed state"
+        );
+    }
+
+    // Pending and Active counts must be unaffected.
+    assert_eq!(
+        client.get_pending_matches().len(),
+        1,
+        "the Pending match must still appear in get_pending_matches"
+    );
+    assert_eq!(
+        client.get_active_matches().len(),
+        0,
+        "no matches should remain Active"
+    );
+}
+
+// #1178 — get_completed_matches returns empty when no matches are completed
+#[test]
+fn test_get_completed_matches_empty_when_none_completed() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create a match but leave it in Pending state.
+    client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "still_pending"),
+        &Platform::Lichess,
+    );
+
+    let completed = client.get_completed_matches();
+    assert_eq!(
+        completed.len(),
+        0,
+        "get_completed_matches must return an empty vec when no match is Completed"
+    );
+}
+
+// #1178 — get_completed_matches_paginated respects offset and limit
+#[test]
+fn test_get_completed_matches_paginated() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Mint extra tokens so players can cover all three matches.
+    let asset_client = StellarAssetClient::new(&env, &token);
+    asset_client.mint(&player1, &200);
+    asset_client.mint(&player2, &200);
+
+    // Create and complete three matches.
+    let mut ids = std::vec::Vec::new();
+    for i in 0..3u32 {
+        let game_id = String::from_str(&env, &format!("page_game_{}", i));
+        let id = client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+        client.deposit(&id, &player1);
+        client.deposit(&id, &player2);
+        client.submit_result(&id, &Winner::Player1);
+        client.claim_vested_payout(&id, &player1);
+        ids.push(id);
+    }
+
+    // Page 1: first two results.
+    let page1 = client.get_completed_matches_paginated(&0, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap().id, ids[0]);
+    assert_eq!(page1.get(1).unwrap().id, ids[1]);
+
+    // Page 2: third result only.
+    let page2 = client.get_completed_matches_paginated(&2, &2);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get(0).unwrap().id, ids[2]);
+
+    // Past the end: empty.
+    let page3 = client.get_completed_matches_paginated(&10, &2);
+    assert_eq!(page3.len(), 0);
 }

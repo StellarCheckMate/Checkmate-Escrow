@@ -11,14 +11,18 @@ pub use std::{format, vec::Vec};
 pub mod helpers;
 
 mod admin;
+mod balance_history_edge_cases;
 mod dispute;
 mod events;
+mod fee_calculation_scenarios;
 mod fuzz;
 mod index;
 mod integration;
 mod invariants;
 mod lifecycle;
+mod match_validation;
 mod multi_token;
+mod oracle_validation;
 mod pagination;
 mod player_balance_history;
 mod security;
@@ -26,6 +30,8 @@ mod snapshots;
 mod tier;
 mod token_allowlist;
 mod ttl;
+mod fee_tiers;
+mod validation;
 
 // ── Base fixture ─────────────────────────────────────────────────────────────
 
@@ -61,6 +67,11 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     (
@@ -104,7 +115,7 @@ pub fn setup_with_funded_match() -> (
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "funded_fixture_game"),
+        &String::from_str(&env, "aba1d0d0"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -164,3 +175,6 @@ pub fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, 
 }
 mod cancellation_fee;
 mod stablecoin;
+mod dispute_rollback;
+mod protocol_config;
+mod platform_stats;

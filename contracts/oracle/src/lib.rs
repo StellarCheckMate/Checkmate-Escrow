@@ -1,5 +1,21 @@
 #![no_std]
 
+/// Oracle Contract for Checkmate — verification and consensus for chess match results.
+///
+/// For a comprehensive reference of all error codes (their numeric values, causes, and recovery
+/// actions), see [`Error Codes Reference`](../../docs/error-codes.md).
+///
+/// # Error Codes Quick Reference
+///
+/// Every function that returns a `Result<T, Error>` surfaces errors as numeric discriminants.
+/// Common errors:
+/// - `#1` — `Unauthorized` — Caller is not the configured admin or contract not initialized
+/// - `#2` — `AlreadySubmitted` — Result already recorded for this match
+/// - `#3` — `ResultNotFound` — No result stored for this match
+/// - `#5` — `ContractPaused` — Contract paused; submissions blocked
+/// - `#9` — `RateLimitExceeded` — Oracle exceeded hourly/daily submission quota
+///
+/// See [`docs/error-codes.md`](../../docs/error-codes.md) for all 21 error codes with causes and recovery actions.
 mod errors;
 pub mod types;
 
@@ -8,9 +24,12 @@ use soroban_sdk::{
     contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec,
 };
 use types::{
-    BatchResultEntry, CandidateTally, ConsensusState, DataKey, OracleRegistration,
+    BatchResultEntry, CandidateTally, ConsensusState, DataKey, OracleMetrics, OracleRegistration,
     OracleVoteRecord, Platform, RateLimitConfig, RateLimitStatus, RateWindow, ResultEntry, Winner,
 };
+
+/// Maximum response time SLA threshold, in milliseconds (5 seconds).
+const SLA_MAX_RESPONSE_TIME_MS: u64 = 5_000;
 
 /// Maximum number of entries accepted in a single batch submission.
 /// Designed for v2.0 tournament use; future versions may raise this limit.
@@ -18,6 +37,9 @@ const MAX_BATCH_SIZE: u32 = 100;
 
 /// ~30 days at 5s/ledger.
 const MATCH_TTL_LEDGERS: u32 = 518_400;
+
+/// Default TTL for cached oracle game results (1 hour).
+const DEFAULT_CACHE_TTL_SECS: u64 = 3_600;
 
 /// Default maximum submissions accepted from a single oracle per rolling hour.
 const DEFAULT_HOURLY_LIMIT: u32 = 100;
@@ -180,6 +202,7 @@ impl OracleContract {
         game_id: String,
         platform: Platform,
         result: Winner,
+        response_time_ms: u64,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
         // Check if contract is paused first
@@ -210,6 +233,7 @@ impl OracleContract {
         }
 
         Self::check_oracle_rate_limit(&env, &admin, 1)?;
+        Self::update_oracle_metrics(&env, &admin, response_time_ms)?;
 
         if env.storage().persistent().has(&DataKey::Result(match_id)) {
             return Err(Error::AlreadySubmitted);
@@ -222,8 +246,8 @@ impl OracleContract {
         env.storage().persistent().set(
             &DataKey::Result(match_id),
             &ResultEntry {
-                game_id,
-                platform,
+                game_id: game_id.clone(),
+                platform: platform.clone(),
                 result: result.clone(),
                 submitted_ledger: env.ledger().sequence(),
                 submitter: admin.clone(),
@@ -231,6 +255,17 @@ impl OracleContract {
         );
         env.storage().persistent().extend_ttl(
             &DataKey::Result(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let expiry = env.ledger().timestamp() + DEFAULT_CACHE_TTL_SECS;
+        let cache_key = DataKey::OracleCache(game_id, platform);
+        env.storage()
+            .persistent()
+            .set(&cache_key, &(result.clone(), expiry));
+        env.storage().persistent().extend_ttl(
+            &cache_key,
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
@@ -323,13 +358,14 @@ impl OracleContract {
 
         // All checks passed — commit atomically.
         let current_ledger = env.ledger().sequence();
+        let expiry = env.ledger().timestamp() + DEFAULT_CACHE_TTL_SECS;
         for i in 0..len {
             let entry = entries.get(i).unwrap();
             env.storage().persistent().set(
                 &DataKey::Result(entry.match_id),
                 &ResultEntry {
-                    game_id: entry.game_id,
-                    platform: entry.platform,
+                    game_id: entry.game_id.clone(),
+                    platform: entry.platform.clone(),
                     result: entry.result.clone(),
                     submitted_ledger: current_ledger,
                     submitter: admin.clone(),
@@ -340,6 +376,17 @@ impl OracleContract {
                 MATCH_TTL_LEDGERS,
                 MATCH_TTL_LEDGERS,
             );
+
+            let cache_key = DataKey::OracleCache(entry.game_id, entry.platform);
+            env.storage()
+                .persistent()
+                .set(&cache_key, &(entry.result.clone(), expiry));
+            env.storage().persistent().extend_ttl(
+                &cache_key,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+
             env.events().publish(
                 (Symbol::new(&env, "oracle"), symbol_short!("result")),
                 (entry.match_id, entry.result),
@@ -404,6 +451,7 @@ impl OracleContract {
         game_id: String,
         platform: Platform,
         result: Winner,
+        response_time_ms: u64,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
 
@@ -440,6 +488,7 @@ impl OracleContract {
         }
 
         Self::check_oracle_rate_limit(&env, &oracle, 1)?;
+        Self::update_oracle_metrics(&env, &oracle, response_time_ms)?;
 
         let vote_key = DataKey::OracleVote(match_id, oracle.clone());
         let vote = OracleVoteRecord {
@@ -541,6 +590,17 @@ impl OracleContract {
                 MATCH_TTL_LEDGERS,
             );
 
+            let expiry = env.ledger().timestamp() + DEFAULT_CACHE_TTL_SECS;
+            let cache_key = DataKey::OracleCache(winning.game_id.clone(), winning.platform.clone());
+            env.storage()
+                .persistent()
+                .set(&cache_key, &(winning.result.clone(), expiry));
+            env.storage().persistent().extend_ttl(
+                &cache_key,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+
             // Majority wins, minority is slashed: every oracle that voted for
             // a losing candidate is automatically penalized.
             for i in 0..state.candidates.len() {
@@ -583,6 +643,9 @@ impl OracleContract {
 
             if !still_possible {
                 state.disputed = true;
+                env.storage()
+                    .persistent()
+                    .remove(&DataKey::OracleCache(game_id, platform));
                 env.events().publish(
                     (Symbol::new(&env, "oracle"), symbol_short!("disputed")),
                     match_id,
@@ -671,8 +734,8 @@ impl OracleContract {
         env.storage().persistent().set(
             &DataKey::Result(match_id),
             &ResultEntry {
-                game_id,
-                platform,
+                game_id: game_id.clone(),
+                platform: platform.clone(),
                 result: result.clone(),
                 submitted_ledger: env.ledger().sequence(),
                 submitter: admin,
@@ -683,6 +746,18 @@ impl OracleContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
+
+        let expiry = env.ledger().timestamp() + DEFAULT_CACHE_TTL_SECS;
+        let cache_key = DataKey::OracleCache(game_id, platform);
+        env.storage()
+            .persistent()
+            .set(&cache_key, &(result.clone(), expiry));
+        env.storage().persistent().extend_ttl(
+            &cache_key,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
         env.storage()
             .persistent()
             .remove(&DataKey::MatchVotes(match_id));
@@ -746,6 +821,102 @@ impl OracleContract {
             .get(&DataKey::OracleSet)
             .unwrap_or(Vec::new(&env));
         set.len()
+    }
+
+    /// Returns performance metrics and SLA status for a registered oracle.
+    pub fn get_oracle_metrics(env: Env, oracle_address: Address) -> OracleMetrics {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OracleMetrics(oracle_address))
+            .unwrap_or(OracleMetrics {
+                last_response_time_ms: 0,
+                avg_response_time_ms: 0,
+                uptime_percentage: 100,
+                total_submissions: 0,
+                successful_submissions: 0,
+                active: true,
+            })
+    }
+
+    /// Admin-only function to deactivate an oracle whose average response time exceeds the SLA target (> 5s).
+    pub fn deactivate_slow_oracle(env: Env, oracle_address: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let mut metrics: OracleMetrics = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleMetrics(oracle_address.clone()))
+            .ok_or(Error::ResultNotFound)?;
+
+        if metrics.avg_response_time_ms <= SLA_MAX_RESPONSE_TIME_MS {
+            return Err(Error::OracleNotSlow);
+        }
+
+        metrics.active = false;
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleMetrics(oracle_address.clone()), &metrics);
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("deact")),
+            oracle_address,
+        );
+
+        Ok(())
+    }
+
+    fn update_oracle_metrics(
+        env: &Env,
+        oracle: &Address,
+        response_time_ms: u64,
+    ) -> Result<(), Error> {
+        let mut metrics: OracleMetrics = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleMetrics(oracle.clone()))
+            .unwrap_or(OracleMetrics {
+                last_response_time_ms: 0,
+                avg_response_time_ms: 0,
+                uptime_percentage: 100,
+                total_submissions: 0,
+                successful_submissions: 0,
+                active: true,
+            });
+
+        if !metrics.active {
+            return Err(Error::OracleDeactivated);
+        }
+
+        metrics.last_response_time_ms = response_time_ms;
+        let new_total = metrics.total_submissions.saturating_add(1);
+        let prev_sum = (metrics.avg_response_time_ms as u128) * (metrics.total_submissions as u128);
+        let new_sum = prev_sum + (response_time_ms as u128);
+        metrics.avg_response_time_ms = (new_sum / (new_total as u128)) as u64;
+        metrics.total_submissions = new_total;
+
+        if response_time_ms <= SLA_MAX_RESPONSE_TIME_MS {
+            metrics.successful_submissions = metrics.successful_submissions.saturating_add(1);
+        }
+
+        metrics.uptime_percentage =
+            (((metrics.successful_submissions as u64) * 100) / (new_total as u64)) as u32;
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::OracleMetrics(oracle.clone()), &metrics);
+        env.storage().persistent().extend_ttl(
+            &DataKey::OracleMetrics(oracle.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Ok(())
     }
 
     /// Return the in-progress consensus tally for a match: every distinct
@@ -882,6 +1053,41 @@ impl OracleContract {
         Ok(env.storage().persistent().has(&DataKey::Result(match_id)))
     }
 
+    /// Return cached result for a game if available and not expired.
+    /// Returns `Some((result, expiry_timestamp))` if a valid non-expired cache entry exists,
+    /// or `None` if missing or expired.
+    pub fn get_cached_result(
+        env: Env,
+        game_id: String,
+        platform: Platform,
+    ) -> Option<(Winner, u64)> {
+        extend_instance_ttl(&env);
+        let cache_key = DataKey::OracleCache(game_id, platform);
+        if let Some((result, expiry)) = env
+            .storage()
+            .persistent()
+            .get::<_, (Winner, u64)>(&cache_key)
+        {
+            let now = env.ledger().timestamp();
+            if now >= expiry {
+                env.storage().persistent().remove(&cache_key);
+                None
+            } else {
+                Some((result, expiry))
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Invalidate/remove a cached result for a specific game and platform.
+    pub fn invalidate_cache(env: Env, game_id: String, platform: Platform) {
+        extend_instance_ttl(&env);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::OracleCache(game_id, platform));
+    }
+
     /// Return the admin address stored in the contract.
     ///
     /// # Errors
@@ -919,9 +1125,15 @@ impl OracleContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        if !env.storage().persistent().has(&DataKey::Result(match_id)) {
-            return Err(Error::ResultNotFound);
-        }
+        let entry: ResultEntry = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Result(match_id))
+            .ok_or(Error::ResultNotFound)?;
+
+        env.storage()
+            .persistent()
+            .remove(&DataKey::OracleCache(entry.game_id, entry.platform));
 
         env.storage()
             .persistent()
@@ -1308,30 +1520,30 @@ impl OracleContract {
             .get::<_, i128>(&DataKey::Rate(token_out.clone(), token_in.clone()))
         {
             // Rate is token_out/token_in; compute amount_in * rate / 1e7
-            let amount_out = amount_in
+            let amt = amount_in
                 .checked_mul(rate)
                 .ok_or(Error::Overflow)?
                 .checked_div(10_000_000)
                 .ok_or(Error::Overflow)?;
-            if amount_out < min_amount_out {
+            if amt < min_amount_out {
                 return Err(Error::SlippageExceeded);
             }
-            amount_out
+            amt
         } else if let Some(rate) = env
             .storage()
             .persistent()
             .get::<_, i128>(&DataKey::Rate(token_in.clone(), token_out.clone()))
         {
             // Rate is token_in/token_out; compute amount_in * 1e7 / rate
-            let amount_out = amount_in
+            let amt = amount_in
                 .checked_mul(10_000_000)
                 .ok_or(Error::Overflow)?
                 .checked_div(rate)
                 .ok_or(Error::Overflow)?;
-            if amount_out < min_amount_out {
+            if amt < min_amount_out {
                 return Err(Error::SlippageExceeded);
             }
-            amount_out
+            amt
         } else {
             return Err(Error::ResultNotFound);
         };

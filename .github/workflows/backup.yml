@@ -1,0 +1,122 @@
+name: Scheduled Contract Backup
+
+on:
+  # Run daily at 02:00 UTC
+  schedule:
+    - cron: "0 2 * * *"
+  # Allow manual trigger for on-demand backups or testing
+  workflow_dispatch:
+    inputs:
+      network:
+        description: "Network to back up (testnet or mainnet)"
+        required: true
+        default: testnet
+        type: choice
+        options:
+          - testnet
+          - mainnet
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  backup-testnet:
+    name: Backup Testnet State
+    runs-on: ubuntu-latest
+    # Only run on schedule or when explicitly targeting testnet
+    if: >
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.network == 'testnet')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Stellar CLI
+        run: |
+          curl -sSL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+
+      - name: Install jq
+        run: sudo apt-get install -y --no-install-recommends jq
+
+      - name: Run backup (testnet)
+        env:
+          STELLAR_NETWORK: testnet
+          CONTRACT_ESCROW: ${{ secrets.TESTNET_CONTRACT_ESCROW }}
+          DEPLOYER_KEYPAIR: ${{ secrets.TESTNET_DEPLOYER_KEYPAIR }}
+          BACKUP_DIR: backups
+          BACKUP_RETENTION_DAYS: "30"
+          # Set S3_BUCKET to enable automatic S3 upload
+          S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+        run: |
+          # Skip gracefully if the contract address is not configured yet
+          if [[ -z "$CONTRACT_ESCROW" ]]; then
+            echo "⚠️  TESTNET_CONTRACT_ESCROW secret not set — skipping backup."
+            exit 0
+          fi
+          bash scripts/backup_state.sh testnet backups
+
+      - name: Configure AWS credentials (for S3 upload)
+        if: ${{ env.S3_BUCKET != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+        env:
+          S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+
+      - name: Upload snapshot artifact (30-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: testnet-snapshot-${{ github.run_id }}
+          path: backups/escrow-snapshot-testnet-*.json
+          retention-days: 30
+          if-no-files-found: warn
+
+  backup-mainnet:
+    name: Backup Mainnet State
+    runs-on: ubuntu-latest
+    # Mainnet backups only run when explicitly requested via workflow_dispatch
+    if: >
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.network == 'mainnet'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Stellar CLI
+        run: |
+          curl -sSL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+
+      - name: Install jq
+        run: sudo apt-get install -y --no-install-recommends jq
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-1' }}
+
+      - name: Run backup (mainnet)
+        env:
+          STELLAR_NETWORK: mainnet
+          CONTRACT_ESCROW: ${{ secrets.MAINNET_CONTRACT_ESCROW }}
+          DEPLOYER_KEYPAIR: ${{ secrets.MAINNET_DEPLOYER_KEYPAIR }}
+          BACKUP_DIR: backups
+          BACKUP_RETENTION_DAYS: "90"
+          S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+        run: |
+          if [[ -z "$CONTRACT_ESCROW" ]]; then
+            echo "⚠️  MAINNET_CONTRACT_ESCROW secret not set — skipping backup."
+            exit 0
+          fi
+          bash scripts/backup_state.sh mainnet backups
+
+      - name: Upload snapshot artifact (90-day retention)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mainnet-snapshot-${{ github.run_id }}
+          path: backups/escrow-snapshot-mainnet-*.json
+          retention-days: 90
+          if-no-files-found: warn

@@ -17,12 +17,17 @@ fn test_cancellation_fee_deduction() {
         cancellation_fee_basis_points: 100, // 1%
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     // Initial balances
     assert_eq!(token_client.balance(&player1), 1000);
 
-    let match_id = helpers::create_default_match(&client, &env, &player1, &player2, &token, "test_fee_game");
+    let match_id = helpers::create_default_match(&client, &env, &player1, &player2, &token, "tstfeegm");
 
     // Player 1 deposits
     client.deposit(&match_id, &player1);
@@ -45,7 +50,7 @@ fn test_cancellation_no_fee_if_no_deposit() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = token_client(&env, &token);
 
-    let match_id = helpers::create_default_match(&client, &env, &player1, &player2, &token, "test_no_fee_game");
+    let match_id = helpers::create_default_match(&client, &env, &player1, &player2, &token, "tnfee001");
 
     // Neither player deposits
     // Player 1 cancels
@@ -71,12 +76,17 @@ fn test_cancellation_fee_with_custom_config() {
         cancellation_fee_basis_points: 500, // 5%
         treasury: new_treasury.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: new_treasury.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     };
     
     env.mock_all_auths();
     client.set_protocol_config(&config);
 
-    let match_id = helpers::create_default_match(&client, &env, &player1, &player2, &token, "test_custom_fee_game");
+    let match_id = helpers::create_default_match(&client, &env, &player1, &player2, &token, "tcstmfee");
 
     // Player 2 deposits
     client.deposit(&match_id, &player2);

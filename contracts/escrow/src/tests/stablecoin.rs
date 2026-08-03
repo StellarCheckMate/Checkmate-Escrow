@@ -20,6 +20,11 @@ fn enable_stablecoin_mode(client: &EscrowContractClient, admin: &Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: true,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 }
 
@@ -128,7 +133,7 @@ fn test_stablecoin_mode_disabled_by_default_allows_any_token() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "sc_default_game"),
+        &String::from_str(&env, "ef6d2021"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0);
@@ -147,7 +152,7 @@ fn test_stablecoin_mode_rejects_non_stablecoin_token() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "sc_reject_game"),
+        &String::from_str(&env, "87ec483c"),
         &Platform::Lichess,
     );
     assert!(
@@ -171,7 +176,7 @@ fn test_stablecoin_mode_accepts_registered_stablecoin_token() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "sc_accept_game"),
+        &String::from_str(&env, "679329e5"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0, "create_match should succeed for a registered stablecoin token");
@@ -190,7 +195,7 @@ fn test_stablecoin_mode_can_be_toggled_off() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "sc_toggle_game1"),
+        &String::from_str(&env, "8fbf1101"),
         &Platform::Lichess,
     );
     assert!(result.is_err(), "should fail in stablecoin-only mode");
@@ -201,6 +206,11 @@ fn test_stablecoin_mode_can_be_toggled_off() {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
     // Same token should now succeed.
@@ -209,7 +219,7 @@ fn test_stablecoin_mode_can_be_toggled_off() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "sc_toggle_game2"),
+        &String::from_str(&env, "341fc29d"),
         &Platform::Lichess,
     );
     assert_eq!(id, 0);
@@ -235,7 +245,7 @@ fn test_multiple_stablecoin_issuers_can_coexist() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "sc_multi_game1"),
+        &String::from_str(&env, "31fd3000"),
         &Platform::Lichess,
     );
     assert_eq!(id1, 0);
@@ -245,7 +255,7 @@ fn test_multiple_stablecoin_issuers_can_coexist() {
         &player2,
         &100,
         &token2_addr,
-        &String::from_str(&env, "sc_multi_game2"),
+        &String::from_str(&env, "3d9d2892"),
         &Platform::Lichess,
     );
     assert_eq!(id2, 1);
@@ -257,7 +267,7 @@ fn test_multiple_stablecoin_issuers_can_coexist() {
         &player2,
         &100,
         &unknown_token,
-        &String::from_str(&env, "sc_multi_game3"),
+        &String::from_str(&env, "5f5a1e3d"),
         &Platform::Lichess,
     );
     assert!(result.is_err(), "unregistered token must be rejected");

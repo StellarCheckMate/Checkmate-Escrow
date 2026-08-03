@@ -46,6 +46,18 @@ pub struct ProtocolConfig {
     /// When true, only tokens issued by a registered stablecoin issuer are
     /// accepted for new matches.  Disabled by default.
     pub stablecoin_only_mode: bool,
+    /// Upper bound on `stake_amount` accepted by `create_match` and friends.
+    /// `None` means unlimited (default).
+    pub maximum_stake: Option<i128>,
+    /// Runtime-configurable match expiration timeout, in seconds.
+    pub match_timeout_seconds: u64,
+    /// Protocol fee charged on winner payouts, in basis points of the pot
+    /// (1 bp = 0.01 %). Draw refunds are never charged this fee. Default 0.
+    pub protocol_fee_bps: u32,
+    /// Recipient of the protocol fee collected on winner payouts.
+    pub fee_recipient: Address,
+    /// Minimum stake amount enforced in create_match (default 1).
+    pub minimum_stake: i128,
 }
 
 /// A single fee tier entry: matches with a stake up to `max_stake` are charged
@@ -95,6 +107,26 @@ pub struct Match {
     pub total_pause_duration: u32,
     /// Optional referrer address for referral fee sharing.
     pub referrer: Option<Address>,
+    /// Ledger timestamp (Unix seconds) of the last recorded match activity.
+    /// Initialized at match creation and refreshed on each deposit so that
+    /// `dispute_and_rollback_match` can enforce the 24h dispute window based
+    /// on the most recent in-game activity.
+    pub last_heartbeat: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TempOracleRotation {
+    pub old_oracle: Address,
+    pub temp_oracle: Address,
+    pub expiry: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingOracleRotation {
+    pub old_oracle: Address,
+    pub new_oracle: Address,
 }
 
 #[contracttype]
@@ -108,7 +140,6 @@ pub enum DataKey {
     GameId(String),
     ActiveMatches,
     PlayerMatches(Address),
-    MatchTimeout,
     AllowedToken(Address),
     AllowedTokenCount,
     AllowlistEnforced,
@@ -158,6 +189,18 @@ pub enum DataKey {
     StablecoinIssuer(Address),
     /// Total number of registered stablecoin issuers.
     StablecoinIssuerCount,
+    PendingUpgradeHash,
+    UpgradeScheduledAt,
+    ContractVersion,
+    ReferralShareBasisPoints,
+    BlacklistedToken(Address),
+    BlacklistedTokens,
+    FeeTiers,
+    PlayerPreferredToken(Address),
+    /// Pending permanent oracle rotation proposal (requires confirmation).
+    PendingOracleRotation,
+    /// Temporary oracle rotation active until expiry timestamp.
+    TempOracleRotation,
 }
 
 /// The lifecycle event that triggered a balance snapshot.
@@ -299,4 +342,20 @@ pub enum BalanceAtTimestamp {
     /// The ring buffer has overwritten every snapshot old enough to answer
     /// this query. The true balance at that point is unknown, not zero.
     Pruned,
+}
+
+/// Platform-wide aggregated statistics for analytics.
+///
+/// Incremented atomically during `create_match` (for total_matches and total_volume)
+/// and `submit_result` (for total_payouts). Used by off-chain analytics to avoid
+/// the need for full indexing of on-chain events.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlatformStats {
+    /// Total number of matches created across all time.
+    pub total_matches: u64,
+    /// Total value (in base token units) staked across all matches.
+    pub total_volume: i128,
+    /// Total number of successful payouts (winner or draw completed matches).
+    pub total_payouts: u64,
 }
