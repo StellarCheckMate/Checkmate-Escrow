@@ -7,6 +7,9 @@ use serde::Deserialize;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::errors::LichessError;
+use super::provider::GameProvider;
+use super::provider_error::ProviderError;
+use super::rate_limiter::{RateLimiter, RateLimiterConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LichessGameResult {
@@ -40,8 +43,14 @@ impl Default for LichessClientConfig {
 /// Lichess off-chain client.
 ///
 /// - Validates Lichess game IDs (exactly 8 alphanumeric characters).
-/// - Applies a per-request timeout (30s).
-/// - Enforces 2-second spacing between requests to stay within rate limits.
+/// - Applies a per-request timeout.
+/// - Token-bucket rate limiting (60 req/min by default).
+/// - Concurrency semaphore (8 in-flight requests by default).
+///
+/// ## Sharing
+///
+/// [`LichessClient`] is `Clone` and cheap to clone — all clones share the
+/// same token bucket and semaphore.
 #[derive(Clone)]
 pub struct LichessClient {
     http: Client,
@@ -57,17 +66,13 @@ impl Default for LichessClient {
 }
 
 impl LichessClient {
+    /// Create a client with production defaults.
     pub fn new() -> Result<Self, LichessError> {
-        Self::new_with_base_and_timeout(
-            "https://lichess.org".to_string(),
-            Duration::from_secs(30),
-        )
+        Self::with_config(LichessClientConfig::default())
     }
 
-    pub fn new_with_base_and_timeout(
-        api_base: String,
-        request_timeout: Duration,
-    ) -> Result<Self, LichessError> {
+    /// Create a client with fully custom configuration (useful in tests).
+    pub fn with_config(cfg: LichessClientConfig) -> Result<Self, LichessError> {
         let http = Client::builder()
             .timeout(cfg.request_timeout)
             .build()
@@ -81,11 +86,12 @@ impl LichessClient {
         })
     }
 
-    /// Convenience constructor used by existing tests.
+    /// Convenience constructor: accepts only base URL and timeout, uses
+    /// default rate-limit and concurrency settings.
     pub fn new_with_base_and_timeout(
         api_base: String,
         request_timeout: Duration,
-    ) -> Result<Self, ChessComError> {
+    ) -> Result<Self, LichessError> {
         Self::with_config(LichessClientConfig {
             api_base,
             request_timeout,
@@ -101,20 +107,11 @@ impl LichessClient {
         Ok(())
     }
 
-    async fn enforce_rate_limit(&self) -> Result<(), LichessError> {
-        let mut last = self.last_request.lock().await;
-        let elapsed = Instant::now().saturating_duration_since(*last);
-        if elapsed < self.min_spacing {
-            tokio::time::sleep(self.min_spacing - elapsed).await;
-        }
-        *last = Instant::now();
-        Ok(())
-    }
-
+    /// Fetch the result for `game_id` from the Lichess API.
     pub async fn fetch_result(&self, game_id: &str) -> Result<LichessGameResult, LichessError> {
         Self::validate_game_id(game_id)?;
 
-        // 1. Acquire a rate-limit token.
+        // 1. Acquire a rate-limit token (may sleep until one is available).
         self.rate_limiter.acquire().await;
 
         // 2. Acquire a concurrency permit.
@@ -210,9 +207,7 @@ impl GameProvider for LichessClient {
     }
 
     async fn fetch_result(&self, game_id: &str) -> Result<Winner, ProviderError> {
-        // Lichess game IDs are always 8 chars; chess.com IDs are numeric.
-        // If the game_id doesn't look like a Lichess ID, fail fast so the
-        // registry can try the next provider.
+        // Lichess game IDs are always 8 alphanumeric chars; fail fast otherwise.
         if game_id.len() != 8 || !game_id.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(ProviderError::InvalidGameId(format!(
                 "lichess expects 8 alphanumeric chars, got {:?}",

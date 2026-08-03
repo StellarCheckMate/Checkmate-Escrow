@@ -17,8 +17,11 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use oracle_service::oracle::{
-    ChessComClient, ChessComClientConfig, LichessClient, LichessClientConfig,
-    ProviderError, ProviderRegistry, RateLimiterConfig,
+    chess_com_client::{ChessComClient, ChessComClientConfig},
+    lichess_client::{LichessClient, LichessClientConfig},
+    provider::ProviderRegistry,
+    provider_error::ProviderError,
+    rate_limiter::RateLimiterConfig,
 };
 use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
