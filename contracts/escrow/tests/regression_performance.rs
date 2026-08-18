@@ -17,6 +17,11 @@ struct Harness {
     env: Env,
     contract_id: Address,
     token: Address,
+    oracle: Address,
+    /// Monotonic counter used to derive Lichess-compliant (exactly 8 ASCII
+    /// alphanumeric chars) game IDs, since call sites pass free-form
+    /// descriptive labels ("pending-000042") that don't fit that format.
+    game_id_counter: std::cell::Cell<u32>,
 }
 
 impl Harness {
@@ -39,6 +44,8 @@ impl Harness {
             env,
             contract_id,
             token,
+            oracle,
+            game_id_counter: std::cell::Cell::new(0),
         }
     }
 
@@ -52,17 +59,25 @@ impl Harness {
         player
     }
 
-    fn new_match(&self, game_id: &str) -> (u64, Address, Address) {
+    /// Derives a Lichess-compliant (exactly 8 ASCII alphanumeric chars) game
+    /// ID from an internal counter, guaranteeing both uniqueness and format
+    /// validity regardless of what descriptive label a call site would have
+    /// used otherwise.
+    fn next_game_id(&self) -> SorobanString {
+        let n = self.game_id_counter.get();
+        self.game_id_counter.set(n + 1);
+        SorobanString::from_str(&self.env, &format!("{n:08x}"))
+    }
+
+    /// `_label` is purely descriptive (unused past this call) — see
+    /// `next_game_id`.
+    fn new_match(&self, _label: &str) -> (u64, Address, Address) {
+        let game_id = self.next_game_id();
         let p1 = self.new_player();
         let p2 = self.new_player();
-        let id = self.client().create_match(
-            &p1,
-            &p2,
-            &STAKE,
-            &self.token,
-            &SorobanString::from_str(&self.env, game_id),
-            &Platform::Lichess,
-        );
+        let id =
+            self.client()
+                .create_match(&p1, &p2, &STAKE, &self.token, &game_id, &Platform::Lichess);
         (id, p1, p2)
     }
 }
@@ -86,7 +101,7 @@ fn test_active_match_inflation_cap_prevents_dos() {
             &victim,
             &STAKE,
             &harness.token,
-            &SorobanString::from_str(&harness.env, &format!("inflation-attack-{:06}", i)),
+            &harness.next_game_id(),
             &Platform::Lichess,
         );
         match_ids.push(id);
@@ -132,7 +147,9 @@ fn test_removal_cost_bounded_by_cap() {
     let start = std::time::Instant::now();
 
     let (target_id, _target_p1, _target_p2) = active_ids.pop().unwrap();
-    harness.client().submit_result(&target_id, &Winner::Player1);
+    harness
+        .client()
+        .submit_result(&target_id, &Winner::Player1, &harness.oracle);
 
     let cpu_cost = harness.env.budget().cpu_instruction_cost();
     let elapsed = start.elapsed();
@@ -160,18 +177,20 @@ fn test_completed_match_count_incremented_atomically() {
     let p2 = harness.new_player();
 
     // Create and complete 10 matches
-    for i in 0..10 {
+    for _ in 0..10 {
         let id = harness.client().create_match(
             &p1,
             &p2,
             &STAKE,
             &harness.token,
-            &SorobanString::from_str(&harness.env, &format!("completion-{:06}", i)),
+            &harness.next_game_id(),
             &Platform::Lichess,
         );
         harness.client().deposit(&id, &p1);
         harness.client().deposit(&id, &p2);
-        harness.client().submit_result(&id, &Winner::Player1);
+        harness
+            .client()
+            .submit_result(&id, &Winner::Player1, &harness.oracle);
     }
 
     // Check that tier query uses cached counter (fast path)
@@ -243,7 +262,7 @@ fn test_per_player_active_match_cap_enforcement() {
             &opponent,
             &STAKE,
             &harness.token,
-            &SorobanString::from_str(&harness.env, &format!("cap-test-{:06}", i)),
+            &harness.next_game_id(),
             &Platform::Lichess,
         );
 
@@ -257,7 +276,7 @@ fn test_per_player_active_match_cap_enforcement() {
         &opponents[0],
         &STAKE,
         &harness.token,
-        &SorobanString::from_str(&harness.env, "cap-test-overflow"),
+        &harness.next_game_id(),
         &Platform::Lichess,
     );
 

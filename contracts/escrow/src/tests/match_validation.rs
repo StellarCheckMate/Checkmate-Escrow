@@ -109,11 +109,11 @@ fn test_deposit_insufficient_balance_rejected() {
 
 #[test]
 fn test_deposit_on_completed_match_rejected() {
-    let (env, contract_id, _oracle, player1, _player2, _token, _admin, match_id) =
+    let (env, contract_id, oracle, player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let result = client.try_deposit(&0, &player1);
     assert!(

@@ -84,6 +84,7 @@ struct LoadHarness {
     env: Env,
     contract_id: Address,
     token: Address,
+    oracle: Address,
 }
 
 impl LoadHarness {
@@ -109,17 +110,18 @@ impl LoadHarness {
             cancellation_fee_basis_points: 0,
             treasury: admin.clone(),
             minimum_stake: DEFAULT_MINIMUM_STAKE,
-        stablecoin_only_mode: false,
-        maximum_stake: None,
-        match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
-        protocol_fee_bps: 0,
-        fee_recipient: admin.clone(),
-    });
+            stablecoin_only_mode: false,
+            maximum_stake: None,
+            match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
+            protocol_fee_bps: 0,
+            fee_recipient: admin.clone(),
+        });
 
         Self {
             env,
             contract_id,
             token,
+            oracle,
         }
     }
 
@@ -149,7 +151,7 @@ impl LoadHarness {
         for i in 0..n {
             let p1 = self.new_player();
             let p2 = self.new_player();
-            let game_id = SorobanString::from_str(&self.env, &format!("bg{:08}", i));
+            let game_id = SorobanString::from_str(&self.env, &format!("bg{:06x}", i));
             let mid =
                 client.create_match(&p1, &p2, &STAKE, &self.token, &game_id, &Platform::Lichess);
             client.deposit(&mid, &p1);
@@ -174,7 +176,7 @@ impl LoadHarness {
 // ── Helper: unique game IDs ───────────────────────────────────────────────────
 
 fn make_game_id(env: &Env, tag: &str, n: u32) -> SorobanString {
-    SorobanString::from_str(env, &format!("{}{:08x}", tag, n))
+    SorobanString::from_str(env, &format!("{}{:06x}", tag, n))
 }
 
 // ── Test 1: create_match throughput ──────────────────────────────────────────
@@ -283,7 +285,7 @@ fn load_submit_result_at_scale() {
         client.deposit(&mid, &p2);
 
         let (cpu, mem, wt) = h.measure(|| {
-            client.submit_result(&mid, &Winner::Player1);
+            client.submit_result(&mid, &Winner::Player1, &h.oracle);
         });
 
         println!(
@@ -412,7 +414,7 @@ fn load_correctness_no_cross_match_contamination() {
     let mut resolved: Vec<u64> = Vec::new();
     for (i, &mid) in match_ids.iter().enumerate() {
         if (i as u32).is_multiple_of(RESOLVE_EVERY) {
-            client.submit_result(&mid, &Winner::Player1);
+            client.submit_result(&mid, &Winner::Player1, &h.oracle);
             let (p1, _) = &players[i];
             client.claim_vested_payout(&mid, p1);
             resolved.push(mid);
@@ -472,7 +474,7 @@ fn load_draw_refunds_correct_at_scale() {
         let bal_before_p1 = token_client.balance(p1);
         let bal_before_p2 = token_client.balance(p2);
 
-        client.submit_result(&mid, &Winner::Draw);
+        client.submit_result(&mid, &Winner::Draw, &h.oracle);
         client.claim_vested_payout(&mid, p1);
         client.claim_vested_payout(&mid, p2);
 

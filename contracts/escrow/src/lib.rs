@@ -40,7 +40,8 @@ mod tests;
 
 use errors::Error;
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, token, Address, Bytes, BytesN, Env, String, Symbol, Vec,
+    contract, contractimpl, symbol_short, token, Address, Bytes, BytesN, Env, IntoVal, String,
+    Symbol, Vec,
 };
 use types::{
     BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeState, FeeTier, Match,
@@ -212,14 +213,17 @@ impl EscrowContract {
     }
 
     /// Pause the contract — admin only. Blocks create_match, deposit, and submit_result.
-    pub fn pause(env: Env) -> Result<(), Error> {
+    pub fn pause(env: Env, caller: Address) -> Result<(), Error> {
         extend_instance_ttl(&env);
+        caller.require_auth();
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
+        if caller != admin {
+            return Err(Error::Unauthorized);
+        }
         env.storage().instance().set(&DataKey::Paused, &true);
         env.events()
             .publish((Symbol::new(&env, "admin"), symbol_short!("paused")), ());
@@ -227,14 +231,17 @@ impl EscrowContract {
     }
 
     /// Unpause the contract — admin only.
-    pub fn unpause(env: Env) -> Result<(), Error> {
+    pub fn unpause(env: Env, caller: Address) -> Result<(), Error> {
         extend_instance_ttl(&env);
+        caller.require_auth();
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
+        if caller != admin {
+            return Err(Error::Unauthorized);
+        }
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events()
             .publish((Symbol::new(&env, "admin"), symbol_short!("unpaused")), ());
@@ -1526,7 +1533,12 @@ impl EscrowContract {
     }
 
     /// Oracle submits the verified match result and triggers payout vesting.
-    pub fn submit_result(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+    pub fn submit_result(
+        env: Env,
+        match_id: u64,
+        winner: Winner,
+        oracle: Address,
+    ) -> Result<(), Error> {
         if env
             .storage()
             .instance()
@@ -1536,8 +1548,11 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
-        let oracle: Address = Self::effective_oracle(&env)?;
         oracle.require_auth();
+        let stored_oracle: Address = Self::effective_oracle(&env)?;
+        if oracle != stored_oracle {
+            return Err(Error::Unauthorized);
+        }
 
         Self::settle_result(&env, match_id, winner)
     }
@@ -1693,9 +1708,10 @@ impl EscrowContract {
         match_id: u64,
         winner: Winner,
         game_id: String,
+        oracle: Address,
     ) -> Result<(), Error> {
         // Validate and execute payout via standard submit_result (handles oracle auth).
-        Self::submit_result(env.clone(), match_id, winner)?;
+        Self::submit_result(env.clone(), match_id, winner, oracle)?;
 
         // Store oracle record in a canonical location for audit trail.
         env.storage()
@@ -2356,15 +2372,15 @@ impl EscrowContract {
 
     /// Internal helper to increment platform statistics. Called from `create_match`.
     fn record_platform_match_created(env: &Env, stake_amount: i128) {
-        let mut stats: PlatformStats = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Stats)
-            .unwrap_or(PlatformStats {
-                total_matches: 0,
-                total_volume: 0,
-                total_payouts: 0,
-            });
+        let mut stats: PlatformStats =
+            env.storage()
+                .persistent()
+                .get(&DataKey::Stats)
+                .unwrap_or(PlatformStats {
+                    total_matches: 0,
+                    total_volume: 0,
+                    total_payouts: 0,
+                });
 
         stats.total_matches = stats.total_matches.saturating_add(1);
         stats.total_volume = stats.total_volume.saturating_add(stake_amount);
@@ -2379,15 +2395,15 @@ impl EscrowContract {
 
     /// Internal helper to record a payout in platform statistics. Called from `submit_result`.
     fn record_platform_payout(env: &Env) {
-        let mut stats: PlatformStats = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Stats)
-            .unwrap_or(PlatformStats {
-                total_matches: 0,
-                total_volume: 0,
-                total_payouts: 0,
-            });
+        let mut stats: PlatformStats =
+            env.storage()
+                .persistent()
+                .get(&DataKey::Stats)
+                .unwrap_or(PlatformStats {
+                    total_matches: 0,
+                    total_volume: 0,
+                    total_payouts: 0,
+                });
 
         stats.total_payouts = stats.total_payouts.saturating_add(1);
 
@@ -2730,6 +2746,44 @@ impl EscrowContract {
 
     // ── Payout helper ────────────────────────────────────────────────────────
 
+    /// Convert `amount_in` of `token_in` into `token_out` via the oracle
+    /// contract's `swap` and credit `recipient` directly. Escrow only ever
+    /// collects deposits in `token` (token_a) — a multi-token payout owed in
+    /// token_b does not exist in escrow's own balance, so it must be
+    /// acquired atomically from the oracle rather than transferred out of
+    /// a balance escrow never held. `min_amount_out` is the amount already
+    /// computed from the match's own (freshness-checked) conversion_rate,
+    /// so it doubles as the slippage floor against the oracle's live rate.
+    fn oracle_swap(
+        env: &Env,
+        token_in: &Address,
+        token_out: &Address,
+        amount_in: i128,
+        min_amount_out: i128,
+        recipient: &Address,
+    ) -> Result<(), Error> {
+        let oracle_address: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+
+        let _: () = env.invoke_contract(
+            &oracle_address,
+            &Symbol::new(env, "swap"),
+            soroban_sdk::vec![
+                env,
+                env.current_contract_address().to_val(),
+                token_in.to_val(),
+                token_out.to_val(),
+                amount_in.into_val(env),
+                min_amount_out.into_val(env),
+                recipient.to_val(),
+            ],
+        );
+        Ok(())
+    }
+
     /// Execute the payout for a match based on the winner. Transfers tokens
     /// from the contract to the winner(s), accounting for multi-token conversion if needed.
     fn execute_payout(env: &Env, m: &Match, winner: &Winner) -> Result<(), Error> {
@@ -2762,8 +2816,7 @@ impl EscrowContract {
                         .ok_or(Error::Overflow)?
                         .checked_div(10_000_000)
                         .ok_or(Error::Overflow)?;
-                    let client_b = token::Client::new(env, &token_b);
-                    client_b.transfer(&env.current_contract_address(), &m.player2, &amount_b);
+                    Self::oracle_swap(env, &m.token, &token_b, pot, amount_b, &m.player2)?;
                 } else {
                     let client_a = token::Client::new(env, &m.token);
                     let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
@@ -2783,8 +2836,14 @@ impl EscrowContract {
                         .ok_or(Error::Overflow)?
                         .checked_div(10_000_000)
                         .ok_or(Error::Overflow)?;
-                    let client_b = token::Client::new(env, &token_b);
-                    client_b.transfer(&env.current_contract_address(), &m.player2, &amount_b);
+                    Self::oracle_swap(
+                        env,
+                        &m.token,
+                        &token_b,
+                        m.stake_amount,
+                        amount_b,
+                        &m.player2,
+                    )?;
                 } else {
                     let client_a = token::Client::new(env, &m.token);
                     client_a.transfer(&env.current_contract_address(), &m.player2, &m.stake_amount);
@@ -4374,14 +4433,17 @@ impl EscrowContract {
     }
 
     /// Direct admin transfer (single-step). Current admin only.
-    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+    pub fn transfer_admin(env: Env, new_admin: Address, caller: Address) -> Result<(), Error> {
         extend_instance_ttl(&env);
+        caller.require_auth();
         let admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
-        admin.require_auth();
+        if caller != admin {
+            return Err(Error::Unauthorized);
+        }
         env.storage().instance().set(&DataKey::Admin, &new_admin);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("xfer")),
@@ -4482,12 +4544,14 @@ impl EscrowContract {
                             .checked_div(10_000_000)
                             .ok_or(Error::Overflow)?;
                         let swap_token = m.token_b.clone().unwrap();
-                        let client_swap = token::Client::new(&env, &swap_token);
-                        client_swap.transfer(
-                            &env.current_contract_address(),
+                        Self::oracle_swap(
+                            &env,
+                            &m.token,
+                            &swap_token,
+                            net_payout,
+                            swap_amount,
                             &m.player1,
-                            &swap_amount,
-                        );
+                        )?;
                         amount_claimed = swap_amount;
                     } else {
                         let client = token::Client::new(&env, &m.token);
@@ -4545,12 +4609,14 @@ impl EscrowContract {
                             .checked_div(10_000_000)
                             .ok_or(Error::Overflow)?;
                         let swap_token = m.token_b.clone().unwrap();
-                        let client_swap = token::Client::new(&env, &swap_token);
-                        client_swap.transfer(
-                            &env.current_contract_address(),
+                        Self::oracle_swap(
+                            &env,
+                            &m.token,
+                            &swap_token,
+                            net_payout,
+                            swap_amount,
                             &m.player2,
-                            &swap_amount,
-                        );
+                        )?;
                         amount_claimed = swap_amount;
                     } else {
                         let client = token::Client::new(&env, &m.token);

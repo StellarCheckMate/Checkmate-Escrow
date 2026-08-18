@@ -43,7 +43,7 @@ fn advance_ledger(env: &Env, ledgers: u32) {
 
 #[test]
 fn test_submit_result_with_dispute_period_enters_pending_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(100);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -52,7 +52,7 @@ fn test_submit_result_with_dispute_period_enters_pending_result() {
 
     env.ledger().set_sequence_number(1000);
 
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let m = client.get_match(&match_id);
     assert_eq!(m.state, MatchState::PendingResult);
@@ -61,13 +61,13 @@ fn test_submit_result_with_dispute_period_enters_pending_result() {
 
 #[test]
 fn test_submit_result_immediate_payout_when_period_zero() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id =
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dispimm1");
 
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let m = client.get_match(&match_id);
     assert_eq!(m.state, MatchState::Completed);
@@ -78,7 +78,7 @@ fn test_submit_result_immediate_payout_when_period_zero() {
 
 #[test]
 fn test_finalize_match_after_dispute_period() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(100);
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
@@ -87,7 +87,7 @@ fn test_finalize_match_after_dispute_period() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dfin0001");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     // Balance unchanged before finalization
     assert_eq!(token_client.balance(&player1), 900);
@@ -112,7 +112,7 @@ fn test_finalize_match_after_dispute_period() {
 
 #[test]
 fn test_finalize_match_with_draw() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(100);
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
@@ -121,7 +121,7 @@ fn test_finalize_match_with_draw() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "ddraw001");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Draw);
+    client.submit_result(&match_id, &Winner::Draw, &oracle);
 
     env.ledger().set_sequence_number(1100);
     client.finalize_match(&match_id);
@@ -150,7 +150,7 @@ fn test_finalize_match_fails_on_non_pending_result_state() {
 
 #[test]
 fn test_finalize_match_fails_when_dispute_raised() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -158,7 +158,7 @@ fn test_finalize_match_fails_when_dispute_raised() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dcnflct1");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     // Raise dispute
     client.dispute_oracle_result(&match_id, &player1, &String::from_str(&env, "b3dfd696"));
@@ -173,7 +173,7 @@ fn test_finalize_match_fails_when_dispute_raised() {
 
 #[test]
 fn test_dispute_oracle_result_creates_dispute() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -181,7 +181,7 @@ fn test_dispute_oracle_result_creates_dispute() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dcrt0001");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player2);
+    client.submit_result(&match_id, &Winner::Player2, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player1, &String::from_str(&env, "352aaeb7"));
@@ -198,14 +198,15 @@ fn test_dispute_oracle_result_creates_dispute() {
 
 #[test]
 fn test_dispute_oracle_result_rejects_non_player() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup_with_dispute_period(200);
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id =
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dunauth1");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player2);
+    client.submit_result(&match_id, &Winner::Player2, &oracle);
 
     let stranger = Address::generate(&env);
     let result =
@@ -215,7 +216,7 @@ fn test_dispute_oracle_result_rejects_non_player() {
 
 #[test]
 fn test_dispute_oracle_result_rejects_after_deadline() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(100);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -223,7 +224,7 @@ fn test_dispute_oracle_result_rejects_after_deadline() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "ddlne001");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     // Advance past the dispute deadline
     env.ledger().set_sequence_number(1100);
@@ -235,7 +236,7 @@ fn test_dispute_oracle_result_rejects_after_deadline() {
 
 #[test]
 fn test_dispute_oracle_result_rejects_duplicate() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -243,7 +244,7 @@ fn test_dispute_oracle_result_rejects_duplicate() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "ddup0001");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     client.dispute_oracle_result(&match_id, &player1, &String::from_str(&env, "c38d14bc"));
 
@@ -254,7 +255,7 @@ fn test_dispute_oracle_result_rejects_duplicate() {
 
 #[test]
 fn test_dispute_oracle_result_rejects_empty_evidence() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -262,7 +263,7 @@ fn test_dispute_oracle_result_rejects_empty_evidence() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dempty01");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let result = client.try_dispute_oracle_result(&match_id, &player2, &String::from_str(&env, ""));
     assert_eq!(result, Err(Ok(Error::InvalidEvidenceHash)));
@@ -272,7 +273,7 @@ fn test_dispute_oracle_result_rejects_empty_evidence() {
 
 #[test]
 fn test_vote_on_dispute_uptake_by_stakers() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -280,7 +281,7 @@ fn test_vote_on_dispute_uptake_by_stakers() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dvote001");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id = client.dispute_oracle_result(
         &match_id,
@@ -307,7 +308,7 @@ fn test_vote_on_dispute_uptake_by_stakers() {
 
 #[test]
 fn test_vote_on_dispute_rejects_non_staker() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -315,7 +316,7 @@ fn test_vote_on_dispute_rejects_non_staker() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dnstk001");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "394661e8"));
@@ -327,7 +328,7 @@ fn test_vote_on_dispute_rejects_non_staker() {
 
 #[test]
 fn test_vote_on_dispute_rejects_double_vote() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -335,7 +336,7 @@ fn test_vote_on_dispute_rejects_double_vote() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "ddblvt01");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "394661e8"));
@@ -348,7 +349,7 @@ fn test_vote_on_dispute_rejects_double_vote() {
 
 #[test]
 fn test_vote_on_dispute_rejects_after_voting_deadline() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -356,7 +357,7 @@ fn test_vote_on_dispute_rejects_after_voting_deadline() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dvotetm1");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "394661e8"));
@@ -373,7 +374,7 @@ fn test_vote_on_dispute_rejects_after_voting_deadline() {
 
 #[test]
 fn test_resolve_dispute_upholds_oracle_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
@@ -382,7 +383,7 @@ fn test_resolve_dispute_upholds_oracle_result() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "duphld01");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     // player2 disputes, but everyone votes to uphold
     let dispute_id =
@@ -412,7 +413,7 @@ fn test_resolve_dispute_upholds_oracle_result() {
 
 #[test]
 fn test_resolve_dispute_overturns_oracle_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
@@ -421,7 +422,7 @@ fn test_resolve_dispute_overturns_oracle_result() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dovrtn01");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "394661e8"));
@@ -447,7 +448,7 @@ fn test_resolve_dispute_overturns_oracle_result() {
 
 #[test]
 fn test_resolve_dispute_fails_before_voting_deadline() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -455,7 +456,7 @@ fn test_resolve_dispute_fails_before_voting_deadline() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dearly01");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "394661e8"));
@@ -492,7 +493,7 @@ fn test_set_dispute_period_admin_only() {
 
 #[test]
 fn test_pending_result_event_emitted() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(100);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -500,7 +501,7 @@ fn test_pending_result_event_emitted() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "devt0001");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -523,7 +524,7 @@ fn test_pending_result_event_emitted() {
 
 #[test]
 fn test_dispute_created_event_emitted() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -531,7 +532,7 @@ fn test_dispute_created_event_emitted() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "devt0002");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "8f9a074c"));
 
@@ -549,7 +550,7 @@ fn test_dispute_created_event_emitted() {
 
 #[test]
 fn test_dispute_voted_event_emitted() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -557,7 +558,7 @@ fn test_dispute_voted_event_emitted() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "devt0003");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "8f9a074c"));
@@ -578,7 +579,7 @@ fn test_dispute_voted_event_emitted() {
 
 #[test]
 fn test_dispute_resolved_event_emitted() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -586,7 +587,7 @@ fn test_dispute_resolved_event_emitted() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "devt0004");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "8f9a074c"));
@@ -612,7 +613,7 @@ fn test_dispute_resolved_event_emitted() {
 
 #[test]
 fn test_finalized_event_emitted() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(100);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -620,7 +621,7 @@ fn test_finalized_event_emitted() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "devt0005");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     env.ledger().set_sequence_number(1100);
     client.finalize_match(&match_id);
@@ -652,7 +653,7 @@ fn test_get_dispute_period_returns_configured_value() {
 
 #[test]
 fn test_get_match_dispute_id_returns_id() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
@@ -660,7 +661,7 @@ fn test_get_match_dispute_id_returns_id() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "dgetid01");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "8f9a074c"));
@@ -673,7 +674,7 @@ fn test_get_match_dispute_id_returns_id() {
 
 #[test]
 fn test_full_dispute_lifecycle_overturned() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
@@ -696,7 +697,7 @@ fn test_full_dispute_lifecycle_overturned() {
 
     // Oracle submits result
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let m = client.get_match(&match_id);
     assert_eq!(m.state, MatchState::PendingResult);
@@ -735,7 +736,8 @@ fn test_full_dispute_lifecycle_overturned() {
 
 #[test]
 fn test_dispute_requires_bond() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup_with_dispute_period(200);
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -750,7 +752,7 @@ fn test_dispute_requires_bond() {
     assert_eq!(m.stake_amount, 100);
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     // Player2 initiates dispute
     // Bond required: 100 tokens * 100 bps / 10_000 = 1 token
@@ -769,7 +771,8 @@ fn test_dispute_requires_bond() {
 
 #[test]
 fn test_dispute_bond_refunded_on_overturn() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup_with_dispute_period(200);
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -779,7 +782,7 @@ fn test_dispute_bond_refunded_on_overturn() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "bndrfnd1");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "evidence"));
@@ -804,7 +807,7 @@ fn test_dispute_bond_refunded_on_overturn() {
 
 #[test]
 fn test_dispute_bond_forfeited_on_upheld() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup_with_dispute_period(200);
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -814,7 +817,7 @@ fn test_dispute_bond_forfeited_on_upheld() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "bndfrft1");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "evidence"));
@@ -838,7 +841,8 @@ fn test_dispute_bond_forfeited_on_upheld() {
 
 #[test]
 fn test_vote_uses_snapshot_weight() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup_with_dispute_period(200);
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
     let _token_client = TokenClient::new(&env, &token);
 
@@ -846,7 +850,7 @@ fn test_vote_uses_snapshot_weight() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "snapshot");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     // Dispute created, snapshot taken at this ledger
     let dispute_id =
@@ -868,7 +872,8 @@ fn test_vote_uses_snapshot_weight() {
 
 #[test]
 fn test_quorum_not_met_prevents_resolution() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup_with_dispute_period(200);
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
     let _token_client = TokenClient::new(&env, &token);
 
@@ -879,7 +884,7 @@ fn test_quorum_not_met_prevents_resolution() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "quorum01");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     // At this point, escrow holds 200 tokens (stake for both players)
     // Quorum threshold = 200 * 50% = 100 tokens minimum participation
@@ -901,7 +906,8 @@ fn test_quorum_not_met_prevents_resolution() {
 
 #[test]
 fn test_quorum_not_met_with_low_participation() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup_with_dispute_period(200);
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Set quorum to 100% of snapshot weight (extreme, for testing)
@@ -911,7 +917,7 @@ fn test_quorum_not_met_with_low_participation() {
         create_funded_active_match(&client, &env, &player1, &player2, &token, "qrmfail1");
 
     env.ledger().set_sequence_number(1000);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "evidence"));
@@ -931,7 +937,8 @@ fn test_quorum_not_met_with_low_participation() {
 
 #[test]
 fn test_get_governance_parameters() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup_with_dispute_period(200);
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) =
+        setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Set custom governance parameters

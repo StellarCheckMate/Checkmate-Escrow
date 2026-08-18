@@ -6,21 +6,23 @@ fn test_submit_result_only_by_oracle() {
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let non_oracle = Address::generate(&env);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &non_oracle);
 
-    assert!(
-        result.is_err(),
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
         "submit_result must only be authorized by oracle"
     );
 }
 
 #[test]
 fn test_submit_result_with_valid_winner() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) =
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert!(result.is_ok(), "oracle can submit valid result");
 }
 
@@ -36,7 +38,7 @@ fn test_submit_result_with_draw() {
 
 #[test]
 fn test_submit_result_on_inactive_match_rejected() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -48,7 +50,7 @@ fn test_submit_result_on_inactive_match_rejected() {
         &Platform::Lichess,
     );
 
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert!(
         result.is_err(),
         "oracle result submission on inactive match must be rejected"
@@ -57,11 +59,11 @@ fn test_submit_result_on_inactive_match_rejected() {
 
 #[test]
 fn test_submit_result_invalid_winner_rejected() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) =
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_submit_result(&match_id, &Winner::None);
+    let result = client.try_submit_result(&match_id, &Winner::None, &oracle);
 
     assert!(
         result.is_err(),
@@ -71,12 +73,12 @@ fn test_submit_result_invalid_winner_rejected() {
 
 #[test]
 fn test_duplicate_oracle_result_rejected() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) =
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.submit_result(&match_id, &Winner::Player1);
-    let result = client.try_submit_result(&match_id, &Winner::Player2);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+    let result = client.try_submit_result(&match_id, &Winner::Player2, &oracle);
 
     assert!(
         result.is_err(),
@@ -108,7 +110,7 @@ fn test_oracle_change_authorization() {
 
 #[test]
 fn test_oracle_can_submit_results_for_different_matches() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match1 = client.create_match(
@@ -133,8 +135,8 @@ fn test_oracle_can_submit_results_for_different_matches() {
     client.deposit(&match2, &player1);
     client.deposit(&match2, &player2);
 
-    let result1 = client.try_submit_result(&match1, &Winner::Player1);
-    let result2 = client.try_submit_result(&match2, &Winner::Player2);
+    let result1 = client.try_submit_result(&match1, &Winner::Player1, &oracle);
+    let result2 = client.try_submit_result(&match2, &Winner::Player2, &oracle);
 
     assert!(result1.is_ok(), "oracle must submit result for first match");
     assert!(
@@ -210,12 +212,14 @@ fn test_submit_result_rejects_non_oracle() {
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    // Attempt to submit result without oracle auth
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    // Attempt to submit result as a caller who is not the oracle.
+    let non_oracle = Address::generate(&env);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &non_oracle);
 
     // Assert the call is rejected
-    assert!(
-        result.is_err(),
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
         "submit_result must be rejected for non-oracle caller"
     );
 }

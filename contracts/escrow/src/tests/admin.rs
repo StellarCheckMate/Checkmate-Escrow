@@ -7,16 +7,16 @@ fn test_pause_on_uninitialized_contract_returns_unauthorized() {
     let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_pause();
+    let result = client.try_pause(&Address::generate(&env));
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
 #[test]
 fn test_admin_pause_blocks_create_match() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.pause();
+    client.pause(&admin);
 
     let result = client.try_create_match(
         &player1,
@@ -31,11 +31,11 @@ fn test_admin_pause_blocks_create_match() {
 
 #[test]
 fn test_admin_unpause_allows_create_match() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.pause();
-    client.unpause();
+    client.pause(&admin);
+    client.unpause(&admin);
 
     let id = client.create_match(
         &player1,
@@ -50,7 +50,7 @@ fn test_admin_unpause_allows_create_match() {
 
 #[test]
 fn test_admin_unpause_allows_deposit_after_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -62,11 +62,11 @@ fn test_admin_unpause_allows_deposit_after_paused() {
         &Platform::Lichess,
     );
 
-    client.pause();
+    client.pause(&admin);
     let result = client.try_deposit(&id, &player1);
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
-    client.unpause();
+    client.unpause(&admin);
     client.deposit(&id, &player1);
     let m = client.get_match(&id);
     assert!(m.player1_deposited, "deposit should succeed after unpause");
@@ -74,7 +74,7 @@ fn test_admin_unpause_allows_deposit_after_paused() {
 
 #[test]
 fn test_admin_unpause_allows_submit_result_after_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -88,19 +88,19 @@ fn test_admin_unpause_allows_submit_result_after_paused() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    client.pause();
-    let result = client.try_submit_result(&id, &Winner::Player1);
+    client.pause(&admin);
+    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
-    client.unpause();
-    client.submit_result(&id, &Winner::Player1);
+    client.unpause(&admin);
+    client.submit_result(&id, &Winner::Player1, &oracle);
     let m = client.get_match(&id);
     assert_eq!(m.state, MatchState::Completed);
 }
 
 #[test]
 fn test_paused_contract_rejects_deposit() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -112,7 +112,7 @@ fn test_paused_contract_rejects_deposit() {
         &Platform::Lichess,
     );
 
-    client.pause();
+    client.pause(&admin);
 
     let result = client.try_deposit(&id, &player1);
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
@@ -120,7 +120,7 @@ fn test_paused_contract_rejects_deposit() {
 
 #[test]
 fn test_deposit_blocked_when_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -132,7 +132,7 @@ fn test_deposit_blocked_when_paused() {
         &Platform::Lichess,
     );
 
-    client.pause();
+    client.pause(&admin);
 
     let result = client.try_deposit(&id, &player1);
     assert_eq!(
@@ -164,7 +164,7 @@ fn test_deposit_by_unauthorized_address_returns_unauthorized() {
 
 #[test]
 fn test_submit_result_blocked_when_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -179,9 +179,9 @@ fn test_submit_result_blocked_when_paused() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    client.pause();
+    client.pause(&admin);
 
-    let result = client.try_submit_result(&id, &Winner::Player1);
+    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
@@ -243,14 +243,14 @@ fn test_old_oracle_rejected_after_rotation() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (id, Winner::Player2).into_val(&env),
+            args: (id, Winner::Player2, oracle.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    let result = client.try_submit_result(&id, &Winner::Player2);
+    let result = client.try_submit_result(&id, &Winner::Player2, &oracle);
     assert!(
-        matches!(result, Err(Err(_))),
+        matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
         "old oracle must not be able to submit results"
     );
 
@@ -259,18 +259,18 @@ fn test_old_oracle_rejected_after_rotation() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (id, Winner::Player2).into_val(&env),
+            args: (id, Winner::Player2, new_oracle.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    client.submit_result(&id, &Winner::Player2);
+    client.submit_result(&id, &Winner::Player2, &new_oracle);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 }
 
 #[test]
 fn test_non_oracle_unauthorized_even_when_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -284,7 +284,7 @@ fn test_non_oracle_unauthorized_even_when_paused() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    client.pause();
+    client.pause(&admin);
 
     let non_oracle = Address::generate(&env);
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
@@ -292,11 +292,11 @@ fn test_non_oracle_unauthorized_even_when_paused() {
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (id, Winner::Player1).into_val(&env),
+            args: (id, Winner::Player1, non_oracle.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
-    let result = client.try_submit_result(&id, &Winner::Player1);
+    let result = client.try_submit_result(&id, &Winner::Player1, &non_oracle);
     assert!(
         matches!(
             result,
@@ -332,11 +332,11 @@ fn test_update_oracle_routes_submit_result() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (id1, Winner::Player1).into_val(&env),
+            args: (id1, Winner::Player1, oracle_new.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
-    client.submit_result(&id1, &Winner::Player1);
+    client.submit_result(&id1, &Winner::Player1, &oracle_new);
     assert_eq!(client.get_match(&id1).state, MatchState::Completed);
 
     env.mock_all_auths();
@@ -360,13 +360,13 @@ fn test_update_oracle_routes_submit_result() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (id2, Winner::Player1).into_val(&env),
+            args: (id2, Winner::Player1, oracle_old.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
-    let result = client.try_submit_result(&id2, &Winner::Player1);
+    let result = client.try_submit_result(&id2, &Winner::Player1, &oracle_old);
     assert!(
-        matches!(result, Err(Err(_))),
+        matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
         "old oracle must be rejected after rotation"
     );
 }
@@ -393,12 +393,12 @@ fn test_submit_result_from_non_oracle_returns_unauthorized() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (id, Winner::Player1).into_val(&env),
+            args: (id, Winner::Player1, non_oracle.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    let result = client.try_submit_result(&id, &Winner::Player1);
+    let result = client.try_submit_result(&id, &Winner::Player1, &non_oracle);
     assert!(
         matches!(result, Err(Err(_)) | Err(Ok(Error::Unauthorized))),
         "expected auth failure for non-oracle caller"
@@ -453,7 +453,7 @@ fn test_transfer_admin_pause_auth() {
 
     let new_admin = Address::generate(&env);
 
-    client.transfer_admin(&new_admin);
+    client.transfer_admin(&new_admin, &admin);
     assert_eq!(client.get_admin(), new_admin);
 
     env.mock_auths(&[MockAuth {
@@ -461,11 +461,11 @@ fn test_transfer_admin_pause_auth() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "pause",
-            args: ().into_val(&env),
+            args: (admin.clone(),).into_val(&env),
             sub_invokes: &[],
         },
     }]);
-    let result = client.try_pause();
+    let result = client.try_pause(&admin);
     assert!(
         result.is_err(),
         "old admin should be rejected from pause after transfer"
@@ -476,22 +476,22 @@ fn test_transfer_admin_pause_auth() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "pause",
-            args: ().into_val(&env),
+            args: (new_admin.clone(),).into_val(&env),
             sub_invokes: &[],
         },
     }]);
-    client.pause();
+    client.pause(&new_admin);
 }
 
 #[test]
 fn test_is_paused_cycle() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert!(!client.is_paused());
-    client.pause();
+    client.pause(&admin);
     assert!(client.is_paused());
-    client.unpause();
+    client.unpause(&admin);
     assert!(!client.is_paused());
 }
 
@@ -572,12 +572,12 @@ fn test_current_admin_retains_privileges_after_propose_before_accept() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "pause",
-            args: ().into_val(&env),
+            args: (admin.clone(),).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    client.pause();
+    client.pause(&admin);
     assert!(client.is_paused());
 }
 
@@ -753,7 +753,7 @@ fn test_set_maximum_stake_rejects_non_positive() {
 // #1133 — deposit is rejected when contract is paused
 #[test]
 fn test_deposit_when_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -765,7 +765,7 @@ fn test_deposit_when_paused() {
         &Platform::Lichess,
     );
 
-    client.pause();
+    client.pause(&admin);
 
     let result = client.try_deposit(&id, &player1);
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
@@ -774,10 +774,10 @@ fn test_deposit_when_paused() {
 // #1132 — create_match is rejected when contract is paused
 #[test]
 fn test_create_match_when_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.pause();
+    client.pause(&admin);
 
     let result = client.try_create_match(
         &player1,
@@ -836,10 +836,10 @@ fn test_two_step_admin_transfer() {
 // #1101 — pause blocks create_match and unpause restores it
 #[test]
 fn test_pause_blocks_create_match() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.pause();
+    client.pause(&admin);
 
     let result = client.try_create_match(
         &player1,
@@ -855,7 +855,7 @@ fn test_pause_blocks_create_match() {
         "create_match must fail when paused"
     );
 
-    client.unpause();
+    client.unpause(&admin);
 
     let id = client.create_match(
         &player1,

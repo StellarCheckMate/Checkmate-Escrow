@@ -376,10 +376,10 @@ fn test_unapproved_oracle_returns_not_an_oracle() {
 
 #[test]
 fn test_consensus_blocked_when_paused() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
+    let (env, contract_id, admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.pause();
+    client.pause(&admin);
 
     let result =
         client.try_submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
@@ -494,9 +494,8 @@ fn test_legacy_submit_result_still_works_independently() {
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
 
-    let _ = oracle; // oracle used via mock_all_auths
     let p1_before = tc.balance(&player1);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&match_id, &player1);
     assert_eq!(tc.balance(&player1), p1_before + 200);
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);

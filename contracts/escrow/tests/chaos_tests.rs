@@ -117,8 +117,27 @@ fn active_match<'a>(
 /// Both players' stakes must be refunded.
 #[test]
 fn chaos_oracle_timeout_match_expires_and_refunds() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+
+    // The default timeout (~30 days of ledgers) exactly equals the contract
+    // instance's own TTL refresh horizon (`MATCH_TTL_LEDGERS`), so jumping
+    // the ledger past it would also archive the instance itself in the test
+    // sandbox before `expire_match` could run. Use a much shorter custom
+    // timeout instead, well clear of that collision, matching the pattern
+    // used throughout `src/tests/*.rs`.
+    let short_timeout_secs: u64 = 17_280 * 5;
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 0,
+        treasury: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: short_timeout_secs,
+        protocol_fee_bps: 0,
+        fee_recipient: admin,
+    });
 
     // Create a Pending match — only player1 deposits so it stays Pending.
     let match_id = client.create_match(
@@ -135,10 +154,10 @@ fn chaos_oracle_timeout_match_expires_and_refunds() {
     assert_eq!(client.get_match(&match_id).state, MatchState::Pending);
     assert_eq!(client.get_escrow_balance(&match_id), STAKE);
 
-    // Advance the ledger beyond the default timeout (~30 days).
+    // Advance the ledger beyond the (shortened) timeout.
     env.ledger().with_mut(|l| {
-        l.sequence_number += escrow::DEFAULT_MATCH_TIMEOUT_LEDGERS + 1;
-        l.timestamp += (escrow::DEFAULT_MATCH_TIMEOUT_LEDGERS as u64) * 5 + 10;
+        l.sequence_number += 17_280 + 1;
+        l.timestamp += short_timeout_secs + 10;
     });
 
     // Anyone can call expire_match on an expired Pending match.
@@ -192,7 +211,7 @@ fn chaos_expire_before_timeout_is_rejected() {
 fn chaos_oracle_unreachable_players_cannot_cancel_active_match_without_timeout() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let (client, match_id) =
-        active_match(&env, &contract_id, &player1, &player2, &token, "unreach01");
+        active_match(&env, &contract_id, &player1, &player2, &token, "unreach1");
 
     // Player1 tries to cancel an Active match without timeout — must fail.
     let result = client.try_cancel_match(&match_id, &player1);
@@ -205,46 +224,51 @@ fn chaos_oracle_unreachable_players_cannot_cancel_active_match_without_timeout()
 
 // ── Scenario 3: Oracle returns invalid result (Winner::None) ─────────────────
 
-/// `Winner::None` is a sentinel for "no result yet" and must not be submitted
-/// by the oracle as a terminal result.  The contract accepts the call at the
-/// `submit_result` level (it transitions the match) but `claim_vested_payout`
-/// with `Winner::None` stored must return `InvalidState`, preventing any funds
-/// from leaving escrow.
-///
-/// This test verifies the complete failure path: oracle submits `Winner::None`,
-/// then both claim attempts fail, leaving the match in a terminal state with
-/// funds unreachable — a protocol violation the oracle must never trigger.
+/// `Winner::None` is a sentinel for "no result yet" and must not be accepted
+/// as a terminal result: `settle_result` rejects it outright with
+/// `Error::InvalidState` before any state transition, rather than letting it
+/// get stored and deferring the failure to `claim_vested_payout`. This test
+/// verifies that rejection happens immediately — the match stays `Active`
+/// and no funds move — so a misbehaving oracle can never strand a match in a
+/// state with an invalid stored winner.
 #[test]
 fn chaos_oracle_submits_winner_none_payout_is_blocked() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let (client, match_id) =
-        active_match(&env, &contract_id, &player1, &player2, &token, "invalid01");
+        active_match(&env, &contract_id, &player1, &player2, &token, "invalid1");
 
-    // submit_result with Winner::None moves the match but stores an invalid winner.
-    // The oracle should never do this; we test that payout is blocked if it does.
-    client.submit_result(&match_id, &Winner::None);
+    let result = client.try_submit_result(&match_id, &Winner::None, &oracle);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "submit_result with Winner::None must be rejected immediately"
+    );
 
-    // Both claim attempts must be rejected — nobody wins.
+    // The match must be untouched — still Active, funds still locked.
+    assert_eq!(client.get_match(&match_id).state, MatchState::Active);
+    assert_eq!(client.get_escrow_balance(&match_id), 2 * STAKE);
+
+    // Both claim attempts must also be rejected — nobody wins, no funds move.
     let r1 = client.try_claim_vested_payout(&match_id, &player1);
     let r2 = client.try_claim_vested_payout(&match_id, &player2);
 
     assert!(
         r1.is_err(),
-        "claim_vested_payout for player1 must fail when winner is None"
+        "claim_vested_payout for player1 must fail when no result was ever accepted"
     );
     assert!(
         r2.is_err(),
-        "claim_vested_payout for player2 must fail when winner is None"
+        "claim_vested_payout for player2 must fail when no result was ever accepted"
     );
 }
 
 /// Submitting a result for a non-existent match ID must return `MatchNotFound`.
 #[test]
 fn chaos_oracle_submits_result_for_nonexistent_match() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_submit_result(&9999, &Winner::Player1);
+    let result = client.try_submit_result(&9999, &Winner::Player1, &oracle);
     assert_eq!(
         result,
         Err(Ok(Error::MatchNotFound)),
@@ -257,7 +281,7 @@ fn chaos_oracle_submits_result_for_nonexistent_match() {
 /// Any address that is not the configured oracle must be rejected.
 #[test]
 fn chaos_unauthorized_address_cannot_submit_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let (client, match_id) =
         active_match(&env, &contract_id, &player1, &player2, &token, "unauth01");
 
@@ -275,10 +299,10 @@ fn chaos_unauthorized_address_cannot_submit_result() {
     // After a hypothetical unauthorized call the funds must still be locked.
     // (In the test environment mock_all_auths means all auths pass, so we
     // verify the state-guard: a Completed match can't be re-submitted.)
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&match_id, &player1);
 
-    let result = client.try_submit_result(&match_id, &Winner::Player2);
+    let result = client.try_submit_result(&match_id, &Winner::Player2, &oracle);
     assert!(
         result.is_err(),
         "second submit on Completed match must fail"
@@ -339,7 +363,7 @@ fn chaos_player_cannot_impersonate_oracle() {
     // In the test env with mock_all_auths active, auth always passes, so we
     // verify the contract's state-machine guard instead: the match must be
     // Active before submit and Completed after.
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&match_id, &player1);
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
 }
@@ -350,21 +374,21 @@ fn chaos_player_cannot_impersonate_oracle() {
 /// This guards against oracle bugs, retries, or replays.
 #[test]
 fn chaos_double_submit_result_is_rejected() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let (client, match_id) =
         active_match(&env, &contract_id, &player1, &player2, &token, "double01");
 
     // First submission succeeds and moves match to PendingResult / Completed.
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     // Second submission must be rejected regardless of the winner value.
-    let result = client.try_submit_result(&match_id, &Winner::Player2);
+    let result = client.try_submit_result(&match_id, &Winner::Player2, &oracle);
     assert!(
         result.is_err(),
         "second submit_result on the same match must fail"
     );
 
-    let result2 = client.try_submit_result(&match_id, &Winner::Player1);
+    let result2 = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert!(
         result2.is_err(),
         "idempotent second submit_result must also fail"
@@ -377,7 +401,7 @@ fn chaos_double_submit_result_is_rejected() {
 /// must fail.
 #[test]
 fn chaos_submit_result_on_pending_match_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -391,7 +415,7 @@ fn chaos_submit_result_on_pending_match_fails() {
     // Only player1 deposits — match stays Pending.
     client.deposit(&match_id, &player1);
 
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert!(
         result.is_err(),
         "submit_result on a Pending match must fail"
@@ -402,7 +426,7 @@ fn chaos_submit_result_on_pending_match_fails() {
 /// Submitting on an already-Cancelled match must fail.
 #[test]
 fn chaos_submit_result_on_cancelled_match_fails() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Create a Pending match and cancel it immediately (only player1 deposited).
@@ -419,7 +443,7 @@ fn chaos_submit_result_on_cancelled_match_fails() {
 
     assert_eq!(client.get_match(&match_id).state, MatchState::Cancelled);
 
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert!(
         result.is_err(),
         "submit_result on a Cancelled match must fail"
@@ -445,7 +469,7 @@ fn chaos_oracle_rotation_new_oracle_can_finalize_inflight_match() {
     assert_eq!(client.get_match(&match_id).state, MatchState::Active);
 
     // New oracle submits result — must succeed.
-    client.submit_result(&match_id, &Winner::Player2);
+    client.submit_result(&match_id, &Winner::Player2, &new_oracle);
     client.claim_vested_payout(&match_id, &player2);
 
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
@@ -473,13 +497,13 @@ fn chaos_oracle_rotation_is_recorded() {
 /// Unpausing must restore normal operation.
 #[test]
 fn chaos_submit_result_rejected_while_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let (client, match_id) =
-        active_match(&env, &contract_id, &player1, &player2, &token, "pause01");
+        active_match(&env, &contract_id, &player1, &player2, &token, "pause001");
 
-    client.pause();
+    client.pause(&admin);
 
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert_eq!(
         result,
         Err(Ok(Error::ContractPaused)),
@@ -487,8 +511,8 @@ fn chaos_submit_result_rejected_while_paused() {
     );
 
     // Unpausing must restore oracle access.
-    client.unpause();
-    client.submit_result(&match_id, &Winner::Player1);
+    client.unpause(&admin);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&match_id, &player1);
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
 }
@@ -496,7 +520,7 @@ fn chaos_submit_result_rejected_while_paused() {
 /// Deposits are also blocked while paused.
 #[test]
 fn chaos_deposit_rejected_while_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -508,7 +532,7 @@ fn chaos_deposit_rejected_while_paused() {
         &Platform::Lichess,
     );
 
-    client.pause();
+    client.pause(&admin);
 
     let result = client.try_deposit(&match_id, &player1);
     assert_eq!(
@@ -517,7 +541,7 @@ fn chaos_deposit_rejected_while_paused() {
         "deposit while paused must return ContractPaused"
     );
 
-    client.unpause();
+    client.unpause(&admin);
     // After unpause, deposits proceed normally.
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
@@ -527,9 +551,9 @@ fn chaos_deposit_rejected_while_paused() {
 /// Match creation is blocked while paused.
 #[test]
 fn chaos_create_match_rejected_while_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.pause();
+    client.pause(&admin);
 
     let result = client.try_create_match(
         &player1,
@@ -554,7 +578,7 @@ fn chaos_create_match_rejected_while_paused() {
 fn chaos_retry_with_new_oracle_after_rotation_completes_match() {
     let (env, contract_id, _old_oracle, player1, player2, token, admin) = setup();
     let (client, match_id) =
-        active_match(&env, &contract_id, &player1, &player2, &token, "retry01");
+        active_match(&env, &contract_id, &player1, &player2, &token, "retry001");
 
     // Simulate old oracle being unreachable — admin rotates to new oracle.
     let new_oracle = Address::generate(&env);
@@ -565,7 +589,7 @@ fn chaos_retry_with_new_oracle_after_rotation_completes_match() {
     assert_eq!(client.get_match(&match_id).state, MatchState::Active);
 
     // New oracle retries and successfully submits the result.
-    client.submit_result(&match_id, &Winner::Draw);
+    client.submit_result(&match_id, &Winner::Draw, &new_oracle);
     client.claim_vested_payout(&match_id, &player1);
     client.claim_vested_payout(&match_id, &player2);
 
@@ -581,7 +605,7 @@ fn chaos_retry_with_new_oracle_after_rotation_completes_match() {
 /// no tokens are minted or burned by any escrow operation.
 #[test]
 fn chaos_fund_conservation_across_failure_scenarios() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
     let total_supply = token_client.balance(&player1) + token_client.balance(&player2);
@@ -615,7 +639,7 @@ fn chaos_fund_conservation_across_failure_scenarios() {
         );
         client.deposit(&match_id, &player1);
         client.deposit(&match_id, &player2);
-        client.submit_result(&match_id, &Winner::Player2);
+        client.submit_result(&match_id, &Winner::Player2, &oracle);
         client.claim_vested_payout(&match_id, &player2);
     }
 
@@ -658,8 +682,25 @@ fn chaos_multiple_rapid_oracle_rotations() {
 /// to submit a result for it even if the oracle had queued the call.
 #[test]
 fn chaos_oracle_cannot_submit_on_expired_match() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+
+    // See the comment in `chaos_oracle_timeout_match_expires_and_refunds`:
+    // the default timeout equals the contract instance's own TTL horizon,
+    // so a jump past it would also archive the instance in the test
+    // sandbox. Use a shorter custom timeout instead.
+    let short_timeout_secs: u64 = 17_280 * 5;
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 0,
+        treasury: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: short_timeout_secs,
+        protocol_fee_bps: 0,
+        fee_recipient: admin,
+    });
 
     // Only player1 deposits — match stays Pending so expire_match applies.
     let match_id = client.create_match(
@@ -672,17 +713,17 @@ fn chaos_oracle_cannot_submit_on_expired_match() {
     );
     client.deposit(&match_id, &player1);
 
-    // Advance ledger past timeout.
+    // Advance ledger past the (shortened) timeout.
     env.ledger().with_mut(|l| {
-        l.sequence_number += escrow::DEFAULT_MATCH_TIMEOUT_LEDGERS + 1;
-        l.timestamp += (escrow::DEFAULT_MATCH_TIMEOUT_LEDGERS as u64) * 5 + 10;
+        l.sequence_number += 17_280 + 1;
+        l.timestamp += short_timeout_secs + 10;
     });
 
     client.expire_match(&match_id);
     assert_eq!(client.get_match(&match_id).state, MatchState::Cancelled);
 
     // Oracle now (belatedly) tries to submit a result.
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert!(
         result.is_err(),
         "submit_result on an expired/cancelled match must fail"

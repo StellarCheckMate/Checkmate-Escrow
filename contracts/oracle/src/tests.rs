@@ -45,7 +45,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         &player2,
         &100,
         &token_addr,
-        &String::from_str(&env, "test_game"),
+        &String::from_str(&env, "testgame"),
         &EscrowPlatform::Lichess,
     );
     escrow_client.deposit(&0u64, &player1);
@@ -766,7 +766,7 @@ fn test_pause_emits_paused_event() {
 
 #[test]
 fn test_oracle_to_escrow_full_payout_flow() {
-    let (env, oracle_id, escrow_id, _oracle_admin, player1, _player2, token_addr) = setup();
+    let (env, oracle_id, escrow_id, oracle_admin, player1, _player2, token_addr) = setup();
     let oracle_client = OracleContractClient::new(&env, &oracle_id);
     let escrow_client = EscrowContractClient::new(&env, &escrow_id);
     let token_client = soroban_sdk::token::Client::new(&env, &token_addr);
@@ -782,12 +782,8 @@ fn test_oracle_to_escrow_full_payout_flow() {
     );
     assert!(oracle_client.has_result(&0u64));
 
-    escrow_client.submit_result(&0u64, &EscrowWinner::Player1);
-    escrow_client.claim_vested_payout(&0u64, &player1);
-
-    env.ledger().with_mut(|li| {
-        li.timestamp += 604801;
-    });
+    escrow_client.submit_result(&0u64, &EscrowWinner::Player1, &oracle_admin);
+    // vesting_duration_seconds is 0, so the payout is claimable immediately.
     escrow_client.claim_vested_payout(&0u64, &player1);
 
     let m = escrow_client.get_match(&0u64);
@@ -1088,7 +1084,7 @@ fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
         &player2,
         &100,
         &token_addr,
-        &String::from_str(&env, "integration_game"),
+        &String::from_str(&env, "intgtest"),
         &EscrowPlatform::Lichess,
     );
     escrow_client.deposit(&match_id, &player1);
@@ -1097,7 +1093,7 @@ fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
     // Oracle submits result
     oracle_client.submit_result(
         &match_id,
-        &String::from_str(&env, "integration_game"),
+        &String::from_str(&env, "intgtest"),
         &Platform::Lichess,
         &Winner::Player1,
         &1000u64,
@@ -2041,10 +2037,9 @@ fn test_mofn_threshold_reached_finalizes_result_and_escrow_payout_proceeds() {
     // (Exact settlement amounts are covered by the escrow crate's own test
     // suite; here we only check that the finalized m-of-n result is accepted
     // downstream and drives the match to completion.)
-    escrow_client.submit_result(&0u64, &EscrowWinner::Player1);
+    escrow_client.submit_result(&0u64, &EscrowWinner::Player1, &oracle_admin);
     let m = escrow_client.get_match(&0u64);
     assert_eq!(m.state, MatchState::Completed);
-    let _ = oracle_admin;
 }
 
 /// threshold not reached -> match stays pending.
@@ -2478,6 +2473,11 @@ fn test_oracle_store_result_when_paused() {
 
 #[test]
 fn test_oracle_store_result_idempotent() {
+    // "Idempotent" here means the stored result is immutable once written —
+    // not that a second submit_result call is a silent no-op. submit_result
+    // is write-once by design (see Error::AlreadySubmitted); a second call
+    // for the same match_id must be rejected and must not alter the
+    // already-recorded result.
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
 
@@ -2489,10 +2489,13 @@ fn test_oracle_store_result_idempotent() {
     let first_result = client.get_result(&0u64);
     assert_eq!(first_result.result, winner);
 
-    client.submit_result(&0u64, &game_id, &Platform::Lichess, &winner, &1000u64);
-    assert!(client.has_result(&0u64));
-    let second_result = client.get_result(&0u64);
-    assert_eq!(second_result.result, winner);
+    let result = client.try_submit_result(&0u64, &game_id, &Platform::Lichess, &winner, &1000u64);
+    assert_eq!(
+        result,
+        Err(Ok(Error::AlreadySubmitted)),
+        "a second submission for the same match must be rejected"
+    );
 
+    let second_result = client.get_result(&0u64);
     assert_eq!(first_result.result, second_result.result);
 }

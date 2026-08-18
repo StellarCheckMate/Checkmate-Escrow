@@ -97,7 +97,6 @@ async fn test_service_ready_only_when_critical_up() {
 
 #[cfg(test)]
 mod chaos_fault_injection {
-    
 
     #[tokio::test]
     async fn test_stellar_rpc_injection_detects_failure() {
@@ -162,7 +161,6 @@ mod chaos_fault_injection {
 
 #[cfg(test)]
 mod regression_tests {
-    
 
     #[tokio::test]
     async fn test_health_check_never_returns_hardcoded_healthy() {

@@ -25,7 +25,7 @@ fn test_balance_snapshot_after_deposit() {
 
 #[test]
 fn test_player_balance_history_monotonic_increase() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -39,7 +39,7 @@ fn test_player_balance_history_monotonic_increase() {
 
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let history = client.get_balance_snaps_paginated(&player1, &0, &100);
     assert!(
@@ -89,7 +89,7 @@ fn test_player_balance_snapshot_on_draw() {
 
 #[test]
 fn test_balance_snapshot_records_correct_amounts() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let stake = 100i128;
@@ -104,7 +104,7 @@ fn test_balance_snapshot_records_correct_amounts() {
 
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let escrow_balance = client.get_escrow_balance(&match_id);
     assert_eq!(
@@ -115,7 +115,7 @@ fn test_balance_snapshot_records_correct_amounts() {
 
 #[test]
 fn test_player_balance_history_with_multiple_matches() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     for i in 0..3u32 {
@@ -130,7 +130,7 @@ fn test_player_balance_history_with_multiple_matches() {
         );
         client.deposit(&match_id, &player1);
         client.deposit(&match_id, &player2);
-        client.submit_result(&match_id, &Winner::Player1);
+        client.submit_result(&match_id, &Winner::Player1, &oracle);
     }
 
     let history = client.get_balance_snaps_paginated(&player1, &0, &100);

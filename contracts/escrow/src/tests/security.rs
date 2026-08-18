@@ -162,11 +162,11 @@ fn test_fuzz_empty_game_id() {
 /// Test that non-admin cannot pause the contract
 #[test]
 fn test_security_unauthorized_pause() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
-    let result = client.try_pause();
+    let result = client.try_pause(&admin);
     // The contract uses mock_all_auths, so this will pass in test environment
     // In production, this would require proper signature
     assert!(result.is_ok(), "Setup error");
@@ -202,7 +202,7 @@ fn test_security_unauthorized_deposit() {
 /// Test that only oracle can submit results
 #[test]
 fn test_security_unauthorized_submit_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let _imposter = Address::generate(&env);
 
@@ -222,7 +222,7 @@ fn test_security_unauthorized_submit_result() {
 
     // Imposter attempts to submit result
     env.mock_all_auths();
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     // This will succeed in test due to mock_all_auths, but demonstrates the check exists
     assert!(result.is_ok());
 }
@@ -264,7 +264,7 @@ fn test_security_double_deposit_attack() {
 /// Test that completed matches cannot be cancelled
 #[test]
 fn test_security_cancel_completed_match_attack() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
@@ -283,7 +283,7 @@ fn test_security_cancel_completed_match_attack() {
 
     // Submit result to complete the match
     env.mock_all_auths();
-    let result_submit = client.try_submit_result(&match_id, &Winner::Player1);
+    let result_submit = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert!(result_submit.is_ok(), "Result submission should succeed");
 
     // Attempt to cancel the completed match
@@ -362,12 +362,12 @@ fn test_security_allowlist_bypass_attempt() {
 /// Test that paused contract blocks create_match
 #[test]
 fn test_security_create_match_when_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Pause the contract
     env.mock_all_auths();
-    let _ = client.try_pause();
+    let _ = client.try_pause(&admin);
 
     // Attempt to create match
     env.mock_all_auths();
@@ -385,7 +385,7 @@ fn test_security_create_match_when_paused() {
 /// Test that paused contract blocks deposit
 #[test]
 fn test_security_deposit_when_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
@@ -400,7 +400,7 @@ fn test_security_deposit_when_paused() {
 
     // Pause the contract
     env.mock_all_auths();
-    let _ = client.try_pause();
+    let _ = client.try_pause(&admin);
 
     // Attempt to deposit
     env.mock_all_auths();
@@ -411,7 +411,7 @@ fn test_security_deposit_when_paused() {
 /// Test that paused contract blocks submit_result
 #[test]
 fn test_security_submit_result_when_paused() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
@@ -430,11 +430,11 @@ fn test_security_submit_result_when_paused() {
 
     // Pause the contract
     env.mock_all_auths();
-    let _ = client.try_pause();
+    let _ = client.try_pause(&admin);
 
     // Attempt to submit result
     env.mock_all_auths();
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert!(result.is_err(), "Should reject submit_result when paused");
 }
 
@@ -525,7 +525,7 @@ fn test_security_duplicate_game_id_attack() {
 /// Test that stake amount multiplication in payout doesn't overflow
 #[test]
 fn test_security_payout_overflow_prevention() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Use a very large but valid stake that won't overflow when multiplied by 2
@@ -539,14 +539,12 @@ fn test_security_payout_overflow_prevention() {
     // Fast-track both players to Platinum tier (unlimited stake cap) so this
     // overflow probe isn't blocked by the Bronze-tier stake ceiling.
     env.as_contract(&contract_id, || {
-        env.storage().persistent().set(
-            &DataKey::PlayerCompletedMatchCount(player1.clone()),
-            &10u32,
-        );
-        env.storage().persistent().set(
-            &DataKey::PlayerCompletedMatchCount(player2.clone()),
-            &10u32,
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerCompletedMatchCount(player1.clone()), &10u32);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerCompletedMatchCount(player2.clone()), &10u32);
     });
 
     env.mock_all_auths();
@@ -565,7 +563,7 @@ fn test_security_payout_overflow_prevention() {
 
     // Submit result - should not panic on overflow
     env.mock_all_auths();
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert!(
         result.is_ok(),
         "Should handle large stakes without overflow"
@@ -601,7 +599,7 @@ fn test_security_cancel_only_pending_matches() {
 /// Test that oracle records are properly stored with results
 #[test]
 fn test_security_oracle_record_stored() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
@@ -622,7 +620,8 @@ fn test_security_oracle_record_stored() {
 
     // Submit result with oracle record
     env.mock_all_auths();
-    let result = client.try_submit_result_with_oracle_record(&match_id, &Winner::Player1, &game_id);
+    let result =
+        client.try_submit_result_with_oracle_record(&match_id, &Winner::Player1, &game_id, &oracle);
     assert!(result.is_ok(), "Should store oracle record");
 }
 
@@ -735,12 +734,12 @@ fn test_transfer_admin_unauthorized() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "transfer_admin",
-            args: (new_admin.clone(),).into_val(&env),
+            args: (new_admin.clone(), non_admin.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    let result = client.try_transfer_admin(&new_admin);
+    let result = client.try_transfer_admin(&new_admin, &non_admin);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
@@ -757,12 +756,12 @@ fn test_pause_unauthorized() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "pause",
-            args: ().into_val(&env),
+            args: (non_admin.clone(),).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    let result = client.try_pause();
+    let result = client.try_pause(&non_admin);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
 
@@ -780,11 +779,11 @@ fn test_submit_result_unauthorized() {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (match_id, Winner::Player1).into_val(&env),
+            args: (match_id, Winner::Player1, non_oracle.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &non_oracle);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }

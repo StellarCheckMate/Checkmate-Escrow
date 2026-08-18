@@ -54,7 +54,7 @@ fn setup() -> (Env, Address, Address, Address, Address, Address) {
 
 #[test]
 fn full_match_lifecycle_create_deposit_result_completed() {
-    let (env, contract_id, _oracle, player1, player2, token) = setup();
+    let (env, contract_id, oracle, player1, player2, token) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // 1. Create match — starts Pending, awaiting deposits.
@@ -81,10 +81,12 @@ fn full_match_lifecycle_create_deposit_result_completed() {
     let winner_balance_before = token_client.balance(&player1);
 
     // 3. Oracle submits the result — player1 wins.
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
-    // 4. Match transitions to Completed and the winner is paid the full pot.
+    // 4. Match transitions to Completed; payout is vested/deferred until the
+    //    winner explicitly claims it.
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
+    client.claim_vested_payout(&match_id, &player1);
     assert_eq!(client.get_escrow_balance(&match_id), 0);
     assert_eq!(
         token_client.balance(&player1),

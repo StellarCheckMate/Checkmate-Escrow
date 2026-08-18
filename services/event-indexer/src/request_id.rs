@@ -5,7 +5,9 @@
 //! - Attaches it as `X-Request-ID` response header
 //! - Includes it in all log lines via the `layer_request_id` tracing layer
 
-use axum::{extract::Request, http::HeaderMap, http::HeaderValue, middleware::Next, response::Response};
+use axum::{
+    extract::Request, http::HeaderMap, http::HeaderValue, middleware::Next, response::Response,
+};
 use uuid::Uuid;
 
 const REQUEST_ID_HEADER: &str = "X-Request-ID";

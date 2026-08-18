@@ -5,7 +5,7 @@ use super::*;
 /// winner receives the full pot and escrow balance drops to zero.
 #[test]
 fn test_full_lifecycle_winner_payout() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let tc = token_client(&env, &token);
 
@@ -30,7 +30,7 @@ fn test_full_lifecycle_winner_payout() {
     let p2_before = tc.balance(&player2);
 
     // Oracle submits result — player1 wins
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&match_id, &player1);
 
     // Escrow must be zero after payout
@@ -49,7 +49,7 @@ fn test_full_lifecycle_winner_payout() {
 /// their stake back and escrow balance drops to zero.
 #[test]
 fn test_full_lifecycle_draw_refund() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let tc = token_client(&env, &token);
 
@@ -70,7 +70,7 @@ fn test_full_lifecycle_draw_refund() {
     let p2_before = tc.balance(&player2);
 
     // Oracle submits draw
-    client.submit_result(&match_id, &Winner::Draw);
+    client.submit_result(&match_id, &Winner::Draw, &oracle);
     client.claim_vested_payout(&match_id, &player1);
     client.claim_vested_payout(&match_id, &player2);
 

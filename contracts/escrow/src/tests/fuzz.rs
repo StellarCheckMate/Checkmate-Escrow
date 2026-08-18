@@ -99,7 +99,7 @@ fn prop_payout_conserves_tokens(stake: i128, winner_is_player1: bool) -> TestRes
         return TestResult::discard();
     }
 
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let tc = TokenClient::new(&env, &token);
     let asset_client = StellarAssetClient::new(&env, &token);
@@ -126,7 +126,7 @@ fn prop_payout_conserves_tokens(stake: i128, winner_is_player1: bool) -> TestRes
     } else {
         Winner::Player2
     };
-    client.submit_result(&match_id, &winner);
+    client.submit_result(&match_id, &winner, &oracle);
 
     let after_total = tc.balance(&player1) + tc.balance(&player2);
     TestResult::from_bool(after_total == total_before)
@@ -141,7 +141,7 @@ fn prop_draw_refunds_exact_stakes(stake: i128) -> TestResult {
         return TestResult::discard();
     }
 
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let tc = TokenClient::new(&env, &token);
     let asset_client = StellarAssetClient::new(&env, &token);
@@ -161,7 +161,7 @@ fn prop_draw_refunds_exact_stakes(stake: i128) -> TestResult {
     );
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
-    client.submit_result(&match_id, &Winner::Draw);
+    client.submit_result(&match_id, &Winner::Draw, &oracle);
 
     TestResult::from_bool(tc.balance(&player1) == before_p1 && tc.balance(&player2) == before_p2)
 }
@@ -194,11 +194,11 @@ fn prop_only_oracle_can_submit_result(player1_submits: bool) -> bool {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (match_id, Winner::Player1).into_val(&env),
+            args: (match_id, Winner::Player1, impostor.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
-    let impostor_result = client.try_submit_result(&match_id, &Winner::Player1);
+    let impostor_result = client.try_submit_result(&match_id, &Winner::Player1, impostor);
 
     // Oracle itself must succeed on the same match.
     env.mock_auths(&[MockAuth {
@@ -206,11 +206,11 @@ fn prop_only_oracle_can_submit_result(player1_submits: bool) -> bool {
         invoke: &MockAuthInvoke {
             contract: &contract_id,
             fn_name: "submit_result",
-            args: (match_id, Winner::Player1).into_val(&env),
+            args: (match_id, Winner::Player1, oracle.clone()).into_val(&env),
             sub_invokes: &[],
         },
     }]);
-    let oracle_result = client.try_submit_result(&match_id, &Winner::Player1);
+    let oracle_result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
 
     impostor_result.is_err() && oracle_result.is_ok()
 }
@@ -241,7 +241,7 @@ fn prop_timeout_bounds_enforced(timeout: u64) -> bool {
 /// Attempting to deposit, cancel, or re-submit a result on a Completed match must fail.
 #[quickcheck]
 fn prop_completed_match_never_transitions(op: u8) -> TestResult {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -256,7 +256,7 @@ fn prop_completed_match_never_transitions(op: u8) -> TestResult {
     // Move match to Completed state
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let m = client.get_match(&match_id);
     assert_eq!(m.state, MatchState::Completed, "match should be Completed");
@@ -269,7 +269,7 @@ fn prop_completed_match_never_transitions(op: u8) -> TestResult {
         }
         1 => {
             // Try to submit result again (should fail: invalid state)
-            client.try_submit_result(&match_id, &Winner::Draw)
+            client.try_submit_result(&match_id, &Winner::Draw, &oracle)
         }
         2 => {
             // Try to cancel (should fail: invalid state)
@@ -285,7 +285,7 @@ fn prop_completed_match_never_transitions(op: u8) -> TestResult {
 /// Attempting to submit_result or claim_payout on a Cancelled match must fail.
 #[quickcheck]
 fn prop_cancelled_match_never_pays_out(game_id_variant: u8) -> TestResult {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Create match and move to Cancelled via early timeout
@@ -309,7 +309,7 @@ fn prop_cancelled_match_never_pays_out(game_id_variant: u8) -> TestResult {
     assert_eq!(m.state, MatchState::Cancelled, "match should be Cancelled");
 
     // Try to submit result on cancelled match (should fail)
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     TestResult::from_bool(result.is_err())
 }
 
@@ -317,7 +317,7 @@ fn prop_cancelled_match_never_pays_out(game_id_variant: u8) -> TestResult {
 /// Once Active, a match must either reach Completed (or PendingResult) or Paused state.
 #[quickcheck]
 fn prop_active_match_can_complete_or_pause(transition: u8) -> TestResult {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -340,7 +340,7 @@ fn prop_active_match_can_complete_or_pause(transition: u8) -> TestResult {
     let result = match transition % 2 {
         0 => {
             // Submit result (should succeed, moving to Completed or PendingResult)
-            client.try_submit_result(&match_id, &Winner::Player1)
+            client.try_submit_result(&match_id, &Winner::Player1, &oracle)
         }
         1 => {
             // Pause the match (should succeed, moving to Paused)
@@ -356,7 +356,7 @@ fn prop_active_match_can_complete_or_pause(transition: u8) -> TestResult {
 /// A Pending match must not reach Completed, Paused, or PendingResult without first transitioning to Active.
 #[quickcheck]
 fn prop_pending_match_limited_transitions() -> bool {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -372,7 +372,7 @@ fn prop_pending_match_limited_transitions() -> bool {
     assert_eq!(m.state, MatchState::Pending, "match should start Pending");
 
     // Attempting submit_result on Pending should fail (only works on Active)
-    let submit_pending = client.try_submit_result(&match_id, &Winner::Player1);
+    let submit_pending = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
 
     // Should fail because match is Pending, not Active
     submit_pending.is_err()

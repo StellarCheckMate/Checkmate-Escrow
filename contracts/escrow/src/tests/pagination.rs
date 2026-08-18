@@ -315,7 +315,7 @@ fn test_get_pending_matches_pagination() {
 
 #[test]
 fn test_get_match_history_returns_completed_and_cancelled_newest_first() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Completed match.
@@ -329,7 +329,7 @@ fn test_get_match_history_returns_completed_and_cancelled_newest_first() {
     );
     client.deposit(&completed_id, &player1);
     client.deposit(&completed_id, &player2);
-    client.submit_result(&completed_id, &Winner::Player1);
+    client.submit_result(&completed_id, &Winner::Player1, &oracle);
 
     // Cancelled match (created after, so it should sort first).
     let cancelled_id = client.create_match(

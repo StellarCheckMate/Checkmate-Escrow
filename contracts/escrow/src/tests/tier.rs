@@ -8,6 +8,7 @@ fn complete_match_with_stake(
     token: &Address,
     game_id: &str,
     stake: i128,
+    oracle: &Address,
 ) {
     let match_id = client.create_match(
         player1,
@@ -19,12 +20,12 @@ fn complete_match_with_stake(
     );
     client.deposit(&match_id, player1);
     client.deposit(&match_id, player2);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, oracle);
 }
 
 #[test]
 fn test_tier_progression_tracks_completed_matches() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let asset_client = StellarAssetClient::new(&env, &token);
 
@@ -50,6 +51,7 @@ fn test_tier_progression_tracks_completed_matches() {
             &token,
             &format!("{:08x}", i),
             100,
+            &oracle,
         );
     }
     assert_eq!(client.tier_from_match_count(&player1), PlayerTier::Silver);
@@ -63,6 +65,7 @@ fn test_tier_progression_tracks_completed_matches() {
             &token,
             &format!("{:08x}", i),
             500,
+            &oracle,
         );
     }
     assert_eq!(client.tier_from_match_count(&player1), PlayerTier::Gold);
@@ -76,6 +79,7 @@ fn test_tier_progression_tracks_completed_matches() {
             &token,
             &format!("{:08x}", i),
             1_000,
+            &oracle,
         );
     }
     assert_eq!(client.tier_from_match_count(&player1), PlayerTier::Platinum);
@@ -100,7 +104,7 @@ fn test_create_match_enforces_tier_stake_caps() {
 
 #[test]
 fn test_deposit_rechecks_current_player_tier() {
-    let (env, contract_id, _oracle, player1, player2, player3, _player4, token, _admin) =
+    let (env, contract_id, oracle, player1, player2, player3, _player4, token, _admin) =
         setup_with_four_players();
     let client = EscrowContractClient::new(&env, &contract_id);
     let asset_client = StellarAssetClient::new(&env, &token);
@@ -127,6 +131,7 @@ fn test_deposit_rechecks_current_player_tier() {
             &token,
             &format!("{:08x}", i),
             100,
+            &oracle,
         );
     }
 

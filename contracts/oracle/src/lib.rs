@@ -1497,13 +1497,19 @@ impl OracleContract {
             return Err(Error::InvalidAmount);
         }
 
-        // Look up the exchange rate (token_out per token_in, scaled 1e7).
+        // `DataKey::Rate(X, Y)` stores "units of Y per unit of X, scaled by
+        // 1e7" — the same convention `set_rate`/`get_rate` use, and the one
+        // escrow relies on when it validates a match's conversion_rate
+        // against `get_rate(token_a, token_b)`. So the *forward* rate for
+        // this swap, if set, lives under `Rate(token_in, token_out)` and
+        // converts by multiplying; only the reverse-keyed `Rate(token_out,
+        // token_in)` — units of token_in per token_out — needs dividing.
         let amount_out = if let Some(rate) = env
             .storage()
             .persistent()
-            .get::<_, i128>(&DataKey::Rate(token_out.clone(), token_in.clone()))
+            .get::<_, i128>(&DataKey::Rate(token_in.clone(), token_out.clone()))
         {
-            // Rate is token_out/token_in; compute amount_in * rate / 1e7
+            // Rate is token_out per token_in; compute amount_in * rate / 1e7
             let amt = amount_in
                 .checked_mul(rate)
                 .ok_or(Error::Overflow)?
@@ -1516,9 +1522,9 @@ impl OracleContract {
         } else if let Some(rate) = env
             .storage()
             .persistent()
-            .get::<_, i128>(&DataKey::Rate(token_in.clone(), token_out.clone()))
+            .get::<_, i128>(&DataKey::Rate(token_out.clone(), token_in.clone()))
         {
-            // Rate is token_in/token_out; compute amount_in * 1e7 / rate
+            // Rate is token_in per token_out (reverse-keyed); compute amount_in * 1e7 / rate
             let amt = amount_in
                 .checked_mul(10_000_000)
                 .ok_or(Error::Overflow)?

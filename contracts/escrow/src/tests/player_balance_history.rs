@@ -159,7 +159,7 @@ fn test_two_deposits_cumulate_balance_in_history() {
 
 #[test]
 fn test_submit_result_zeroes_player_balance_in_history() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -176,7 +176,7 @@ fn test_submit_result_zeroes_player_balance_in_history() {
     env.ledger().set_sequence_number(2);
     client.deposit(&id, &player2);
     env.ledger().set_sequence_number(3);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     env.as_contract(&contract_id, || {
         // Before the payout, both players had 100.
@@ -286,7 +286,7 @@ fn test_expire_match_zeroes_player_balance_in_history() {
 
 #[test]
 fn test_balance_history_across_multiple_matches() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let a = client.create_match(
@@ -311,7 +311,7 @@ fn test_balance_history_across_multiple_matches() {
     env.ledger().set_sequence_number(2);
     client.deposit(&a, &player2);
     env.ledger().set_sequence_number(3);
-    client.submit_result(&a, &Winner::Player1); // both back to 0
+    client.submit_result(&a, &Winner::Player1, &oracle); // both back to 0
     env.ledger().set_sequence_number(4);
     client.deposit(&b, &player1); // player1 has 50 in match b
     env.ledger().set_sequence_number(5);

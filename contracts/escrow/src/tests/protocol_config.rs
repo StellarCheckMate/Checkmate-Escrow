@@ -111,7 +111,7 @@ fn test_get_protocol_config_unaffected_by_transfer_admin() {
     assert_eq!(cfg_before, cfg);
 
     let new_admin = Address::generate(&env);
-    client.transfer_admin(&new_admin);
+    client.transfer_admin(&new_admin, &admin);
 
     // Re-read as the new admin.
     let cfg_after = client.get_protocol_config();

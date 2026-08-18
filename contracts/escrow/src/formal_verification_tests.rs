@@ -9,7 +9,8 @@ mod formal_verification {
     use crate::formal_verification::*;
     use crate::types::MatchState;
     use std::{
-        collections::{HashMap, HashSet}, println,
+        collections::{HashMap, HashSet},
+        println,
         string::ToString,
         vec,
     };

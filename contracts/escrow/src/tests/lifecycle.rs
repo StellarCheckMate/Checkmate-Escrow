@@ -136,7 +136,7 @@ fn test_duplicate_game_id_cross_platform_rejected() {
 // Issue #1107: get_escrow_balance returns 0 after payout
 #[test]
 fn test_escrow_balance_zero_after_payout() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Scenario 1: Winner payout
@@ -152,7 +152,7 @@ fn test_escrow_balance_zero_after_payout() {
     client.deposit(&id_winner, &player2);
     assert_eq!(client.get_escrow_balance(&id_winner), 200);
 
-    client.submit_result(&id_winner, &Winner::Player1);
+    client.submit_result(&id_winner, &Winner::Player1, &oracle);
     assert_eq!(client.get_escrow_balance(&id_winner), 0);
 
     // Scenario 2: Draw refund
@@ -168,7 +168,7 @@ fn test_escrow_balance_zero_after_payout() {
     client.deposit(&id_draw, &player2);
     assert_eq!(client.get_escrow_balance(&id_draw), 200);
 
-    client.submit_result(&id_draw, &Winner::Draw);
+    client.submit_result(&id_draw, &Winner::Draw, &oracle);
     assert_eq!(client.get_escrow_balance(&id_draw), 0);
 }
 
@@ -331,7 +331,7 @@ fn test_deposit_flags_set_correctly_after_each_deposit() {
 
 #[test]
 fn test_full_match_lifecycle_winner_and_draw_scenarios() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
     let asset_client = StellarAssetClient::new(&env, &token);
@@ -374,7 +374,7 @@ fn test_full_match_lifecycle_winner_and_draw_scenarios() {
     assert_eq!(token_client.balance(&player2), 900);
     assert_eq!(client.get_escrow_balance(&winner_match_id), 200);
 
-    client.submit_result(&winner_match_id, &Winner::Player1);
+    client.submit_result(&winner_match_id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&winner_match_id, &player1);
     let winner_match = client.get_match(&winner_match_id);
     assert_eq!(winner_match.state, MatchState::Completed);
@@ -411,7 +411,7 @@ fn test_full_match_lifecycle_winner_and_draw_scenarios() {
     assert_eq!(token_client.balance(&player4), 925);
     assert_eq!(client.get_escrow_balance(&draw_match_id), 150);
 
-    client.submit_result(&draw_match_id, &Winner::Draw);
+    client.submit_result(&draw_match_id, &Winner::Draw, &oracle);
     client.claim_vested_payout(&draw_match_id, &player3);
     client.claim_vested_payout(&draw_match_id, &player4);
     let draw_match = client.get_match(&draw_match_id);
@@ -423,7 +423,7 @@ fn test_full_match_lifecycle_winner_and_draw_scenarios() {
 
 #[test]
 fn test_full_match_lifecycle() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -448,7 +448,7 @@ fn test_full_match_lifecycle() {
     assert_eq!(token_client.balance(&player2), 900);
     assert_eq!(client.get_escrow_balance(&id), 200);
 
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
     assert_eq!(token_client.balance(&player1), 1100);
@@ -458,7 +458,7 @@ fn test_full_match_lifecycle() {
 
 #[test]
 fn test_payout_winner() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -473,7 +473,7 @@ fn test_payout_winner() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&id, &player1);
 
     assert_eq!(token_client.balance(&player1), 1100);
@@ -483,7 +483,7 @@ fn test_payout_winner() {
 
 #[test]
 fn test_draw_refund() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -498,7 +498,7 @@ fn test_draw_refund() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Draw);
+    client.submit_result(&id, &Winner::Draw, &oracle);
     client.claim_vested_payout(&id, &player1);
     client.claim_vested_payout(&id, &player2);
 
@@ -508,7 +508,7 @@ fn test_draw_refund() {
 
 #[test]
 fn test_draw_refund_balances() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -526,7 +526,7 @@ fn test_draw_refund_balances() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Draw);
+    client.submit_result(&id, &Winner::Draw, &oracle);
     client.claim_vested_payout(&id, &player1);
     client.claim_vested_payout(&id, &player2);
 
@@ -538,7 +538,7 @@ fn test_draw_refund_balances() {
 // and forwards it to fee_recipient
 #[test]
 fn test_payout_deducts_protocol_fee() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -561,7 +561,7 @@ fn test_payout_deducts_protocol_fee() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&id, &player1);
 
     let pot: i128 = 200;
@@ -575,7 +575,7 @@ fn test_payout_deducts_protocol_fee() {
 // #1165 - draw refunds never incur the protocol fee
 #[test]
 fn test_draw_refund_no_fee() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -598,7 +598,7 @@ fn test_draw_refund_no_fee() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Draw);
+    client.submit_result(&id, &Winner::Draw, &oracle);
     client.claim_vested_payout(&id, &player1);
     client.claim_vested_payout(&id, &player2);
 
@@ -655,7 +655,7 @@ fn test_cancel_refunds_deposit() {
 
 #[test]
 fn test_submit_result_fails_if_not_fully_funded() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -675,13 +675,13 @@ fn test_submit_result_fails_if_not_fully_funded() {
         env.storage().persistent().set(&DataKey::Match(id), &m);
     });
 
-    let result = client.try_submit_result(&id, &Winner::Player1);
+    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
     assert_eq!(result, Err(Ok(Error::NotFunded)));
 }
 
 #[test]
 fn test_submit_result_fails_when_contract_token_balance_is_zero() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -709,7 +709,7 @@ fn test_submit_result_fails_when_contract_token_balance_is_zero() {
     // submit_result only transitions match state; the actual transfer happens
     // later when the winner calls claim_vested_payout, so that's where a zero
     // contract balance surfaces.
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     let result = client.try_claim_vested_payout(&id, &player1);
     assert!(
@@ -951,8 +951,8 @@ fn test_concurrent_matches_remain_isolated() {
     assert_eq!(client.get_escrow_balance(&match_one), 200);
     assert_eq!(client.get_escrow_balance(&match_two), 120);
 
-    client.submit_result(&match_one, &Winner::Player1);
-    client.submit_result(&match_two, &Winner::Draw);
+    client.submit_result(&match_one, &Winner::Player1, &oracle);
+    client.submit_result(&match_two, &Winner::Draw, &oracle);
     client.claim_vested_payout(&match_one, &player1);
     client.claim_vested_payout(&match_two, &player3);
     client.claim_vested_payout(&match_two, &player4);
@@ -1344,7 +1344,7 @@ fn test_pause_resume_cycle_preserves_escrow_balance() {
 
 #[test]
 fn test_submit_result_fails_on_paused_match() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1361,7 +1361,7 @@ fn test_submit_result_fails_on_paused_match() {
     client.pause_match(&id, &player1);
 
     // Cannot submit result on paused match
-    let result = client.try_submit_result(&id, &Winner::Player1);
+    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
     assert!(result.is_err());
 }
 
@@ -1465,7 +1465,7 @@ fn test_pause_resume_with_snapshots() {
 // #296 — get_escrow_balance returns 0 after draw payout
 #[test]
 fn test_escrow_balance_zero_after_draw() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1481,7 +1481,7 @@ fn test_escrow_balance_zero_after_draw() {
     client.deposit(&id, &player2);
     assert_eq!(client.get_escrow_balance(&id), 200);
 
-    client.submit_result(&id, &Winner::Draw);
+    client.submit_result(&id, &Winner::Draw, &oracle);
 
     assert_eq!(client.get_escrow_balance(&id), 0);
 }
@@ -1652,10 +1652,10 @@ fn test_is_funded_returns_false_when_only_player1_deposited() {
 
 #[test]
 fn test_submit_result_on_nonexistent_match_id_returns_match_not_found() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_submit_result(&9999u64, &Winner::Player1);
+    let result = client.try_submit_result(&9999u64, &Winner::Player1, &oracle);
     assert_eq!(result, Err(Ok(Error::MatchNotFound)));
 }
 
@@ -1706,7 +1706,7 @@ fn test_cancel_match_by_unauthorized_address_returns_unauthorized() {
 
 #[test]
 fn test_get_match_returns_winner_after_payout() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1719,7 +1719,7 @@ fn test_get_match_returns_winner_after_payout() {
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player2);
+    client.submit_result(&id, &Winner::Player2, &oracle);
 
     let m = client.get_match(&id);
     assert_eq!(m.state, MatchState::Completed);
@@ -1727,7 +1727,7 @@ fn test_get_match_returns_winner_after_payout() {
 
 #[test]
 fn test_submit_result_overflow_on_extreme_stake() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1748,7 +1748,7 @@ fn test_submit_result_overflow_on_extreme_stake() {
         env.storage().persistent().set(&DataKey::Match(id), &m);
     });
 
-    let result = client.try_submit_result(&id, &Winner::Player1);
+    let result = client.try_submit_result(&id, &Winner::Player1, &oracle);
     assert_eq!(result, Err(Ok(Error::Overflow)));
 }
 
@@ -1901,7 +1901,7 @@ fn test_double_deposit() {
 
 #[test]
 fn test_is_funded_returns_true_after_payout() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1922,7 +1922,7 @@ fn test_is_funded_returns_true_after_payout() {
     );
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 
     assert!(
@@ -1939,7 +1939,7 @@ fn test_is_funded_returns_true_after_payout() {
 
 #[test]
 fn test_get_escrow_balance_zero_for_completed_match() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -1959,7 +1959,7 @@ fn test_get_escrow_balance_zero_for_completed_match() {
         "escrow balance must be 2x stake while Active"
     );
 
-    client.submit_result(&id, &Winner::Player2);
+    client.submit_result(&id, &Winner::Player2, &oracle);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 
     assert_eq!(
@@ -2246,7 +2246,7 @@ fn test_update_protocol_config() {
 
 #[test]
 fn test_vesting_enforced() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -2276,7 +2276,7 @@ fn test_vesting_enforced() {
     client.deposit(&id, &player2);
 
     // Submit result
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     // Try to claim immediately - should fail
     let claim_res = client.try_claim_vested_payout(&id, &player1);
@@ -2300,7 +2300,7 @@ fn test_vesting_enforced() {
 
 #[test]
 fn test_cannot_double_claim() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -2314,7 +2314,7 @@ fn test_cannot_double_claim() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     // First claim - succeeds (vesting is 0 by default in setup)
     client.claim_vested_payout(&id, &player1);
@@ -2326,7 +2326,7 @@ fn test_cannot_double_claim() {
 
 #[test]
 fn test_claim_unauthorized_parties() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let outsider = Address::generate(&env);
 
@@ -2341,7 +2341,7 @@ fn test_claim_unauthorized_parties() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     // Outsider trying to claim - fails
     let claim_res = client.try_claim_vested_payout(&id, &outsider);
@@ -2537,7 +2537,7 @@ fn test_cancel_match_rejects_when_active() {
 //          leave the escrow balance at zero.
 #[test]
 fn test_draw_refund_correct_amounts() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
@@ -2569,7 +2569,7 @@ fn test_draw_refund_correct_amounts() {
     );
 
     // Oracle submits a draw result.
-    client.submit_result(&id, &Winner::Draw);
+    client.submit_result(&id, &Winner::Draw, &oracle);
 
     // Claim vested payouts (vesting_duration_seconds = 0 in setup, so
     // claim_vested_payout is available immediately).

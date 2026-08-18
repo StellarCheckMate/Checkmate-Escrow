@@ -284,11 +284,11 @@ fn test_rollback_rejects_pending_match() {
 
 #[test]
 fn test_rollback_rejects_completed_match() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = create_active_match(&client, &env, &player1, &player2, &token, "5d2c2a61");
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
     assert_eq!(client.get_match(&id).state, MatchState::Completed);
 
     let result =
@@ -754,7 +754,7 @@ fn test_heartbeat_match_rejects_non_player() {
 
 #[test]
 fn test_heartbeat_match_rejects_non_active_states() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Pending state — heartbeat rejected.
@@ -785,7 +785,7 @@ fn test_heartbeat_match_rejects_non_active_states() {
 
     // Completed state — heartbeat rejected.
     let done_id = create_active_match(&client, &env, &player1, &player2, &token, "ad4f712e");
-    client.submit_result(&done_id, &Winner::Player1);
+    client.submit_result(&done_id, &Winner::Player1, &oracle);
     let r = client.try_heartbeat_match(&done_id, &player1);
     assert_eq!(
         r,

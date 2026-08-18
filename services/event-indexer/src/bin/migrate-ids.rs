@@ -75,10 +75,7 @@ async fn main() -> Result<()> {
             event.txn_hash.clone(),
             event.event_index_in_txn,
         );
-        logical_event_map
-            .entry(key)
-            .or_default()
-            .push(event);
+        logical_event_map.entry(key).or_default().push(event);
     }
 
     // Identify duplicates and plan migration

@@ -67,7 +67,7 @@ fn test_ttl_extended_on_deposit() {
 
 #[test]
 fn test_active_matches_ttl_refreshed_on_append_and_removal() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match1 = client.create_match(
@@ -111,7 +111,7 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
         max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
     });
 
-    client.submit_result(&match1, &Winner::Player1);
+    client.submit_result(&match1, &Winner::Player1, &oracle);
 
     // Completion removes the match from the active index entirely.
     let still_active = env.as_contract(&contract_id, || {
@@ -148,7 +148,7 @@ fn test_active_matches_read_extends_ttl_after_ledger_advancement() {
 
 #[test]
 fn test_ttl_extended_on_submit_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -161,7 +161,7 @@ fn test_ttl_extended_on_submit_result() {
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player2);
+    client.submit_result(&id, &Winner::Player2, &oracle);
 
     let ttl = env.as_contract(&contract_id, || {
         env.storage().persistent().get_ttl(&DataKey::Match(id))
@@ -484,7 +484,7 @@ fn test_get_player_matches_ttl_for_nonexistent_player() {
 
 #[test]
 fn test_submit_result_extends_match_ttl() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -509,7 +509,7 @@ fn test_submit_result_extends_match_ttl() {
         max_entry_ttl: crate::MATCH_TTL_LEDGERS + 2000,
     });
 
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     let ttl = env.as_contract(&contract_id, || {
         env.storage().persistent().get_ttl(&DataKey::Match(id))

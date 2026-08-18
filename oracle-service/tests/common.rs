@@ -2,9 +2,7 @@
 #![allow(dead_code)]
 
 pub use oracle_service::config::OracleConfig;
-pub use oracle_service::health::{
-    CheckResult, CheckStatus,
-};
+pub use oracle_service::health::{CheckResult, CheckStatus};
 
 /// Create a minimal test oracle configuration.
 pub fn test_config() -> OracleConfig {

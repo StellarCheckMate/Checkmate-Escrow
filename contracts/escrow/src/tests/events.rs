@@ -142,7 +142,7 @@ fn test_deposit_emits_event_with_state_when_match_activates() {
 
 #[test]
 fn test_submit_result_emits_event() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -156,7 +156,7 @@ fn test_submit_result_emits_event() {
 
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -239,10 +239,10 @@ fn test_cancel_match_no_deposits_emits_no_token_transfers() {
 
 #[test]
 fn test_pause_emits_paused_event() {
-    let (env, contract_id, ..) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.pause();
+    client.pause(&admin);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -285,7 +285,7 @@ fn test_update_oracle_emits_oracle_up_event_with_addresses() {
 
 #[test]
 fn test_submit_result_emits_completed_event_with_correct_winner() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -300,7 +300,7 @@ fn test_submit_result_emits_completed_event_with_correct_winner() {
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
 
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -324,7 +324,7 @@ fn test_submit_result_emits_completed_event_with_correct_winner() {
 // #1161 — submit_result emits match/completed with the payout amount
 #[test]
 fn test_submit_result_event_includes_payout_amount() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let stake_amount = 100;
@@ -339,7 +339,7 @@ fn test_submit_result_event_includes_payout_amount() {
 
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
-    client.submit_result(&match_id, &Winner::Player2);
+    client.submit_result(&match_id, &Winner::Player2, &oracle);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -540,10 +540,10 @@ fn test_expire_match_emits_event() {
 
 #[test]
 fn test_pause_emits_event() {
-    let (env, contract_id, ..) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.pause();
+    client.pause(&admin);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -559,12 +559,12 @@ fn test_pause_emits_event() {
 
 #[test]
 fn test_unpause_emits_event() {
-    let (env, contract_id, ..) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Pause first so unpause is valid
-    client.pause();
-    client.unpause();
+    client.pause(&admin);
+    client.unpause(&admin);
 
     let events = env.events().all();
     let expected_topics = vec![
@@ -584,7 +584,7 @@ fn test_transfer_admin_emits_event() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let new_admin = Address::generate(&env);
-    client.transfer_admin(&new_admin);
+    client.transfer_admin(&new_admin, &admin);
 
     let events = env.events().all();
     let expected_topics = vec![

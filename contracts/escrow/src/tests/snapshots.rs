@@ -66,7 +66,7 @@ fn test_deposit_records_a_snapshot_per_deposit() {
 
 #[test]
 fn test_submit_result_records_completed_snapshot_with_zero_balance() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -79,7 +79,7 @@ fn test_submit_result_records_completed_snapshot_with_zero_balance() {
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player1);
+    client.submit_result(&id, &Winner::Player1, &oracle);
 
     let latest = client.get_latest_snapshot(&admin, &id);
     assert_eq!(latest.reason, SnapshotReason::Completed);
@@ -158,7 +158,7 @@ fn test_expire_match_records_cancelled_snapshot() {
 
 #[test]
 fn test_full_lifecycle_snapshot_sequence_is_chronological() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let id = client.create_match(
@@ -171,7 +171,7 @@ fn test_full_lifecycle_snapshot_sequence_is_chronological() {
     );
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
-    client.submit_result(&id, &Winner::Player2);
+    client.submit_result(&id, &Winner::Player2, &oracle);
 
     let snaps = client.get_balance_snapshots(&admin, &id);
     assert_eq!(snaps.len(), 4);

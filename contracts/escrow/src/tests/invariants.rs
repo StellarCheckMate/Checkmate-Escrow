@@ -11,14 +11,14 @@ use super::*;
 /// pre-match total — no tokens are minted or burned.
 #[test]
 fn test_balance_conservation_after_player1_wins() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin, match_id) =
+    let (env, contract_id, oracle, player1, player2, token, _admin, match_id) =
         setup_with_funded_match();
     let tc = token_client(&env, &token);
 
     let total_before = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
 
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&match_id, &player1);
 
     let total_after = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
@@ -31,14 +31,14 @@ fn test_balance_conservation_after_player1_wins() {
 /// After a Player2 win the total supply is unchanged.
 #[test]
 fn test_balance_conservation_after_player2_wins() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin, match_id) =
+    let (env, contract_id, oracle, player1, player2, token, _admin, match_id) =
         setup_with_funded_match();
     let tc = token_client(&env, &token);
 
     let total_before = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
 
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.submit_result(&match_id, &Winner::Player2);
+    client.submit_result(&match_id, &Winner::Player2, &oracle);
     client.claim_vested_payout(&match_id, &player2);
 
     let total_after = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
@@ -51,14 +51,14 @@ fn test_balance_conservation_after_player2_wins() {
 /// After a draw both players are refunded their stake — total supply unchanged.
 #[test]
 fn test_balance_conservation_after_draw() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin, match_id) =
+    let (env, contract_id, oracle, player1, player2, token, _admin, match_id) =
         setup_with_funded_match();
     let tc = token_client(&env, &token);
 
     let total_before = tc.balance(&player1) + tc.balance(&player2) + tc.balance(&contract_id);
 
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.submit_result(&match_id, &Winner::Draw);
+    client.submit_result(&match_id, &Winner::Draw, &oracle);
     client.claim_vested_payout(&match_id, &player1);
     client.claim_vested_payout(&match_id, &player2);
 
@@ -196,14 +196,14 @@ fn test_escrow_balance_tracks_deposits_exactly() {
 /// A Completed match rejects a second `submit_result`.
 #[test]
 fn test_completed_match_rejects_submit_result() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) =
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
 
-    let result = client.try_submit_result(&match_id, &Winner::Player2);
+    let result = client.try_submit_result(&match_id, &Winner::Player2, &oracle);
     assert!(
         result.is_err(),
         "submit_result must be rejected on a Completed match"
@@ -213,11 +213,11 @@ fn test_completed_match_rejects_submit_result() {
 /// A Completed match rejects `cancel_match`.
 #[test]
 fn test_completed_match_rejects_cancel() {
-    let (env, contract_id, _oracle, player1, _player2, _token, _admin, match_id) =
+    let (env, contract_id, oracle, player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
 
     let result = client.try_cancel_match(&match_id, &player1);
@@ -230,13 +230,13 @@ fn test_completed_match_rejects_cancel() {
 /// A Completed match rejects further `deposit` calls.
 #[test]
 fn test_completed_match_rejects_deposit() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin, match_id) =
+    let (env, contract_id, oracle, player1, player2, token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
     let asset_client = StellarAssetClient::new(&env, &token);
     asset_client.mint(&player1, &100);
 
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
 
     let result = client.try_deposit(&match_id, &player2);
@@ -249,7 +249,7 @@ fn test_completed_match_rejects_deposit() {
 /// A Cancelled match rejects `submit_result`.
 #[test]
 fn test_cancelled_match_rejects_submit_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -263,7 +263,7 @@ fn test_cancelled_match_rejects_submit_result() {
     client.cancel_match(&match_id, &player1);
     assert_eq!(client.get_match(&match_id).state, MatchState::Cancelled);
 
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+    let result = client.try_submit_result(&match_id, &Winner::Player1, &oracle);
     assert!(
         result.is_err(),
         "submit_result must be rejected on a Cancelled match"
@@ -323,11 +323,11 @@ fn test_cancelled_match_rejects_cancel() {
 #[test]
 fn test_escrow_balance_is_zero_in_all_terminal_states() {
     // Completed
-    let (env, contract_id, _oracle, player1, player2, token, _admin, match_id) =
+    let (env, contract_id, oracle, player1, player2, token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     assert_eq!(
         client.get_escrow_balance(&match_id),
         0,
@@ -353,7 +353,7 @@ fn test_escrow_balance_is_zero_in_all_terminal_states() {
 
 #[test]
 fn test_snapshot_count_monotonic() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     fn snapshot_count(env: &Env, contract_id: &Address, match_id: u64) -> u32 {
@@ -382,7 +382,7 @@ fn test_snapshot_count_monotonic() {
     client.deposit(&match_id, &player2);
     counts.push(snapshot_count(&env, &contract_id, match_id));
 
-    client.submit_result(&match_id, &Winner::Draw);
+    client.submit_result(&match_id, &Winner::Draw, &oracle);
     counts.push(snapshot_count(&env, &contract_id, match_id));
 
     assert_eq!(counts.len(), 4);

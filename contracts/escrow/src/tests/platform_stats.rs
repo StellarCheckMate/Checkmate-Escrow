@@ -26,8 +26,7 @@ fn test_platform_stats_increments_on_create_match() {
     assert_eq!(stats_before.total_volume, 0);
 
     // Create a match with stake 100
-    let _match_id =
-        create_default_match(&client, &env, &player1, &player2, &token, "ac39d856");
+    let _match_id = create_default_match(&client, &env, &player1, &player2, &token, "ac39d856");
 
     let stats_after = client.get_platform_stats();
     assert_eq!(
@@ -73,7 +72,7 @@ fn test_platform_stats_accumulate_volume_across_matches() {
 
 #[test]
 fn test_platform_stats_increments_payouts_on_submit_result() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = create_default_match(&client, &env, &player1, &player2, &token, "95e4f220");
@@ -82,7 +81,7 @@ fn test_platform_stats_increments_payouts_on_submit_result() {
 
     // Fund and submit result
     fund_match(&client, match_id, &player1, &player2);
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
 
     let stats_after_result = client.get_platform_stats();
     assert_eq!(
@@ -97,12 +96,12 @@ fn test_platform_stats_increments_payouts_on_submit_result() {
 
 #[test]
 fn test_platform_stats_handles_draw_payout() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = create_default_match(&client, &env, &player1, &player2, &token, "e7b51174");
     fund_match(&client, match_id, &player1, &player2);
-    client.submit_result(&match_id, &Winner::Draw);
+    client.submit_result(&match_id, &Winner::Draw, &oracle);
 
     let stats = client.get_platform_stats();
     assert_eq!(
@@ -113,21 +112,13 @@ fn test_platform_stats_handles_draw_payout() {
 
 #[test]
 fn test_platform_stats_multiple_matches_and_payouts() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Create and complete match 1
-    let id1 = create_match_with_stake(
-        &client,
-        &env,
-        &player1,
-        &player2,
-        &token,
-        "2863ed2e",
-        100,
-    );
+    let id1 = create_match_with_stake(&client, &env, &player1, &player2, &token, "2863ed2e", 100);
     fund_match(&client, id1, &player1, &player2);
-    client.submit_result(&id1, &Winner::Player1);
+    client.submit_result(&id1, &Winner::Player1, &oracle);
 
     let stats1 = client.get_platform_stats();
     assert_eq!(stats1.total_matches, 1);
@@ -135,17 +126,9 @@ fn test_platform_stats_multiple_matches_and_payouts() {
     assert_eq!(stats1.total_payouts, 1);
 
     // Create and complete match 2
-    let id2 = create_match_with_stake(
-        &client,
-        &env,
-        &player1,
-        &player2,
-        &token,
-        "e6feee3c",
-        75,
-    );
+    let id2 = create_match_with_stake(&client, &env, &player1, &player2, &token, "e6feee3c", 75);
     fund_match(&client, id2, &player1, &player2);
-    client.submit_result(&id2, &Winner::Player2);
+    client.submit_result(&id2, &Winner::Player2, &oracle);
 
     let stats2 = client.get_platform_stats();
     assert_eq!(stats2.total_matches, 2);
@@ -153,15 +136,7 @@ fn test_platform_stats_multiple_matches_and_payouts() {
     assert_eq!(stats2.total_payouts, 2);
 
     // Create match 3 but don't complete it
-    let _id3 = create_match_with_stake(
-        &client,
-        &env,
-        &player1,
-        &player2,
-        &token,
-        "b5083a27",
-        50,
-    );
+    let _id3 = create_match_with_stake(&client, &env, &player1, &player2, &token, "b5083a27", 50);
 
     let stats3 = client.get_platform_stats();
     assert_eq!(stats3.total_matches, 3);

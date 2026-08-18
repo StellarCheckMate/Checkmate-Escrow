@@ -22,7 +22,11 @@ fn setup_multi_token_fixture() -> (
     Address,
 ) {
     let env = Env::default();
-    env.mock_all_auths();
+    // Multi-token payouts route through the oracle's `swap`, which requires
+    // escrow to `require_auth()` itself in a call that isn't the root
+    // invocation (escrow -> oracle.swap -> token.transfer). Plain
+    // `mock_all_auths` only mocks auths tied to the root invocation.
+    env.mock_all_auths_allowing_non_root_auth();
 
     let admin = Address::generate(&env);
     let oracle_admin = Address::generate(&env);
@@ -212,7 +216,7 @@ fn test_multi_token_deposits_and_refunds() {
 
 #[test]
 fn test_multi_token_payout_player1_wins() {
-    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, oracle_id) =
         setup_multi_token_fixture();
 
     let oracle_rate = 50_000_000;
@@ -236,7 +240,7 @@ fn test_multi_token_payout_player1_wins() {
     escrow_client.deposit(&match_id, &player2);
 
     // Submit result: Player 1 wins
-    escrow_client.submit_result(&match_id, &Winner::Player1);
+    escrow_client.submit_result(&match_id, &Winner::Player1, &oracle_id);
     escrow_client.claim_vested_payout(&match_id, &player1);
 
     // Player 1 wins and receives the pot in token_a. Player 2 receives nothing (loser).
@@ -258,7 +262,7 @@ fn test_multi_token_payout_player1_wins() {
 
 #[test]
 fn test_multi_token_payout_player2_wins() {
-    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, oracle_id) =
         setup_multi_token_fixture();
 
     let oracle_rate = 50_000_000;
@@ -285,7 +289,7 @@ fn test_multi_token_payout_player2_wins() {
     escrow_client.set_preferred_payout_token(&player2, &Some(token_b.clone()));
 
     // Submit result: Player 2 wins
-    escrow_client.submit_result(&match_id, &Winner::Player2);
+    escrow_client.submit_result(&match_id, &Winner::Player2, &oracle_id);
     escrow_client.claim_vested_payout(&match_id, &player2);
 
     // Player 2 wins and receives the pot (200 token_a) converted to token_b.
@@ -306,7 +310,7 @@ fn test_multi_token_payout_player2_wins() {
 
 #[test]
 fn test_multi_token_payout_draw() {
-    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, oracle_id) =
         setup_multi_token_fixture();
 
     let oracle_rate = 50_000_000;
@@ -330,7 +334,7 @@ fn test_multi_token_payout_draw() {
     escrow_client.deposit(&match_id, &player2);
 
     // Submit result: Draw
-    escrow_client.submit_result(&match_id, &Winner::Draw);
+    escrow_client.submit_result(&match_id, &Winner::Draw, &oracle_id);
     escrow_client.claim_vested_payout(&match_id, &player1);
     escrow_client.claim_vested_payout(&match_id, &player2);
 
@@ -425,7 +429,7 @@ fn test_create_match_with_conversion_rate_below_boundary() {
 
 #[test]
 fn test_multi_token_payout_fund_conservation() {
-    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, oracle_id) =
         setup_multi_token_fixture();
     let escrow_address = escrow_client.address.clone();
 
@@ -457,7 +461,7 @@ fn test_multi_token_payout_fund_conservation() {
     escrow_client.deposit(&match_id, &player2);
 
     // Submit result: Player 1 wins
-    escrow_client.submit_result(&match_id, &Winner::Player1);
+    escrow_client.submit_result(&match_id, &Winner::Player1, &oracle_id);
     escrow_client.claim_vested_payout(&match_id, &player1);
 
     // Verify fund conservation: total token_a and token_b balances unchanged
@@ -487,7 +491,7 @@ fn test_multi_token_payout_fund_conservation() {
 #[test]
 #[should_panic]
 fn test_multi_token_payout_rejects_stale_rate() {
-    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, oracle_id) =
         setup_multi_token_fixture();
 
     // Set initial ledger sequence to 100
@@ -520,7 +524,7 @@ fn test_multi_token_payout_rejects_stale_rate() {
     // submit_result only transitions match state; the stale-rate check lives
     // in the payout path, so it's claim_vested_payout that panics here with
     // ConversionRateStalePriceSource.
-    escrow_client.submit_result(&match_id, &Winner::Player1);
+    escrow_client.submit_result(&match_id, &Winner::Player1, &oracle_id);
     escrow_client.claim_vested_payout(&match_id, &player1);
 }
 

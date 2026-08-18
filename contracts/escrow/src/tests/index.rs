@@ -38,7 +38,7 @@ fn test_game_id_reservation_survives_ledger_advancement() {
 /// Test #583: active/live index stays correct across concurrent cancellations and completions
 #[test]
 fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Create at least three matches
@@ -78,7 +78,7 @@ fn test_active_index_correct_after_concurrent_cancellations_and_completions() {
 
     // Cancel the pending match and complete an active one
     client.cancel_match(&match_id_1, &player1);
-    client.submit_result(&match_id_2, &Winner::Player1);
+    client.submit_result(&match_id_2, &Winner::Player1, &oracle);
 
     // Assert only the still-live match IDs remain
     let active_matches = client.get_active_matches();
@@ -343,7 +343,7 @@ fn test_get_player_matches_returns_ids() {
 // #1178 — get_completed_matches returns only Completed matches
 #[test]
 fn test_get_completed_matches_returns_only_completed() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // ── Create three matches ──────────────────────────────────────────────────
@@ -382,13 +382,13 @@ fn test_get_completed_matches_returns_only_completed() {
     // ── Fund and complete match_a ─────────────────────────────────────────────
     client.deposit(&match_a, &player1);
     client.deposit(&match_a, &player2);
-    client.submit_result(&match_a, &Winner::Player1);
+    client.submit_result(&match_a, &Winner::Player1, &oracle);
     client.claim_vested_payout(&match_a, &player1);
 
     // ── Fund and complete match_b (draw) ──────────────────────────────────────
     client.deposit(&match_b, &player1);
     client.deposit(&match_b, &player2);
-    client.submit_result(&match_b, &Winner::Draw);
+    client.submit_result(&match_b, &Winner::Draw, &oracle);
     client.claim_vested_payout(&match_b, &player1);
     client.claim_vested_payout(&match_b, &player2);
 
@@ -460,7 +460,7 @@ fn test_get_completed_matches_empty_when_none_completed() {
 // #1178 — get_completed_matches_paginated respects offset and limit
 #[test]
 fn test_get_completed_matches_paginated() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Mint extra tokens so players can cover all three matches.
@@ -482,7 +482,7 @@ fn test_get_completed_matches_paginated() {
         );
         client.deposit(&id, &player1);
         client.deposit(&id, &player2);
-        client.submit_result(&id, &Winner::Player1);
+        client.submit_result(&id, &Winner::Player1, &oracle);
         client.claim_vested_payout(&id, &player1);
         ids.push(id);
     }

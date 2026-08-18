@@ -26,18 +26,18 @@
 //!   cargo test -p escrow --test upgrade_simulation_tests -- --nocapture
 
 use escrow::errors::Error;
-use escrow::types::{FeeTier, MatchState, Platform, ProtocolConfig, Winner};
+use escrow::types::{MatchState, Platform, ProtocolConfig, Winner};
 use escrow::{EscrowContract, EscrowContractClient};
 use escrow::{CONTRACT_VERSION, DEFAULT_MINIMUM_STAKE, UPGRADE_REVIEW_PERIOD_LEDGERS};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::StellarAssetClient,
-    Address, BytesN, Env, String as SorobanString, Vec as SorobanVec,
+    Address, BytesN, Env, String as SorobanString,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const STAKE: i128 = 200;
+const STAKE: i128 = 50;
 const MINT_AMOUNT: i128 = 10_000;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -88,6 +88,17 @@ fn dummy_hash(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[0u8; 32])
 }
 
+/// Derives a Lichess-compliant (exactly 8 ASCII alphanumeric chars) game ID
+/// from an arbitrary descriptive label, so call sites can use readable names
+/// like "pre_migrate_active" instead of hand-picked hex strings.
+fn lichess_game_id(label: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    label.hash(&mut hasher);
+    format!("{:08x}", hasher.finish() as u32)
+}
+
 /// Creates a match between player1 and player2 and returns its ID.
 fn create_match<'a>(
     client: &EscrowContractClient<'a>,
@@ -102,7 +113,7 @@ fn create_match<'a>(
         player2,
         &STAKE,
         token,
-        &SorobanString::from_str(env, game_id),
+        &SorobanString::from_str(env, &lichess_game_id(game_id)),
         &Platform::Lichess,
     )
 }
@@ -308,7 +319,7 @@ fn test_is_funded_flag_preserved_after_migration() {
 /// after migration, and the winner receives the full payout.
 #[test]
 fn test_oracle_can_submit_result_after_migration() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
@@ -329,7 +340,7 @@ fn test_oracle_can_submit_result_after_migration() {
     client.migrate_state(&(CONTRACT_VERSION + 1));
 
     // Oracle submits result after migration
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&match_id, &player1);
 
     let p1_after = token_client.balance(&player1);
@@ -344,7 +355,7 @@ fn test_oracle_can_submit_result_after_migration() {
 /// Draw result after migration correctly refunds both players.
 #[test]
 fn test_draw_payout_correct_after_migration() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
@@ -363,7 +374,7 @@ fn test_draw_payout_correct_after_migration() {
     let p2_before = token_client.balance(&player2);
 
     client.migrate_state(&(CONTRACT_VERSION + 1));
-    client.submit_result(&match_id, &Winner::Draw);
+    client.submit_result(&match_id, &Winner::Draw, &oracle);
     client.claim_vested_payout(&match_id, &player1);
     client.claim_vested_payout(&match_id, &player2);
 
@@ -467,20 +478,29 @@ fn test_get_player_matches_api_compatible_after_migration() {
 
 // ── Fee correctness ────────────────────────────────────────────────────────────
 
-/// Fee tiers configured before migration produce the same payout after.
+/// A protocol fee configured before migration produces the same payout
+/// deduction after. Note: `set_fee_tiers`/`calculate_fee_by_tier` is a
+/// separate, standalone calculator — `claim_vested_payout` only ever reads
+/// `ProtocolConfig::protocol_fee_bps` (see `compute_protocol_fee`), so that's
+/// the mechanism this test needs to configure to actually affect payout.
 #[test]
 fn test_fee_tiers_preserved_and_applied_after_migration() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
-    // Set a 1% fee tier for all stakes (fee taken to treasury)
-    let mut tiers: SorobanVec<FeeTier> = SorobanVec::new(&env);
-    tiers.push_back(FeeTier {
-        max_stake: i128::MAX,
-        fee_basis_points: 100, // 1%
+    // Set a flat 1% protocol fee (taken to treasury on payout).
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 0,
+        treasury: admin.clone(),
+        stablecoin_only_mode: false,
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
+        maximum_stake: None,
+        match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 100, // 1%
+        fee_recipient: admin.clone(),
     });
-    client.set_fee_tiers(&tiers);
 
     let match_id = create_match(
         &client,
@@ -499,7 +519,7 @@ fn test_fee_tiers_preserved_and_applied_after_migration() {
     client.migrate_state(&(CONTRACT_VERSION + 1));
 
     // Submit result after migration — fee must still be 1%
-    client.submit_result(&match_id, &Winner::Player1);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
     client.claim_vested_payout(&match_id, &player1);
 
     let treasury_after = token_client.balance(&admin);
@@ -575,11 +595,11 @@ fn test_execute_upgrade_rejected_when_not_paused() {
 /// execute_upgrade is rejected when the review period has not elapsed.
 #[test]
 fn test_execute_upgrade_rejected_before_review_period() {
-    let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.schedule_upgrade(&dummy_hash(&env));
-    client.pause();
+    client.pause(&admin);
 
     // Do NOT advance ledger — review period has not elapsed.
     let result = client.try_execute_upgrade();
@@ -592,10 +612,10 @@ fn test_execute_upgrade_rejected_before_review_period() {
 /// execute_upgrade is rejected when no upgrade is scheduled.
 #[test]
 fn test_execute_upgrade_rejected_with_no_scheduled_upgrade() {
-    let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.pause();
+    client.pause(&admin);
 
     let result = client.try_execute_upgrade();
     assert!(
@@ -737,7 +757,7 @@ fn test_multiple_matches_survive_migration() {
 /// contract remains fully functional post-migration.
 #[test]
 fn test_new_match_completes_normally_after_migration() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
@@ -755,7 +775,7 @@ fn test_new_match_completes_normally_after_migration() {
 
     let p2_before = token_client.balance(&player2);
 
-    client.submit_result(&match_id, &Winner::Player2);
+    client.submit_result(&match_id, &Winner::Player2, &oracle);
     client.claim_vested_payout(&match_id, &player2);
 
     let p2_after = token_client.balance(&player2);

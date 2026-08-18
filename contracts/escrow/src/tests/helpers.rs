@@ -91,10 +91,11 @@ pub fn run_full_match(
     token: &Address,
     game_id: &str,
     winner: &Winner,
+    oracle: &Address,
 ) -> u64 {
     let id = create_default_match(client, env, player1, player2, token, game_id);
     fund_match(client, id, player1, player2);
-    client.submit_result(&id, winner);
+    client.submit_result(&id, winner, oracle);
     match winner {
         Winner::Player1 => {
             client.claim_vested_payout(&id, player1);
@@ -203,8 +204,12 @@ pub fn assert_no_deposit_after_terminal(
 }
 
 /// Assert that a match in a terminal state cannot have its result submitted again.
-pub fn assert_no_submit_after_terminal(client: &EscrowContractClient, match_id: u64) {
-    let result = client.try_submit_result(&match_id, &Winner::Player1);
+pub fn assert_no_submit_after_terminal(
+    client: &EscrowContractClient,
+    match_id: u64,
+    oracle: &Address,
+) {
+    let result = client.try_submit_result(&match_id, &Winner::Player1, oracle);
     assert!(
         result.is_err(),
         "submit_result must be rejected once match is in a terminal state"

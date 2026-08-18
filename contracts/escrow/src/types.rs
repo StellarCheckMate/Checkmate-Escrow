@@ -148,7 +148,11 @@ pub struct OracleRotationState {
 
 impl OracleRotationState {
     pub fn temp(&self) -> Option<TempOracleRotation> {
-        match (&self.temp_old_oracle, &self.temp_new_oracle, self.temp_expiry) {
+        match (
+            &self.temp_old_oracle,
+            &self.temp_new_oracle,
+            self.temp_expiry,
+        ) {
             (Some(old), Some(new), Some(expiry)) => Some(TempOracleRotation {
                 old_oracle: old.clone(),
                 temp_oracle: new.clone(),
