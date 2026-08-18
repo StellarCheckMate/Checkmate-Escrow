@@ -4427,6 +4427,21 @@ impl EscrowContract {
             return Err(Error::InvalidState);
         }
 
+        // Multi-token matches depend on the oracle's conversion rate for a
+        // fair payout. Mirror the staleness guard in `execute_payout` here
+        // too: a claim deferred by vesting must not pay out against a rate
+        // that has since gone stale, even for the leg that stays in `token`.
+        let is_multi_token = m.token_b.is_some() && m.conversion_rate.is_some_and(|r| r > 0);
+        if is_multi_token {
+            if let Some(rate_ledger) = m.conversion_rate_ledger {
+                let current_ledger = env.ledger().sequence();
+                let max_rate_age = 1000u32;
+                if current_ledger.saturating_sub(rate_ledger) > max_rate_age {
+                    return Err(Error::ConversionRateStalePriceSource);
+                }
+            }
+        }
+
         // Resolve the payout token for this player: use the player's preferred
         // token if (a) they have one set, (b) it differs from the stake token,
         // and (c) the match has a conversion rate + token_b set by the oracle.

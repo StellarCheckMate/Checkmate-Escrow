@@ -102,13 +102,13 @@ mod kani_verification {
             "Escrow balance mismatch in Active state"
         );
 
-        // Simulate payout: funds leave escrow
-        let payout_amount = 2 * stake; // Winner gets full pot
+        // Simulate payout: funds leave escrow, so nothing remains escrowed
+        // and the contract holds nothing extra either.
         let contract_balance_after = 0; // All funds paid out
-        let _escrow_after = 0;
+        let escrow_after = 0;
 
         assert!(
-            InvariantValidator::check_no_fund_loss(&context, payout_amount, contract_balance_after),
+            InvariantValidator::check_no_fund_loss(&context, escrow_after, contract_balance_after),
             "VIOLATION: Fund loss detected"
         );
 
@@ -250,7 +250,7 @@ mod kani_verification {
         context.player2_deposited = true;
 
         assert!(
-            InvariantValidator::check_no_unreachable_states(&context),
+            InvariantValidator::check_both_deposits_required(&context),
             "VIOLATION: Active state with both deposits should be valid"
         );
 
@@ -261,7 +261,7 @@ mod kani_verification {
         context2.player2_deposited = false;
 
         assert!(
-            InvariantValidator::check_no_unreachable_states(&context2),
+            InvariantValidator::check_both_deposits_required(&context2),
             "VIOLATION: Pending with one deposit should be valid"
         );
 
@@ -272,7 +272,7 @@ mod kani_verification {
         context3.player2_deposited = false;
 
         assert!(
-            !InvariantValidator::check_no_unreachable_states(&context3),
+            !InvariantValidator::check_both_deposits_required(&context3),
             "VIOLATION: Active with one deposit is invalid"
         );
 

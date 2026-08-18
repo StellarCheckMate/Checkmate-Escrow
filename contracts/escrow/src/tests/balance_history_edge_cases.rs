@@ -118,14 +118,14 @@ fn test_player_balance_history_with_multiple_matches() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let game_ids = ["game001", "game002", "game003"];
-    for game_id in game_ids {
+    for i in 0..3u32 {
+        let game_id = format!("{:08x}", i);
         let match_id = client.create_match(
             &player1,
             &player2,
             &100,
             &token,
-            &String::from_str(&env, game_id),
+            &String::from_str(&env, &game_id),
             &Platform::Lichess,
         );
         client.deposit(&match_id, &player1);

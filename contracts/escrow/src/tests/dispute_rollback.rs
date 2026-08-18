@@ -491,15 +491,15 @@ fn rollback_setup_multi_token_fixture() -> (
     // Both players need token_a for deposits (since `deposit()` always uses
     // `m.token`). Player2 also receives `token_b` so the post-rollback refund
     // can be observed in their balance change.
-    asset_a_client.mint(&player1, &1000_0000000);
-    asset_a_client.mint(&player2, &1000_0000000);
-    asset_b_client.mint(&player2, &500_0000000);
+    asset_a_client.mint(&player1, &1000);
+    asset_a_client.mint(&player2, &1000);
+    asset_b_client.mint(&player2, &500);
 
     // Pre-fund the oracle contract for swap-path symmetry with the parent
     // suite. Not consumed by the rollback path itself, which transfers
     // directly out of the escrow contract.
-    asset_a_client.mint(&oracle_id, &10000_0000000);
-    asset_b_client.mint(&oracle_id, &10000_0000000);
+    asset_a_client.mint(&oracle_id, &10000);
+    asset_b_client.mint(&oracle_id, &10000);
 
     (
         env,
@@ -524,7 +524,7 @@ fn test_rollback_multi_token_match_refunds_each_player_in_their_token() {
     let oracle_rate = 50_000_000; // 1 token_a = 5 token_b at 1e7 scale
     oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
 
-    let stake_amount = 100_0000000; // 100 token_a
+    let stake_amount = 100; // 100 token_a
     let rate = 50_000_000; // 5.0 multiplier
 
     let match_id = escrow_client.create_match_with_conversion(
@@ -557,7 +557,7 @@ fn test_rollback_multi_token_match_refunds_each_player_in_their_token() {
     // refund branch has the funds available to transfer back to player2.
     // In production this budget would arrive through the oracle's
     // on-chain `swap`, but for a deterministic unit test we mint directly.
-    StellarAssetClient::new(&env, &token_b).mint(&escrow_client.address, &500_0000000);
+    StellarAssetClient::new(&env, &token_b).mint(&escrow_client.address, &500);
 
     escrow_client.dispute_and_rollback_match(
         &match_id,
@@ -575,21 +575,21 @@ fn test_rollback_multi_token_match_refunds_each_player_in_their_token() {
     // Player1 refunded in token_a (m.token path): 100 token_a back.
     assert_eq!(
         token_client(&env, &token_a).balance(&player1),
-        1000_0000000,
+        1000,
         "player1 must be refunded their full token_a stake on multi-token rollback"
     );
     // Player2 refunded in token_b (m.token_b path): 500 token_b. amount_b =
     // stake * conversion_rate / 10_000_000 = 100 * 5 = 500.
     assert_eq!(
         token_client(&env, &token_b).balance(&player2),
-        1000_0000000,
+        1000,
         "player2 must be refunded the converted full token_b stake on multi-token rollback"
     );
     // Escrow balances: token_a drained by the player1 refund (200 - 100 = 100);
     // token_b drained by the player2 refund (500 - 500 = 0).
     assert_eq!(
         token_client(&env, &token_a).balance(&escrow_client.address),
-        100_0000000,
+        100,
         "escrow token_a balance must drop by exactly one stake after multi-token rollback"
     );
     assert_eq!(
@@ -613,7 +613,7 @@ fn test_rollback_multi_token_emits_match_rollback_event() {
     let match_id = escrow_client.create_match_with_conversion(
         &player1,
         &player2,
-        &100_0000000,
+        &100,
         &token_a,
         &token_b,
         &50_000_000,
@@ -623,7 +623,7 @@ fn test_rollback_multi_token_emits_match_rollback_event() {
     escrow_client.deposit(&match_id, &player1);
     escrow_client.deposit(&match_id, &player2);
 
-    StellarAssetClient::new(&env, &token_b).mint(&escrow_client.address, &500_0000000);
+    StellarAssetClient::new(&env, &token_b).mint(&escrow_client.address, &500);
 
     let reason = String::from_str(&env, "a09e238d");
     env.ledger().set_timestamp(0);
@@ -851,13 +851,15 @@ fn test_heartbeat_match_keeps_rollback_window_alive_past_24h() {
 
     // Advance to just inside the window, heartbeat, then advance past the
     // original 24h bound — the post-heartbeat window is the new bound,
-    // not the original one.
+    // not the original one. `adv_to` advances *by* the given number of
+    // seconds from the current timestamp, so the second call only needs
+    // to cover the remaining gap to land 90s past the original 24h mark.
     adv_to(&env, ROLLBACK_WINDOW_SECONDS - 30);
     client.heartbeat_match(&id, &player1);
 
     // Past the original 24h mark where the original deposit heartbeat
     // would have been stale — but the heartbeat refreshed it.
-    adv_to(&env, ROLLBACK_WINDOW_SECONDS + 60);
+    adv_to(&env, 90);
 
     client.dispute_and_rollback_match(&id, &player2, &String::from_str(&env, "7a20679e"));
 

@@ -289,11 +289,26 @@ impl InvariantValidator {
         };
 
         if escrow_balance > 0 {
-            // Must be in a state with valid onward transition
+            // Must be in a state with valid onward transition. Pending is
+            // included because a match legitimately holds one player's
+            // deposit while awaiting the second deposit before it can
+            // transition to Active.
             matches!(
                 context.current_state,
-                MatchState::Active | MatchState::PendingResult | MatchState::Paused
+                MatchState::Pending
+                    | MatchState::Active
+                    | MatchState::PendingResult
+                    | MatchState::Paused
             )
+        } else {
+            true
+        }
+    }
+
+    /// INV-BOTH-DEPOSITS-REQUIRED: state == Active ⟹ player1_deposited ∧ player2_deposited
+    pub fn check_both_deposits_required(context: &FormalVerificationContext) -> bool {
+        if context.current_state == MatchState::Active {
+            context.player1_deposited && context.player2_deposited
         } else {
             true
         }
