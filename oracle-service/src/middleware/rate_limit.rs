@@ -96,7 +96,9 @@ impl Bucket {
     /// `Err(retry_after_secs)` when the bucket is exhausted.
     fn consume(&mut self) -> Result<f64, f64> {
         let now = std::time::Instant::now();
-        let elapsed = now.saturating_duration_since(self.last_refill).as_secs_f64();
+        let elapsed = now
+            .saturating_duration_since(self.last_refill)
+            .as_secs_f64();
         self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.capacity);
         self.last_refill = now;
         self.last_seen = now;
@@ -308,7 +310,7 @@ mod tests {
     #[test]
     fn bucket_refills_over_time() {
         let mut b = Bucket::new(1.0, 10.0); // 10 tokens/sec → 1 token per 100ms
-        // Drain the initial token.
+                                            // Drain the initial token.
         assert!(b.consume().is_ok());
         // Simulate 200ms passing by faking `last_refill`.
         b.last_refill -= Duration::from_millis(200);

@@ -236,7 +236,10 @@ async fn unknown_status_is_rejected_and_lists_the_options() {
 
 #[tokio::test]
 async fn transaction_type_filter_is_validated() {
-    assert_accepted(&format!("/transactions/player/{VALID_ACCOUNT}?type=deposit")).await;
+    assert_accepted(&format!(
+        "/transactions/player/{VALID_ACCOUNT}?type=deposit"
+    ))
+    .await;
     assert_accepted(&format!("/transactions/player/{VALID_ACCOUNT}?type=payout")).await;
     assert_accepted(&format!("/transactions/player/{VALID_ACCOUNT}?type=fee")).await;
     assert_rejected(

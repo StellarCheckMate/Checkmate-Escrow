@@ -56,10 +56,7 @@ impl EventCache {
         }
 
         self.events.insert(event_id.clone(), event);
-        self.match_index
-            .entry(match_id)
-            .or_default()
-            .push(event_id);
+        self.match_index.entry(match_id).or_default().push(event_id);
     }
 
     /// Retrieve an event by ID.
@@ -138,6 +135,8 @@ mod tests {
             platform: None,
             timestamp: Utc::now(),
             txn_hash: None,
+            event_index_in_txn: None,
+            reorg_invalidated_at: None,
         }
     }
 
@@ -158,7 +157,10 @@ mod tests {
         cache.insert(make_event("a", 1));
         cache.insert(make_event("b", 1));
         cache.insert(make_event("c", 1));
-        assert!(cache.get("c").is_some(), "most-recently inserted must be present");
+        assert!(
+            cache.get("c").is_some(),
+            "most-recently inserted must be present"
+        );
     }
 
     // ── Deterministic LRU eviction order ─────────────────────────────────
@@ -171,7 +173,7 @@ mod tests {
         let mut cache = EventCache::new(2);
         cache.insert(make_event("a", 1)); // LRU after: [a]
         cache.insert(make_event("b", 1)); // LRU after: [a, b]
-        // Inserting c must evict a (the front / LRU entry).
+                                          // Inserting c must evict a (the front / LRU entry).
         cache.insert(make_event("c", 1)); // LRU after: [b, c]
 
         assert!(cache.get("a").is_none(), "a must have been evicted (LRU)");
@@ -206,7 +208,7 @@ mod tests {
         let mut cache = EventCache::new(2);
         cache.insert(make_event("a", 1)); // [a]
         cache.insert(make_event("b", 1)); // [a, b]
-        // Touch a → moves it to back: [b, a]
+                                          // Touch a → moves it to back: [b, a]
         cache.insert(make_event("a", 1));
         assert_eq!(cache.size(), 2, "size must not grow on re-insert");
 
@@ -267,14 +269,24 @@ mod tests {
 
         cache.insert(make_event("evt-3", 1));
 
-        assert_eq!(cache.size(), capacity, "cache must not exceed max_size after eviction");
-        assert!(cache.get("evt-3").is_some(), "newly inserted event must be present");
+        assert_eq!(
+            cache.size(),
+            capacity,
+            "cache must not exceed max_size after eviction"
+        );
+        assert!(
+            cache.get("evt-3").is_some(),
+            "newly inserted event must be present"
+        );
 
         let surviving_old = ["evt-1", "evt-2"]
             .iter()
             .filter(|id| cache.get(id).is_some())
             .count();
-        assert_eq!(surviving_old, 1, "exactly one old entry must survive eviction");
+        assert_eq!(
+            surviving_old, 1,
+            "exactly one old entry must survive eviction"
+        );
         // With LRU the surviving one is always evt-2 (more recently inserted).
         assert!(
             cache.get("evt-2").is_some(),

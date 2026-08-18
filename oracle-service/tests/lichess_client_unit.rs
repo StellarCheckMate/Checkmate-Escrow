@@ -40,11 +40,9 @@ async fn fetch_result_maps_white_to_player1() {
         .mount(&server)
         .await;
 
-    let client = LichessClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let res = client.fetch_result("abcd1234").await.unwrap();
     assert_eq!(res.winner, contracts_oracle::types::Winner::Player1);
@@ -62,11 +60,9 @@ async fn fetch_result_maps_black_to_player2() {
         .mount(&server)
         .await;
 
-    let client = LichessClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let res: LichessGameResult = client.fetch_result("abcd5678").await.unwrap();
     assert_eq!(res.winner, contracts_oracle::types::Winner::Player2);
@@ -82,11 +78,9 @@ async fn fetch_result_maps_absent_winner_to_draw() {
         .mount(&server)
         .await;
 
-    let client = LichessClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let res = client.fetch_result("draw1234").await.unwrap();
     assert_eq!(res.winner, contracts_oracle::types::Winner::Draw);
@@ -102,11 +96,9 @@ async fn fetch_result_404_maps_to_game_not_found() {
         .mount(&server)
         .await;
 
-    let client = LichessClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let err = client.fetch_result("notfound").await.unwrap_err();
     assert!(matches!(err, LichessError::GameNotFound));
@@ -124,11 +116,9 @@ async fn fetch_result_unknown_winner_errors() {
         .mount(&server)
         .await;
 
-    let client = LichessClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let err = client.fetch_result("unk12345").await.unwrap_err();
     assert!(matches!(err, LichessError::InvalidResponse));
@@ -144,11 +134,9 @@ async fn fetch_result_non_2xx_maps_to_http_status() {
         .mount(&server)
         .await;
 
-    let client = LichessClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let err = client.fetch_result("err12345").await.unwrap_err();
     assert!(matches!(err, LichessError::HttpStatus { .. }));
@@ -166,11 +154,9 @@ async fn test_lichess_missing_winner_field() {
         .mount(&server)
         .await;
 
-    let client = LichessClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let err = client.fetch_result("miss1234").await.unwrap_err();
     assert!(matches!(err, LichessError::InvalidResponse));
@@ -195,18 +181,19 @@ async fn test_lichess_rate_limit_retry() {
         .mount(&server)
         .await;
 
-    let client = LichessClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let start = std::time::Instant::now();
     let result = client.fetch_result("rate1234").await;
-    let elapsed = start.elapsed();
+    let _elapsed = start.elapsed();
 
     assert!(result.is_ok());
-    assert_eq!(result.unwrap().winner, contracts_oracle::types::Winner::Player1);
+    assert_eq!(
+        result.unwrap().winner,
+        contracts_oracle::types::Winner::Player1
+    );
 }
 
 #[tokio::test]
@@ -219,11 +206,9 @@ async fn test_lichess_game_not_found() {
         .mount(&server)
         .await;
 
-    let client = LichessClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let err = client.fetch_result("notfnd1").await.unwrap_err();
     assert!(matches!(err, LichessError::GameNotFound));

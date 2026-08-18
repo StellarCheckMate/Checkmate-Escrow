@@ -1,10 +1,13 @@
-/// Shared test helpers for the escrow contract test suite.
-///
-/// Centralises the common setup boilerplate that was previously duplicated
-/// across every test module, and exposes small utility functions that make
-/// individual tests more readable.
+//! Shared test helpers for the escrow contract test suite.
+//!
+//! Centralises the common setup boilerplate that was previously duplicated
+//! across every test module, and exposes small utility functions that make
+//! individual tests more readable.
+//!
+//! Not every helper here has a caller yet — modules adopt them incrementally
+//! as they're touched, rather than in one sweeping rename.
+#![allow(dead_code)]
 use super::*;
-use soroban_sdk::testutils::Address as _;
 
 // ── Primary setup fixture ────────────────────────────────────────────────────
 
@@ -67,7 +70,12 @@ pub fn create_match_with_stake(
 }
 
 /// Deposit for both players, bringing the match to `Active` state.
-pub fn fund_match(client: &EscrowContractClient, match_id: u64, player1: &Address, player2: &Address) {
+pub fn fund_match(
+    client: &EscrowContractClient,
+    match_id: u64,
+    player1: &Address,
+    player2: &Address,
+) {
     client.deposit(&match_id, player1);
     client.deposit(&match_id, player2);
 }
@@ -166,10 +174,7 @@ pub fn assert_total_balance(
 /// Assert that a match is in a terminal state (`Completed` or `Cancelled`) and
 /// that the contract holds **zero** tokens for it (i.e. all funds have been
 /// disbursed).
-pub fn assert_terminal_state_zero_escrow(
-    client: &EscrowContractClient,
-    match_id: u64,
-) {
+pub fn assert_terminal_state_zero_escrow(client: &EscrowContractClient, match_id: u64) {
     let m = client.get_match(&match_id);
     assert!(
         m.state == MatchState::Completed || m.state == MatchState::Cancelled,
@@ -198,10 +203,7 @@ pub fn assert_no_deposit_after_terminal(
 }
 
 /// Assert that a match in a terminal state cannot have its result submitted again.
-pub fn assert_no_submit_after_terminal(
-    client: &EscrowContractClient,
-    match_id: u64,
-) {
+pub fn assert_no_submit_after_terminal(client: &EscrowContractClient, match_id: u64) {
     let result = client.try_submit_result(&match_id, &Winner::Player1);
     assert!(
         result.is_err(),

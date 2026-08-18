@@ -2,11 +2,10 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::testutils::Address as _;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn tier(env: &Env, max_stake: i128, bps: u32) -> FeeTier {
+fn tier(_env: &Env, max_stake: i128, bps: u32) -> FeeTier {
     FeeTier {
         max_stake,
         fee_basis_points: bps,
@@ -28,7 +27,11 @@ fn test_get_fee_tiers_empty_by_default() {
     let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    assert_eq!(client.get_fee_tiers().len(), 0, "no fee tiers configured by default");
+    assert_eq!(
+        client.get_fee_tiers().len(),
+        0,
+        "no fee tiers configured by default"
+    );
 }
 
 // ── set_fee_tiers ─────────────────────────────────────────────────────────────

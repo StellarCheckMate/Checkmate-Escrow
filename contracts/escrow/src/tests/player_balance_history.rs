@@ -417,7 +417,7 @@ fn test_get_balance_at_timestamp_after_ring_buffer_overwrites_oldest() {
     // the oldest ones are pruned.
     env.as_contract(&contract_id, || {
         for i in 0..(MAX_PLAYER_SNAPSHOTS * 2) {
-            env.ledger().set_sequence_number(1_000 + i as u32);
+            env.ledger().set_sequence_number(1_000 + i);
             EscrowContract::record_player_snapshot(&env, &player1);
         }
     });
@@ -433,7 +433,11 @@ fn test_get_balance_at_timestamp_after_ring_buffer_overwrites_oldest() {
 
         // 1) The freshly-recorded value at the final ledger must be retrievable.
         assert_eq!(
-            EscrowContract::get_balance_at_timestamp(env.clone(), player1.clone(), final_ledger as u64),
+            EscrowContract::get_balance_at_timestamp(
+                env.clone(),
+                player1.clone(),
+                final_ledger as u64
+            ),
             BalanceAtTimestamp::Known(100),
             "latest snapshot must be retrievable at its own ledger"
         );

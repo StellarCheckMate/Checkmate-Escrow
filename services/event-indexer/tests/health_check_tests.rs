@@ -56,7 +56,7 @@ async fn health_check_returns_valid_response_structure() {
 
     // Response should be valid JSON with expected fields
     assert!(!health.status.is_empty(), "Status should not be empty");
-    
+
     // Status should be either "ok" or "degraded"
     assert!(
         health.status == "ok" || health.status == "degraded",
@@ -96,7 +96,10 @@ async fn health_check_returns_degraded_when_rpc_unreachable() {
             StatusCode::SERVICE_UNAVAILABLE,
             "Should return 503 Service Unavailable when RPC unreachable"
         );
-        assert_eq!(health.status, "degraded", "Status should be 'degraded' when RPC unreachable");
+        assert_eq!(
+            health.status, "degraded",
+            "Status should be 'degraded' when RPC unreachable"
+        );
     }
 }
 
@@ -107,7 +110,7 @@ async fn health_check_db_reachable_boolean() {
     // db_reachable should be a boolean value (true or false)
     // With unreachable DSN, it should be false
     assert!(
-        health.db_reachable == false,
+        !health.db_reachable,
         "db_reachable should be false with unreachable DSN"
     );
 }
@@ -119,7 +122,7 @@ async fn health_check_rpc_reachable_boolean() {
     // rpc_reachable should be a boolean value (true or false)
     // With unreachable RPC endpoint, it should be false
     assert!(
-        health.rpc_reachable == false,
+        !health.rpc_reachable,
         "rpc_reachable should be false with unreachable RPC URL"
     );
 }

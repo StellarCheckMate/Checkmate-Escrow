@@ -18,7 +18,9 @@ use oracle_service::{
 };
 
 use chrono::Utc;
-use stellar_xdr::{HostFunction, Limits, OperationBody, ReadXdr, ScSymbol, ScVal, TransactionEnvelope};
+use stellar_xdr::{
+    HostFunction, Limits, OperationBody, ReadXdr, ScSymbol, ScVal, TransactionEnvelope,
+};
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -159,7 +161,11 @@ async fn lichess_oracle_completes_match_end_to_end() {
     let TransactionEnvelope::Tx(v1) = envelope else {
         panic!("expected a TransactionV1Envelope");
     };
-    let op = v1.tx.operations.get(0).expect("transaction must have one operation");
+    let op = v1
+        .tx
+        .operations
+        .first()
+        .expect("transaction must have one operation");
     let OperationBody::InvokeHostFunction(invoke_op) = &op.body else {
         panic!("expected an InvokeHostFunction operation");
     };
@@ -170,7 +176,7 @@ async fn lichess_oracle_completes_match_end_to_end() {
     let expected_fn_name = ScSymbol("submit_result".try_into().unwrap());
     assert_eq!(invoke_args.function_name, expected_fn_name);
 
-    assert_eq!(invoke_args.args.get(0), Some(&ScVal::U64(MATCH_ID)));
+    assert_eq!(invoke_args.args.first(), Some(&ScVal::U64(MATCH_ID)));
 
     let expected_winner = ScVal::Symbol(ScSymbol("Player1".try_into().unwrap()));
     assert_eq!(invoke_args.args.get(1), Some(&expected_winner));

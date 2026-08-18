@@ -10,7 +10,7 @@
 //!   cargo test -p escrow --test match_lifecycle_test
 
 use escrow::types::{MatchState, Platform, ProtocolConfig, Winner};
-use escrow::{DEFAULT_MINIMUM_STAKE, EscrowContract, EscrowContractClient};
+use escrow::{EscrowContract, EscrowContractClient, DEFAULT_MINIMUM_STAKE};
 use soroban_sdk::{
     testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString,
 };
@@ -42,6 +42,11 @@ fn setup() -> (Env, Address, Address, Address, Address, Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
 
     (env, contract_id, oracle, player1, player2, token)

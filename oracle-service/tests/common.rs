@@ -1,12 +1,10 @@
 //! Common test utilities for oracle service tests.
+#![allow(dead_code)]
 
-use std::sync::Arc;
-use std::time::Duration;
-
-pub use oracle_service::config::{OracleConfig, Platform};
-pub use oracle_service::health::{CanaryStatus, CheckResult, CheckStatus, HealthCheckResponse, HealthStatus};
-pub use oracle_service::oracle::{ChessComClient, LichessClient};
-pub use oracle_service::soroban_client::SorobanClient;
+pub use oracle_service::config::OracleConfig;
+pub use oracle_service::health::{
+    CheckResult, CheckStatus,
+};
 
 /// Create a minimal test oracle configuration.
 pub fn test_config() -> OracleConfig {

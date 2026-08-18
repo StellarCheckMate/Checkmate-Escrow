@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
     let dry_run = args.iter().any(|a| a == "--dry-run") || !commit;
 
     let pool = event_indexer::db::build_pool(&db_url, 5)?;
-    let conn = pool.get().await?;
+    let mut conn = pool.get().await?;
 
     println!("Event ID Migration Tool");
     println!("Mode: {}\n", if commit { "COMMIT" } else { "DRY-RUN" });
@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
         )
         .await?;
 
-    let mut events: Vec<EventRow> = rows
+    let events: Vec<EventRow> = rows
         .iter()
         .map(|row| EventRow {
             id: row.get(0),
@@ -66,22 +66,27 @@ async fn main() -> Result<()> {
     println!("Fetched {} events\n", events.len());
 
     // Compute deterministic IDs and group by (ledger, txn_hash, event_index)
-    let mut logical_event_map: HashMap<(u32, Option<String>, Option<u16>), Vec<EventRow>> = HashMap::new();
+    let mut logical_event_map: HashMap<(u32, Option<String>, Option<u16>), Vec<EventRow>> =
+        HashMap::new();
 
     for event in events {
-        let key = (event.ledger_sequence, event.txn_hash.clone(), event.event_index_in_txn);
-        logical_event_map.entry(key).or_insert_with(Vec::new).push(event);
+        let key = (
+            event.ledger_sequence,
+            event.txn_hash.clone(),
+            event.event_index_in_txn,
+        );
+        logical_event_map
+            .entry(key)
+            .or_default()
+            .push(event);
     }
 
     // Identify duplicates and plan migration
-    let mut duplicates_count = 0;
     let mut to_delete: Vec<String> = Vec::new();
     let mut to_update: Vec<(String, String)> = Vec::new(); // (old_id, new_id)
 
     for ((ledger, txn_hash, event_index), group) in logical_event_map.iter() {
         if group.len() > 1 {
-            duplicates_count += group.len();
-
             let new_id = compute_event_id(
                 *ledger,
                 txn_hash.as_ref().ok_or(anyhow!("Missing txn_hash"))?,
@@ -125,9 +130,15 @@ async fn main() -> Result<()> {
 
         // Show sample UPDATE statements
         if !to_update.is_empty() {
-            println!("\n-- Update {} events with deterministic IDs", to_update.len());
+            println!(
+                "\n-- Update {} events with deterministic IDs",
+                to_update.len()
+            );
             for (old_id, new_id) in to_update.iter().take(5) {
-                println!("UPDATE events SET id = '{}' WHERE id = '{}';", new_id, old_id);
+                println!(
+                    "UPDATE events SET id = '{}' WHERE id = '{}';",
+                    new_id, old_id
+                );
             }
             if to_update.len() > 5 {
                 println!("-- ... {} more UPDATE statements", to_update.len() - 5);
@@ -155,7 +166,7 @@ async fn main() -> Result<()> {
     // COMMIT mode: execute migration
     println!("EXECUTING MIGRATION (backup your database first!)\n");
 
-    let mut tx = conn.transaction().await?;
+    let tx = conn.transaction().await?;
 
     let mut updated = 0;
     for (old_id, new_id) in &to_update {
@@ -172,7 +183,8 @@ async fn main() -> Result<()> {
 
     let mut deleted = 0;
     for id in &to_delete {
-        tx.execute("DELETE FROM events WHERE id = $1", &[&id]).await?;
+        tx.execute("DELETE FROM events WHERE id = $1", &[&id])
+            .await?;
         deleted += 1;
         if deleted % 100 == 0 {
             println!("Deleted {} duplicate rows...", deleted);
@@ -181,7 +193,10 @@ async fn main() -> Result<()> {
 
     // Verify before commit
     let count_after: i64 = tx
-        .query_one("SELECT COUNT(*) FROM events WHERE reorg_invalidated_at IS NULL", &[])
+        .query_one(
+            "SELECT COUNT(*) FROM events WHERE reorg_invalidated_at IS NULL",
+            &[],
+        )
         .await?
         .get(0);
 

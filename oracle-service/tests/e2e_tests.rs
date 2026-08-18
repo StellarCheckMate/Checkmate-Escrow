@@ -44,7 +44,6 @@ use oracle_service::{
         errors::ChessComError,
         lichess_client::{LichessClient, LichessClientConfig},
         provider::ProviderRegistry,
-        provider_error::ProviderError,
         rate_limiter::RateLimiterConfig,
     },
     soroban_client::SorobanClient,
@@ -74,8 +73,7 @@ struct E2EConfig {
 impl E2EConfig {
     /// Load from environment.  Returns `None` if required vars are absent.
     fn from_env() -> Option<Self> {
-        let rpc_url = std::env::var("E2E_RPC_URL")
-            .unwrap_or_else(|_| DEFAULT_RPC_URL.to_string());
+        let rpc_url = std::env::var("E2E_RPC_URL").unwrap_or_else(|_| DEFAULT_RPC_URL.to_string());
         let network_passphrase = std::env::var("E2E_NETWORK_PHRASE")
             .unwrap_or_else(|_| DEFAULT_NETWORK_PHRASE.to_string());
 
@@ -149,8 +147,7 @@ macro_rules! require_e2e_config {
 /// before any heavier e2e tests.
 #[tokio::test]
 async fn e2e_testnet_rpc_is_reachable() {
-    let rpc_url = std::env::var("E2E_RPC_URL")
-        .unwrap_or_else(|_| DEFAULT_RPC_URL.to_string());
+    let rpc_url = std::env::var("E2E_RPC_URL").unwrap_or_else(|_| DEFAULT_RPC_URL.to_string());
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -250,7 +247,10 @@ async fn e2e_lichess_fetch_completed_game_result() {
                 Winner::Player1,
                 "expected white (Player1) to win game TaHSAsYl"
             );
-            println!("[e2e] lichess_fetch_completed_game_result: winner={:?} OK", result.winner);
+            println!(
+                "[e2e] lichess_fetch_completed_game_result: winner={:?} OK",
+                result.winner
+            );
         }
         Err(e) => {
             // Network unavailable or API changed — skip gracefully.
@@ -353,7 +353,10 @@ async fn e2e_provider_registry_resolves_lichess_game() {
         LichessClient::with_config(LichessClientConfig {
             api_base: "https://lichess.org".to_string(),
             request_timeout: Duration::from_secs(30),
-            rate_limiter: RateLimiterConfig { capacity: 2, refill_rate: 0.5 },
+            rate_limiter: RateLimiterConfig {
+                capacity: 2,
+                refill_rate: 0.5,
+            },
             max_concurrent: 1,
         })
         .expect("failed to build LichessClient"),
@@ -363,7 +366,10 @@ async fn e2e_provider_registry_resolves_lichess_game() {
         ChessComClient::with_config(ChessComClientConfig {
             api_base: "https://api.chess.com".to_string(),
             request_timeout: Duration::from_secs(30),
-            rate_limiter: RateLimiterConfig { capacity: 2, refill_rate: 0.5 },
+            rate_limiter: RateLimiterConfig {
+                capacity: 2,
+                refill_rate: 0.5,
+            },
             max_concurrent: 1,
         })
         .expect("failed to build ChessComClient"),
@@ -374,7 +380,11 @@ async fn e2e_provider_registry_resolves_lichess_game() {
     match registry.fetch_result("TaHSAsYl").await {
         Ok(winner) => {
             use contracts_oracle::types::Winner;
-            assert_eq!(winner, Winner::Player1, "expected Player1 for game TaHSAsYl");
+            assert_eq!(
+                winner,
+                Winner::Player1,
+                "expected Player1 for game TaHSAsYl"
+            );
             println!("[e2e] provider_registry_resolves_lichess_game: winner={winner:?} OK");
         }
         Err(e) => {
@@ -397,8 +407,7 @@ async fn e2e_oracle_config_round_trip() {
     // Verify the key is non-zero (i.e. was actually loaded).
     let key_bytes = *oracle_cfg.oracle_signing_key;
     assert_ne!(
-        key_bytes,
-        [0u8; 32],
+        key_bytes, [0u8; 32],
         "oracle signing key must not be all-zeros in a real testnet config"
     );
 
@@ -409,7 +418,10 @@ async fn e2e_oracle_config_round_trip() {
         oracle_cfg.oracle_address
     );
 
-    println!("[e2e] oracle_config_round_trip: oracle={} OK", oracle_cfg.oracle_address);
+    println!(
+        "[e2e] oracle_config_round_trip: oracle={} OK",
+        oracle_cfg.oracle_address
+    );
 }
 
 // ── Test 8: Testnet ledger progression ───────────────────────────────────────
@@ -419,17 +431,15 @@ async fn e2e_oracle_config_round_trip() {
 /// to hang.
 #[tokio::test]
 async fn e2e_testnet_ledger_is_progressing() {
-    let rpc_url = std::env::var("E2E_RPC_URL")
-        .unwrap_or_else(|_| DEFAULT_RPC_URL.to_string());
+    let rpc_url = std::env::var("E2E_RPC_URL").unwrap_or_else(|_| DEFAULT_RPC_URL.to_string());
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
         .expect("reqwest client");
 
-    let ledger_sequence = |json: &serde_json::Value| -> Option<u64> {
-        json.get("result")?.get("sequence")?.as_u64()
-    };
+    let ledger_sequence =
+        |json: &serde_json::Value| -> Option<u64> { json.get("result")?.get("sequence")?.as_u64() };
 
     let body = serde_json::json!({
         "jsonrpc": "2.0", "id": 1,
@@ -438,11 +448,17 @@ async fn e2e_testnet_ledger_is_progressing() {
 
     let first = match client.post(&rpc_url).json(&body).send().await {
         Ok(r) => r.json::<serde_json::Value>().await.ok(),
-        Err(e) => { eprintln!("[e2e] SKIP: ledger_is_progressing network error: {e}"); return; }
+        Err(e) => {
+            eprintln!("[e2e] SKIP: ledger_is_progressing network error: {e}");
+            return;
+        }
     };
     let seq1 = match first.as_ref().and_then(ledger_sequence) {
         Some(s) => s,
-        None => { eprintln!("[e2e] SKIP: ledger_is_progressing: could not read sequence"); return; }
+        None => {
+            eprintln!("[e2e] SKIP: ledger_is_progressing: could not read sequence");
+            return;
+        }
     };
 
     // Wait two Stellar ledger intervals (~10 s) then check again.
@@ -450,11 +466,17 @@ async fn e2e_testnet_ledger_is_progressing() {
 
     let second = match client.post(&rpc_url).json(&body).send().await {
         Ok(r) => r.json::<serde_json::Value>().await.ok(),
-        Err(e) => { eprintln!("[e2e] SKIP: ledger_is_progressing second poll failed: {e}"); return; }
+        Err(e) => {
+            eprintln!("[e2e] SKIP: ledger_is_progressing second poll failed: {e}");
+            return;
+        }
     };
     let seq2 = match second.as_ref().and_then(ledger_sequence) {
         Some(s) => s,
-        None => { eprintln!("[e2e] SKIP: ledger_is_progressing: could not read sequence (2nd)"); return; }
+        None => {
+            eprintln!("[e2e] SKIP: ledger_is_progressing: could not read sequence (2nd)");
+            return;
+        }
     };
 
     println!("[e2e] testnet_ledger_is_progressing: seq1={seq1} seq2={seq2}");
@@ -482,8 +504,16 @@ async fn e2e_queue_persists_and_reloads_entries() {
     let mut entries = queue.load().await.expect("load empty queue");
     assert!(entries.is_empty(), "queue must start empty");
 
-    entries.push(PendingEntry::new(1, "TaHSAsYl".to_string(), Platform::Lichess));
-    entries.push(PendingEntry::new(2, "123456789".to_string(), Platform::ChessDotCom));
+    entries.push(PendingEntry::new(
+        1,
+        "TaHSAsYl".to_string(),
+        Platform::Lichess,
+    ));
+    entries.push(PendingEntry::new(
+        2,
+        "123456789".to_string(),
+        Platform::ChessDotCom,
+    ));
     queue.save(&entries).await.expect("save");
 
     // Reload from disk.
@@ -518,9 +548,15 @@ async fn e2e_dead_letter_store_round_trip() {
     store.push(entry).await.expect("push to dead-letter store");
 
     let items = store.load().await.expect("load dead-letter store");
-    assert!(!items.is_empty(), "dead-letter store must have at least one entry");
+    assert!(
+        !items.is_empty(),
+        "dead-letter store must have at least one entry"
+    );
     let found = items.iter().find(|e| e.entry.match_id == 99);
-    assert!(found.is_some(), "entry for match_id=99 not found in dead-letter store");
+    assert!(
+        found.is_some(),
+        "entry for match_id=99 not found in dead-letter store"
+    );
     assert_eq!(found.unwrap().entry.attempts, 5);
 
     println!("[e2e] dead_letter_store_round_trip: OK");
@@ -537,10 +573,13 @@ async fn e2e_health_status_serializes_correctly() {
     use oracle_service::health::{CanaryStatus, HealthStatus};
 
     // Verify all variants round-trip through JSON.
-    for status in [HealthStatus::Healthy, HealthStatus::Degraded, HealthStatus::Unhealthy] {
+    for status in [
+        HealthStatus::Healthy,
+        HealthStatus::Degraded,
+        HealthStatus::Unhealthy,
+    ] {
         let json = serde_json::to_string(&status).expect("serialize HealthStatus");
-        let decoded: HealthStatus =
-            serde_json::from_str(&json).expect("deserialize HealthStatus");
+        let decoded: HealthStatus = serde_json::from_str(&json).expect("deserialize HealthStatus");
         assert_eq!(
             format!("{status}"),
             format!("{decoded}"),
@@ -548,11 +587,17 @@ async fn e2e_health_status_serializes_correctly() {
         );
     }
 
-    for canary in [CanaryStatus::Pending, CanaryStatus::Passed, CanaryStatus::Failed] {
+    for canary in [
+        CanaryStatus::Pending,
+        CanaryStatus::Passed,
+        CanaryStatus::Failed,
+    ] {
         let json = serde_json::to_string(&canary).expect("serialize CanaryStatus");
-        let decoded: CanaryStatus =
-            serde_json::from_str(&json).expect("deserialize CanaryStatus");
-        assert_eq!(canary, decoded, "CanaryStatus round-trip failed for {canary:?}");
+        let decoded: CanaryStatus = serde_json::from_str(&json).expect("deserialize CanaryStatus");
+        assert_eq!(
+            canary, decoded,
+            "CanaryStatus round-trip failed for {canary:?}"
+        );
     }
 
     println!("[e2e] health_status_serializes_correctly: OK");

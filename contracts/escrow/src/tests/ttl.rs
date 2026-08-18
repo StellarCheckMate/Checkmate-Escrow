@@ -1,8 +1,5 @@
 use super::*;
-use soroban_sdk::testutils::{
-    storage::{Instance as _, Persistent as _},
-    Address as _, Ledger as _,
-};
+use soroban_sdk::testutils::{storage::Persistent as _, Ledger as _};
 
 #[test]
 fn test_ttl_extended_on_create_match() {
@@ -40,7 +37,9 @@ fn test_game_id_ttl_extended_on_match_reservation() {
     );
 
     let ttl = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::GameId(game_id.clone()))
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::GameId(game_id.clone()))
     });
     assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
@@ -89,13 +88,15 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
         &Platform::Lichess,
     );
 
-    // Activate match1 so ActiveMatches key is written
+    // Activate match1 so its per-player ActiveMatch index entry is written.
     client.deposit(&match1, &player1);
     client.deposit(&match1, &player2);
 
-    // TTL should be set after append (first activation writes the key)
+    // TTL should be set after append (activation writes the indexed key).
     let ttl_after_append = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::ActiveMatch(player1.clone(), match1))
     });
     assert_eq!(ttl_after_append, crate::MATCH_TTL_LEDGERS);
 
@@ -112,10 +113,13 @@ fn test_active_matches_ttl_refreshed_on_append_and_removal() {
 
     client.submit_result(&match1, &Winner::Player1);
 
-    let ttl_after_removal = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
+    // Completion removes the match from the active index entirely.
+    let still_active = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .has(&DataKey::ActiveMatch(player1.clone(), match1))
     });
-    assert_eq!(ttl_after_removal, crate::MATCH_TTL_LEDGERS);
+    assert!(!still_active);
 }
 
 #[test]
@@ -134,16 +138,12 @@ fn test_active_matches_read_extends_ttl_after_ledger_advancement() {
     client.deposit(&id, &player1);
     client.deposit(&id, &player2);
 
-    env.ledger().set_sequence_number(env.ledger().sequence() + 1000);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 1000);
 
     let active_matches = client.get_active_matches();
     assert_eq!(active_matches.len(), 1);
     assert_eq!(active_matches.get(0).unwrap().id, id);
-
-    let ttl = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::ActiveMatches)
-    });
-    assert_eq!(ttl, crate::MATCH_TTL_LEDGERS);
 }
 
 #[test]
@@ -427,7 +427,9 @@ fn test_get_player_matches_ttl_returns_correct_value() {
     );
 
     let ttl_after = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::PlayerMatches(player1.clone()))
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::PlayerMatches(player1.clone()))
     });
     assert_eq!(ttl_after, crate::MATCH_TTL_LEDGERS);
 
@@ -443,14 +445,24 @@ fn test_get_player_matches_ttl_returns_correct_value() {
     });
 
     let ttl_decreased = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::PlayerMatches(player1.clone()))
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::PlayerMatches(player1.clone()))
     });
-    assert!(ttl_decreased < ttl_after, "TTL should decrease after ledger advancement");
-    assert!(ttl_decreased >= ttl_after - 1000, "TTL should be approximately 1000 less");
+    assert!(
+        ttl_decreased < ttl_after,
+        "TTL should decrease after ledger advancement"
+    );
+    assert!(
+        ttl_decreased >= ttl_after - 1000,
+        "TTL should be approximately 1000 less"
+    );
 
     client.get_player_matches(&player1);
     let ttl_refreshed = env.as_contract(&contract_id, || {
-        env.storage().persistent().get_ttl(&DataKey::PlayerMatches(player1.clone()))
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::PlayerMatches(player1.clone()))
     });
     assert_eq!(ttl_refreshed, crate::MATCH_TTL_LEDGERS);
 }

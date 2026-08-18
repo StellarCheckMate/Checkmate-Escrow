@@ -7,7 +7,7 @@ use super::*;
 /// Test that deposit with various stake amounts is handled correctly
 #[test]
 fn test_fuzz_stake_amounts() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let test_amounts = std::vec![
@@ -50,7 +50,7 @@ fn test_fuzz_invalid_stake_amounts() {
             &player2,
             &amount,
             &token,
-            &String::from_slice(&env, "9012345"),
+            &String::from_str(&env, "a3c3b9e5"),
             &Platform::Lichess,
         );
         assert!(result.is_err(), "Should reject amount: {}", amount);
@@ -67,7 +67,7 @@ fn test_fuzz_game_id_lengths() {
 
     // Valid: minimum length for Chess.com (7 digits)
     env.mock_all_auths();
-    let game_id_7 = String::from_slice(&env, "1234567");
+    let game_id_7 = String::from_str(&env, "1234567");
     let result = client.try_create_match(
         &player1,
         &player2,
@@ -80,7 +80,7 @@ fn test_fuzz_game_id_lengths() {
 
     // Valid: typical length (8 bytes for Lichess)
     env.mock_all_auths();
-    let game_id_8 = String::from_slice(&env, "abcd1234");
+    let game_id_8 = String::from_str(&env, "abcd1234");
     let result = client.try_create_match(
         &player1,
         &player2,
@@ -93,7 +93,7 @@ fn test_fuzz_game_id_lengths() {
 
     // Rejected: exceeds Lichess length (must be exactly 8)
     env.mock_all_auths();
-    let game_id_64 = String::from_slice(&env, &"abcd12345678".repeat(4));
+    let game_id_64 = String::from_str(&env, &"abcd12345678".repeat(4));
     let result = client.try_create_match(
         &player1,
         &player2,
@@ -106,7 +106,7 @@ fn test_fuzz_game_id_lengths() {
 
     // Valid: maximum length for Chess.com (12 digits)
     env.mock_all_auths();
-    let game_id_12 = String::from_slice(&env, "123456789012");
+    let game_id_12 = String::from_str(&env, "123456789012");
     let result = client.try_create_match(
         &player1,
         &player2,
@@ -126,7 +126,7 @@ fn test_fuzz_game_id_over_length() {
 
     // Invalid: 65 bytes (exceeds MAX_GAME_ID_LEN)
     env.mock_all_auths();
-    let game_id_65 = String::from_slice(&env, &"x".repeat(65));
+    let game_id_65 = String::from_str(&env, &"x".repeat(65));
     let result = client.try_create_match(
         &player1,
         &player2,
@@ -145,7 +145,7 @@ fn test_fuzz_empty_game_id() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
-    let game_id_empty = String::from_slice(&env, "");
+    let game_id_empty = String::from_str(&env, "");
     let result = client.try_create_match(
         &player1,
         &player2,
@@ -162,7 +162,7 @@ fn test_fuzz_empty_game_id() {
 /// Test that non-admin cannot pause the contract
 #[test]
 fn test_security_unauthorized_pause() {
-    let (env, contract_id, _oracle, player1, _player2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
@@ -185,14 +185,18 @@ fn test_security_unauthorized_deposit() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
     // Player3 (not in the match) attempts to deposit
     env.mock_all_auths();
     let result = client.try_deposit(&match_id, &player3);
-    assert_eq!(result, Err(Ok(Error::Unauthorized)), "Should reject deposit from non-participant with Unauthorized");
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
+        "Should reject deposit from non-participant with Unauthorized"
+    );
 }
 
 /// Test that only oracle can submit results
@@ -200,7 +204,7 @@ fn test_security_unauthorized_deposit() {
 fn test_security_unauthorized_submit_result() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    let imposter = Address::generate(&env);
+    let _imposter = Address::generate(&env);
 
     env.mock_all_auths();
     let match_id = client.create_match(
@@ -208,7 +212,7 @@ fn test_security_unauthorized_submit_result() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -237,7 +241,7 @@ fn test_security_double_deposit_attack() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -260,7 +264,7 @@ fn test_security_double_deposit_attack() {
 /// Test that completed matches cannot be cancelled
 #[test]
 fn test_security_cancel_completed_match_attack() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     env.mock_all_auths();
@@ -269,7 +273,7 @@ fn test_security_cancel_completed_match_attack() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -300,7 +304,7 @@ fn test_security_cancel_active_match_attack() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -344,7 +348,7 @@ fn test_security_allowlist_bypass_attempt() {
         &player2,
         &100i128,
         &token_addr_2,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
     assert!(
@@ -372,7 +376,7 @@ fn test_security_create_match_when_paused() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
     assert!(result.is_err(), "Should reject create_match when paused");
@@ -390,7 +394,7 @@ fn test_security_deposit_when_paused() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -416,7 +420,7 @@ fn test_security_submit_result_when_paused() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -448,7 +452,7 @@ fn test_security_same_player_attack() {
         &player1, // Same player
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
     assert!(
@@ -469,7 +473,7 @@ fn test_security_contract_as_player_attack() {
         &contract_id, // Contract as player2
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
     assert!(
@@ -486,7 +490,7 @@ fn test_security_duplicate_game_id_attack() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let game_id = String::from_slice(&env, "9012345");
+    let game_id = String::from_str(&env, "9012345");
 
     // First match with game_id succeeds
     env.mock_all_auths();
@@ -532,13 +536,26 @@ fn test_security_payout_overflow_prevention() {
     asset_client.mint(&player1, &large_stake);
     asset_client.mint(&player2, &large_stake);
 
+    // Fast-track both players to Platinum tier (unlimited stake cap) so this
+    // overflow probe isn't blocked by the Bronze-tier stake ceiling.
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().set(
+            &DataKey::PlayerCompletedMatchCount(player1.clone()),
+            &10u32,
+        );
+        env.storage().persistent().set(
+            &DataKey::PlayerCompletedMatchCount(player2.clone()),
+            &10u32,
+        );
+    });
+
     env.mock_all_auths();
     let match_id = client.create_match(
         &player1,
         &player2,
         &large_stake,
         &token,
-        &String::from_slice(&env, "game456"),
+        &String::from_str(&env, "8656b0a4"),
         &Platform::Lichess,
     );
 
@@ -569,7 +586,7 @@ fn test_security_cancel_only_pending_matches() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -593,7 +610,7 @@ fn test_security_oracle_record_stored() {
         &player2,
         &100i128,
         &token,
-        &String::from_slice(&env, "9012345"),
+        &String::from_str(&env, "9012345"),
         &Platform::ChessDotCom,
     );
 
@@ -601,7 +618,7 @@ fn test_security_oracle_record_stored() {
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
 
-    let game_id = String::from_slice(&env, "9012345");
+    let game_id = String::from_str(&env, "9012345");
 
     // Submit result with oracle record
     env.mock_all_auths();
@@ -752,7 +769,8 @@ fn test_pause_unauthorized() {
 /// Test that submit_result by non-oracle is rejected
 #[test]
 fn test_submit_result_unauthorized() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) = setup_with_funded_match();
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) =
+        setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let non_oracle = Address::generate(&env);
@@ -770,4 +788,3 @@ fn test_submit_result_unauthorized() {
     let result = client.try_submit_result(&match_id, &Winner::Player1);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
-

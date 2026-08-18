@@ -76,6 +76,12 @@ tags:
   - name: Event Indexer
     description: HTTP endpoints exposed by the event-indexer service on port 8080.
 
+# Default: no authorization required. Operations that need a signature (player,
+# admin, or oracle) declare their own `security:` requirement, which overrides
+# this default. Every other operation here is a public read or is documented as
+# permissionless (see each operation's "Authorization:" line).
+security: []
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Reusable components
 # ─────────────────────────────────────────────────────────────────────────────

@@ -48,33 +48,33 @@ fn test_tier_progression_tracks_completed_matches() {
             &player1,
             &player2,
             &token,
-            &format!("bronze_progress_{}", i),
+            &format!("{:08x}", i),
             100,
         );
     }
     assert_eq!(client.tier_from_match_count(&player1), PlayerTier::Silver);
 
-    for i in 0..3 {
+    for i in 3..6 {
         complete_match_with_stake(
             &client,
             &env,
             &player1,
             &player2,
             &token,
-            &format!("silver_progress_{}", i),
+            &format!("{:08x}", i),
             500,
         );
     }
     assert_eq!(client.tier_from_match_count(&player1), PlayerTier::Gold);
 
-    for i in 0..4 {
+    for i in 6..10 {
         complete_match_with_stake(
             &client,
             &env,
             &player1,
             &player2,
             &token,
-            &format!("gold_progress_{}", i),
+            &format!("{:08x}", i),
             1_000,
         );
     }
@@ -125,7 +125,7 @@ fn test_deposit_rechecks_current_player_tier() {
             &player1,
             &player3,
             &token,
-            &format!("promotion_match_{}", i),
+            &format!("{:08x}", i),
             100,
         );
     }

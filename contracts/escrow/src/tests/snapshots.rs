@@ -370,7 +370,7 @@ fn test_snapshot_ring_buffer_prunes_oldest_entries() {
 
     let snaps = client.get_balance_snapshots(&admin, &id);
     assert_eq!(
-        snaps.len() as u32,
+        snaps.len(),
         MAX_SNAPSHOTS_PER_MATCH,
         "ring buffer must cap stored snapshots at MAX_SNAPSHOTS_PER_MATCH"
     );

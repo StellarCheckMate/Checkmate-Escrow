@@ -6,7 +6,9 @@
 
 use escrow::types::{Platform, Winner};
 use escrow::{EscrowContract, EscrowContractClient};
-use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString};
+use soroban_sdk::{
+    testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString,
+};
 
 const STAKE: i128 = 100;
 const MINT_AMOUNT: i128 = 10_000_000;
@@ -33,7 +35,11 @@ impl Harness {
         let client = EscrowContractClient::new(&env, &contract_id);
         client.initialize(&oracle, &admin);
 
-        Self { env, contract_id, token }
+        Self {
+            env,
+            contract_id,
+            token,
+        }
     }
 
     fn client(&self) -> EscrowContractClient<'_> {
@@ -95,7 +101,7 @@ fn test_active_match_inflation_cap_prevents_dos() {
     // Verify that at least the first ~1000 matches can be activated
     // (enforced by MAX_ACTIVE_MATCHES_PER_PLAYER cap per player)
     // The test verifies no panic occurs and the contract enforces the cap gracefully
-    let active = harness.client().get_active_matches().unwrap();
+    let active = harness.client().get_active_matches();
     assert!(active.len() <= 1000, "Active matches exceeded cap");
 }
 
@@ -107,7 +113,7 @@ fn test_removal_cost_bounded_by_cap() {
 
     // Create many matches in Pending state (not active)
     for i in 0..500 {
-        let (id, p1, p2) = harness.new_match(&format!("pending-{:06}", i));
+        let (_id, _p1, _p2) = harness.new_match(&format!("pending-{:06}", i));
         // Don't fund — stays Pending
     }
 
@@ -125,7 +131,7 @@ fn test_removal_cost_bounded_by_cap() {
     harness.env.budget().reset_default();
     let start = std::time::Instant::now();
 
-    let (target_id, target_p1, target_p2) = active_ids.pop().unwrap();
+    let (target_id, _target_p1, _target_p2) = active_ids.pop().unwrap();
     harness.client().submit_result(&target_id, &Winner::Player1);
 
     let cpu_cost = harness.env.budget().cpu_instruction_cost();
@@ -133,10 +139,17 @@ fn test_removal_cost_bounded_by_cap() {
 
     // Verify cost is reasonable (should be constant, not scaling with history)
     // Note: exact values depend on Soroban's pricing; this is a sanity check
-    println!("Removal cost: {} CPU instructions, {} µs", cpu_cost, elapsed.as_micros());
+    println!(
+        "Removal cost: {} CPU instructions, {} µs",
+        cpu_cost,
+        elapsed.as_micros()
+    );
 
     // Cost should stay low regardless of history size
-    assert!(cpu_cost < 2_000_000, "Removal cost too high, may not be bounded");
+    assert!(
+        cpu_cost < 2_000_000,
+        "Removal cost too high, may not be bounded"
+    );
 }
 
 /// Test that completed_match_count is O(1) and uses cached counter.
@@ -166,16 +179,23 @@ fn test_completed_match_count_incremented_atomically() {
     harness.env.budget().reset_default();
     let start = std::time::Instant::now();
 
-    let tier = harness.client().tier_from_match_count(&p1).unwrap();
+    let _tier = harness.client().tier_from_match_count(&p1);
 
     let cpu_cost = harness.env.budget().cpu_instruction_cost();
     let elapsed = start.elapsed();
 
-    println!("Tier query cost: {} CPU instructions, {} µs", cpu_cost, elapsed.as_micros());
+    println!(
+        "Tier query cost: {} CPU instructions, {} µs",
+        cpu_cost,
+        elapsed.as_micros()
+    );
 
     // Cost should be small (O(1) counter read)
     // If it were O(n) with n=10 matches, it would be much more expensive
-    assert!(cpu_cost < 200_000, "Tier query cost too high, may not be using cached counter");
+    assert!(
+        cpu_cost < 200_000,
+        "Tier query cost too high, may not be using cached counter"
+    );
 }
 
 /// Test that unbounded match scans are capped to prevent unbounded growth.
@@ -186,19 +206,22 @@ fn test_unbounded_match_scans_are_capped() {
 
     // Create many Pending matches
     for i in 0..100 {
-        let (id, _, _) = harness.new_match(&format!("pending-{:06}", i));
+        let (_id, _, _) = harness.new_match(&format!("pending-{:06}", i));
         // Don't fund — stays Pending
     }
 
     // get_pending_matches should return at most MAX_UNBOUNDED_MATCH_RESULTS
-    let results = harness.client().get_pending_matches().unwrap();
+    let results = harness.client().get_pending_matches();
 
     // The constant cap should be documented
     // We don't hardcode it here since it's a constant in lib.rs
     println!("Pending matches returned: {}", results.len());
 
     // Verify the call completed without timeouts (cost was bounded)
-    assert!(results.len() <= 10_000, "Unbounded scan returned too many results");
+    assert!(
+        results.len() <= 10_000,
+        "Unbounded scan returned too many results"
+    );
 }
 
 /// Test that per-player active match cap is enforced correctly.
@@ -224,12 +247,12 @@ fn test_per_player_active_match_cap_enforcement() {
             &Platform::Lichess,
         );
 
-        harness.client().deposit(&id, &player).ok();
-        harness.client().deposit(&id, &opponent).ok();
+        harness.client().try_deposit(&id, &player).ok();
+        harness.client().try_deposit(&id, &opponent).ok();
     }
 
     // Try to create one more and activate it — should fail due to cap
-    let final_match = harness.client().create_match(
+    let _final_match = harness.client().create_match(
         &player,
         &opponents[0],
         &STAKE,
@@ -244,6 +267,9 @@ fn test_per_player_active_match_cap_enforcement() {
     println!("Cap enforcement test: attempted deposit after reaching cap");
 
     // Verify active matches don't exceed the cap
-    let active = harness.client().get_active_matches().unwrap();
-    assert!(active.len() <= max_cap as usize, "Active matches exceeded per-player cap");
+    let active = harness.client().get_active_matches();
+    assert!(
+        active.len() <= max_cap,
+        "Active matches exceeded per-player cap"
+    );
 }

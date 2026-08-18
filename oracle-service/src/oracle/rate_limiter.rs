@@ -77,7 +77,9 @@ impl BucketState {
     /// immediately or return how long until one is available.
     fn refill_and_next_available(&mut self) -> Duration {
         let now = Instant::now();
-        let elapsed = now.saturating_duration_since(self.last_refill).as_secs_f64();
+        let elapsed = now
+            .saturating_duration_since(self.last_refill)
+            .as_secs_f64();
         self.tokens =
             (self.tokens + elapsed * self.config.refill_rate).min(self.config.capacity as f64);
         self.last_refill = now;
@@ -216,6 +218,9 @@ mod tests {
             }
         }
         // After sleeping the bucket is at `capacity` (3), not more.
-        assert!(acquired <= 3 + 1, "acquired={acquired} should be ≤ capacity+1 (off-by-refill)");
+        assert!(
+            acquired <= 3 + 1,
+            "acquired={acquired} should be ≤ capacity+1 (off-by-refill)"
+        );
     }
 }

@@ -35,8 +35,7 @@ const PLAYER_FIELDS: &str = "GAEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEE
 const PLAYER_REORG: &str = "GAFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAVXXV";
 const PLAYER_UNRELATED: &str = "GAFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWYPX";
 /// Never seeded by any test — used to prove an empty history is a success.
-const PLAYER_WITH_NO_HISTORY: &str =
-    "GAGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYXH2";
+const PLAYER_WITH_NO_HISTORY: &str = "GAGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYXH2";
 const OPPONENT: &str = "GAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEARIHQ";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -276,10 +275,42 @@ async fn history_excludes_non_financial_events() {
     seed(
         &db,
         &[
-            event(ids[0], 7101, "match:created", PLAYER_MIXED, "1000", "XLM", now),
-            event(ids[1], 7101, "match:deposit", PLAYER_MIXED, "1000", "XLM", now),
-            event(ids[2], 7101, "match:completed", PLAYER_MIXED, "2000", "XLM", now),
-            event(ids[3], 7101, "match:paused", PLAYER_MIXED, "1000", "XLM", now),
+            event(
+                ids[0],
+                7101,
+                "match:created",
+                PLAYER_MIXED,
+                "1000",
+                "XLM",
+                now,
+            ),
+            event(
+                ids[1],
+                7101,
+                "match:deposit",
+                PLAYER_MIXED,
+                "1000",
+                "XLM",
+                now,
+            ),
+            event(
+                ids[2],
+                7101,
+                "match:completed",
+                PLAYER_MIXED,
+                "2000",
+                "XLM",
+                now,
+            ),
+            event(
+                ids[3],
+                7101,
+                "match:paused",
+                PLAYER_MIXED,
+                "1000",
+                "XLM",
+                now,
+            ),
         ],
     )
     .await;
@@ -310,7 +341,13 @@ async fn history_returns_the_documented_fields() {
     seed(
         &db,
         &[event(
-            ids[0], 7102, "match:deposit", PLAYER_FIELDS, "12345", "USDC", now,
+            ids[0],
+            7102,
+            "match:deposit",
+            PLAYER_FIELDS,
+            "12345",
+            "USDC",
+            now,
         )],
     )
     .await;
@@ -346,10 +383,42 @@ async fn history_filters_by_transaction_type() {
     seed(
         &db,
         &[
-            event(ids[0], 7111, "match:deposit", PLAYER_TYPES, "100", "XLM", now),
-            event(ids[1], 7112, "match:deposit", PLAYER_TYPES, "200", "XLM", now),
-            event(ids[2], 7113, "match:completed", PLAYER_TYPES, "300", "XLM", now),
-            event(ids[3], 7114, "match:cancelled", PLAYER_TYPES, "400", "XLM", now),
+            event(
+                ids[0],
+                7111,
+                "match:deposit",
+                PLAYER_TYPES,
+                "100",
+                "XLM",
+                now,
+            ),
+            event(
+                ids[1],
+                7112,
+                "match:deposit",
+                PLAYER_TYPES,
+                "200",
+                "XLM",
+                now,
+            ),
+            event(
+                ids[2],
+                7113,
+                "match:completed",
+                PLAYER_TYPES,
+                "300",
+                "XLM",
+                now,
+            ),
+            event(
+                ids[3],
+                7114,
+                "match:cancelled",
+                PLAYER_TYPES,
+                "400",
+                "XLM",
+                now,
+            ),
         ],
     )
     .await;
@@ -385,8 +454,24 @@ async fn history_filters_by_token() {
     seed(
         &db,
         &[
-            event(ids[0], 7121, "match:deposit", PLAYER_TOKENS, "100", "XLM", now),
-            event(ids[1], 7122, "match:deposit", PLAYER_TOKENS, "100", "USDC", now),
+            event(
+                ids[0],
+                7121,
+                "match:deposit",
+                PLAYER_TOKENS,
+                "100",
+                "XLM",
+                now,
+            ),
+            event(
+                ids[1],
+                7122,
+                "match:deposit",
+                PLAYER_TOKENS,
+                "100",
+                "USDC",
+                now,
+            ),
         ],
     )
     .await;
@@ -414,8 +499,24 @@ async fn history_filters_by_date_range() {
     seed(
         &db,
         &[
-            event(ids[0], 7131, "match:deposit", PLAYER_DATES, "100", "XLM", old),
-            event(ids[1], 7132, "match:deposit", PLAYER_DATES, "200", "XLM", now),
+            event(
+                ids[0],
+                7131,
+                "match:deposit",
+                PLAYER_DATES,
+                "100",
+                "XLM",
+                old,
+            ),
+            event(
+                ids[1],
+                7132,
+                "match:deposit",
+                PLAYER_DATES,
+                "200",
+                "XLM",
+                now,
+            ),
         ],
     )
     .await;
@@ -506,12 +607,18 @@ async fn history_paginates_without_gaps_or_repeats() {
     assert_eq!(seen.len(), 5, "every row seen exactly once");
     let unique: std::collections::HashSet<u64> = seen.iter().copied().collect();
     assert_eq!(unique.len(), 5, "no row returned twice");
-    assert!(seen.windows(2).all(|w| w[0] < w[1]), "ordering held across pages");
+    assert!(
+        seen.windows(2).all(|w| w[0] < w[1]),
+        "ordering held across pages"
+    );
 
     // An offset past the end is an empty page, not an error.
     let mut past_end = TransactionHistoryFilters::new(PLAYER_PAGES);
     past_end.offset = 500;
-    let (rows, total) = db.query_player_transactions(&past_end).await.expect("query");
+    let (rows, total) = db
+        .query_player_transactions(&past_end)
+        .await
+        .expect("query");
     assert!(rows.is_empty());
     assert_eq!(total, 5, "total still reports the full history");
 
@@ -532,9 +639,33 @@ async fn history_sorts_by_amount_and_timestamp_in_both_directions() {
         &[
             // Amounts chosen so a *text* sort would disagree with a numeric one:
             // "1000" < "90" as text, but 1000 > 90 numerically.
-            event(ids[0], 7151, "match:deposit", PLAYER_SORT, "90", "XLM", now - ChronoDuration::minutes(2)),
-            event(ids[1], 7152, "match:deposit", PLAYER_SORT, "1000", "XLM", now - ChronoDuration::minutes(1)),
-            event(ids[2], 7153, "match:deposit", PLAYER_SORT, "500", "XLM", now),
+            event(
+                ids[0],
+                7151,
+                "match:deposit",
+                PLAYER_SORT,
+                "90",
+                "XLM",
+                now - ChronoDuration::minutes(2),
+            ),
+            event(
+                ids[1],
+                7152,
+                "match:deposit",
+                PLAYER_SORT,
+                "1000",
+                "XLM",
+                now - ChronoDuration::minutes(1),
+            ),
+            event(
+                ids[2],
+                7153,
+                "match:deposit",
+                PLAYER_SORT,
+                "500",
+                "XLM",
+                now,
+            ),
         ],
     )
     .await;
@@ -584,20 +715,24 @@ async fn history_matches_both_sides_of_a_match_but_not_other_players() {
     let now = Utc::now();
     let ids = ["txh-iso-as-p1", "txh-iso-as-p2", "txh-iso-other"];
 
-    let mut as_player2 = event(
-        ids[1], 7162, "match:deposit", OPPONENT, "100", "XLM", now,
-    );
+    let mut as_player2 = event(ids[1], 7162, "match:deposit", OPPONENT, "100", "XLM", now);
     as_player2.player2 = Some(PLAYER_ISOLATED.to_string());
 
-    let mut unrelated = event(
-        ids[2], 7163, "match:deposit", OPPONENT, "100", "XLM", now,
-    );
+    let mut unrelated = event(ids[2], 7163, "match:deposit", OPPONENT, "100", "XLM", now);
     unrelated.player2 = Some(PLAYER_UNRELATED.to_string());
 
     seed(
         &db,
         &[
-            event(ids[0], 7161, "match:deposit", PLAYER_ISOLATED, "100", "XLM", now),
+            event(
+                ids[0],
+                7161,
+                "match:deposit",
+                PLAYER_ISOLATED,
+                "100",
+                "XLM",
+                now,
+            ),
             as_player2,
             unrelated,
         ],
@@ -631,14 +766,28 @@ async fn reorg_invalidated_events_are_excluded() {
     let ids = ["txh-reorg-valid", "txh-reorg-rolled-back"];
 
     let mut rolled_back = event(
-        ids[1], 7172, "match:deposit", PLAYER_REORG, "100", "XLM", now,
+        ids[1],
+        7172,
+        "match:deposit",
+        PLAYER_REORG,
+        "100",
+        "XLM",
+        now,
     );
     rolled_back.reorg_invalidated_at = Some(now);
 
     seed(
         &db,
         &[
-            event(ids[0], 7171, "match:deposit", PLAYER_REORG, "100", "XLM", now),
+            event(
+                ids[0],
+                7171,
+                "match:deposit",
+                PLAYER_REORG,
+                "100",
+                "XLM",
+                now,
+            ),
             rolled_back,
         ],
     )

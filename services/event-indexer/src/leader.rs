@@ -84,7 +84,10 @@ impl LeaderElection {
     }
 
     async fn try_acquire_inner(&self) -> Result<bool> {
-        let conn = self.pool.get().await
+        let conn = self
+            .pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Leader pool error: {}", e))?;
 
         let ttl_interval = format!("{} seconds", self.ttl_secs);

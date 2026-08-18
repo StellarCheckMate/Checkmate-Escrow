@@ -6,22 +6,15 @@
 //! - Response structure contains required fields
 //! - Accepts limit and offset query parameters
 
-use axum::http::StatusCode;
-use event_indexer::{
-    api::build_router,
-    cache::EventCache,
-    db::Database,
-    rpc::SorobanRpcClient,
-};
-use http_body_util::BodyExt;
+use axum::body::to_bytes;
+use axum::http::{Request, StatusCode};
+use event_indexer::{api::build_router, cache::EventCache, db::Database, rpc::SorobanRpcClient};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tower::ServiceExt;
 
-/// Helper to convert response body to bytes
-async fn body_to_bytes(
-    body: axum::body::Body,
-) -> Result<bytes::Bytes, Box<dyn std::error::Error>> {
-    Ok(body.collect().await?.to_bytes())
+fn api_cache() -> Arc<event_indexer::api_cache::ApiCache> {
+    Arc::new(event_indexer::api_cache::ApiCache::in_memory())
 }
 
 /// `GET /matches/pending` returns 200 with empty array when no pending matches
@@ -33,21 +26,15 @@ async fn get_pending_matches_returns_empty_when_no_pending() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        Database::from_dsns(&db_url, &db_url, 2, 2).expect("failed to create db"),
-    );
+    let db = Arc::new(Database::from_dsns(&db_url, &db_url, 2, 2).expect("failed to create db"));
     db.init_schema().await.expect("failed to init schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(SorobanRpcClient::new("http://localhost:1").unwrap());
-    let api_cache = Arc::new(
-        event_indexer::api_cache::ApiCache::new_process_local(std::time::Duration::from_secs(10))
-            .expect("failed to create cache"),
-    );
 
-    let app = build_router(db, cache, rpc, api_cache);
+    let app = build_router(db, cache, rpc, api_cache());
 
-    let request = http::Request::builder()
+    let request = Request::builder()
         .uri("/matches/pending")
         .method("GET")
         .body(axum::body::Body::empty())
@@ -56,7 +43,7 @@ async fn get_pending_matches_returns_empty_when_no_pending() {
     let response = app.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body_to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(parsed["success"], true);
@@ -74,21 +61,15 @@ async fn get_pending_matches_response_structure() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        Database::from_dsns(&db_url, &db_url, 2, 2).expect("failed to create db"),
-    );
+    let db = Arc::new(Database::from_dsns(&db_url, &db_url, 2, 2).expect("failed to create db"));
     db.init_schema().await.expect("failed to init schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(SorobanRpcClient::new("http://localhost:1").unwrap());
-    let api_cache = Arc::new(
-        event_indexer::api_cache::ApiCache::new_process_local(std::time::Duration::from_secs(10))
-            .expect("failed to create cache"),
-    );
 
-    let app = build_router(db, cache, rpc, api_cache);
+    let app = build_router(db, cache, rpc, api_cache());
 
-    let request = http::Request::builder()
+    let request = Request::builder()
         .uri("/matches/pending")
         .method("GET")
         .body(axum::body::Body::empty())
@@ -97,7 +78,7 @@ async fn get_pending_matches_response_structure() {
     let response = app.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body_to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(parsed["success"], true);
@@ -114,22 +95,16 @@ async fn get_pending_matches_accepts_pagination_params() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        Database::from_dsns(&db_url, &db_url, 2, 2).expect("failed to create db"),
-    );
+    let db = Arc::new(Database::from_dsns(&db_url, &db_url, 2, 2).expect("failed to create db"));
     db.init_schema().await.expect("failed to init schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(SorobanRpcClient::new("http://localhost:1").unwrap());
-    let api_cache = Arc::new(
-        event_indexer::api_cache::ApiCache::new_process_local(std::time::Duration::from_secs(10))
-            .expect("failed to create cache"),
-    );
 
-    let app = build_router(db, cache, rpc, api_cache);
+    let app = build_router(db, cache, rpc, api_cache());
 
     // Test with limit and offset parameters
-    let request = http::Request::builder()
+    let request = Request::builder()
         .uri("/matches/pending?limit=50&offset=0")
         .method("GET")
         .body(axum::body::Body::empty())
@@ -138,7 +113,7 @@ async fn get_pending_matches_accepts_pagination_params() {
     let response = app.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body_to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(parsed["success"], true);
@@ -154,21 +129,15 @@ async fn get_pending_matches_accepts_offset_only() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        Database::from_dsns(&db_url, &db_url, 2, 2).expect("failed to create db"),
-    );
+    let db = Arc::new(Database::from_dsns(&db_url, &db_url, 2, 2).expect("failed to create db"));
     db.init_schema().await.expect("failed to init schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(SorobanRpcClient::new("http://localhost:1").unwrap());
-    let api_cache = Arc::new(
-        event_indexer::api_cache::ApiCache::new_process_local(std::time::Duration::from_secs(10))
-            .expect("failed to create cache"),
-    );
 
-    let app = build_router(db, cache, rpc, api_cache);
+    let app = build_router(db, cache, rpc, api_cache());
 
-    let request = http::Request::builder()
+    let request = Request::builder()
         .uri("/matches/pending?offset=10")
         .method("GET")
         .body(axum::body::Body::empty())
@@ -177,7 +146,7 @@ async fn get_pending_matches_accepts_offset_only() {
     let response = app.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let body = body_to_bytes(response.into_body()).await.unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(parsed["success"], true);

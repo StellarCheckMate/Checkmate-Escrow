@@ -24,9 +24,7 @@ use zeroize::Zeroizing;
 use crate::config::{OracleConfig, Platform};
 use crate::dead_letter::DeadLetterStore;
 use crate::oracle::errors::{ChessComError, LichessError, OracleServiceError};
-use crate::oracle::{
-    ChessComClient, LichessClient, Winner,
-};
+use crate::oracle::{ChessComClient, LichessClient, Winner};
 use crate::queue::{PendingEntry, PendingQueue};
 use crate::soroban_client::SorobanClient;
 
@@ -56,10 +54,10 @@ impl Poller {
             &cfg.contract_escrow,
         )?;
 
-        let chess_com = ChessComClient::new()
-            .map_err(|e| OracleServiceError::Config(e.to_string()))?;
-        let lichess = LichessClient::new()
-            .map_err(|e| OracleServiceError::Config(e.to_string()))?;
+        let chess_com =
+            ChessComClient::new().map_err(|e| OracleServiceError::Config(e.to_string()))?;
+        let lichess =
+            LichessClient::new().map_err(|e| OracleServiceError::Config(e.to_string()))?;
 
         Ok(Self {
             inner: Arc::new(PollerInner {
@@ -88,8 +86,8 @@ impl Poller {
             &cfg.contract_escrow,
         )?;
 
-        let chess_com = ChessComClient::new()
-            .map_err(|e| OracleServiceError::Config(e.to_string()))?;
+        let chess_com =
+            ChessComClient::new().map_err(|e| OracleServiceError::Config(e.to_string()))?;
         let lichess = LichessClient::new_with_base_and_timeout(
             lichess_base,
             std::time::Duration::from_secs(30),
@@ -128,8 +126,8 @@ impl Poller {
             std::time::Duration::from_secs(30),
         )
         .map_err(|e| OracleServiceError::Config(e.to_string()))?;
-        let lichess = LichessClient::new()
-            .map_err(|e| OracleServiceError::Config(e.to_string()))?;
+        let lichess =
+            LichessClient::new().map_err(|e| OracleServiceError::Config(e.to_string()))?;
 
         Ok(Self {
             inner: Arc::new(PollerInner {
@@ -199,22 +197,20 @@ impl Poller {
 
         // ── Fetch result from chess platform ─────────────────────────────
         let winner_result = match entry.platform {
-            Platform::Lichess => {
-                self.inner
-                    .lichess
-                    .fetch_result(&game_id)
-                    .await
-                    .map(|r| r.winner)
-                    .map_err(|e| classify_lichess_error(e))
-            }
-            Platform::ChessDotCom => {
-                self.inner
-                    .chess_com
-                    .fetch_result(&game_id)
-                    .await
-                    .map(|r| r.winner)
-                    .map_err(|e| classify_chess_com_error(e))
-            }
+            Platform::Lichess => self
+                .inner
+                .lichess
+                .fetch_result(&game_id)
+                .await
+                .map(|r| r.winner)
+                .map_err(classify_lichess_error),
+            Platform::ChessDotCom => self
+                .inner
+                .chess_com
+                .fetch_result(&game_id)
+                .await
+                .map(|r| r.winner)
+                .map_err(classify_chess_com_error),
         };
 
         match winner_result {
@@ -248,7 +244,10 @@ impl Poller {
             Ok(tx_hash) => {
                 info!(match_id, %tx_hash, "submit_result confirmed on-chain; removing from queue");
                 if let Err(e) = self.inner.queue.remove(match_id).await {
-                    error!(match_id, "failed to remove completed entry from queue: {}", e);
+                    error!(
+                        match_id,
+                        "failed to remove completed entry from queue: {}", e
+                    );
                 }
             }
             Err(e) => {
@@ -280,7 +279,10 @@ impl Poller {
             error!(match_id, "failed to move entry to dead-letter store: {}", e);
         }
         if let Err(e) = self.inner.queue.remove(match_id).await {
-            error!(match_id, "failed to remove exhausted entry from queue: {}", e);
+            error!(
+                match_id,
+                "failed to remove exhausted entry from queue: {}", e
+            );
         }
     }
 }

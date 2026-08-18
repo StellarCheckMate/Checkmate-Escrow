@@ -47,11 +47,9 @@ async fn fetch_result_maps_draw() {
         .mount(&server)
         .await;
 
-    let client = ChessComClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        ChessComClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let res = client.fetch_result("123").await.unwrap();
     assert_eq!(res.winner, contracts_oracle::types::Winner::Draw);
@@ -69,11 +67,9 @@ async fn fetch_result_maps_white_to_player1() {
         .mount(&server)
         .await;
 
-    let client = ChessComClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        ChessComClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let res: ChessComGameResult = client.fetch_result("555").await.unwrap();
     assert_eq!(res.winner, contracts_oracle::types::Winner::Player1);
@@ -89,11 +85,9 @@ async fn test_chess_com_game_not_found() {
         .mount(&server)
         .await;
 
-    let client = ChessComClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        ChessComClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let err = client.fetch_result("999").await.unwrap_err();
     assert!(matches!(err, ChessComError::GameNotFound));
@@ -109,11 +103,9 @@ async fn fetch_result_404_maps_to_game_not_found() {
         .mount(&server)
         .await;
 
-    let client = ChessComClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        ChessComClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let err = client.fetch_result("404").await.unwrap_err();
     assert!(matches!(err, ChessComError::GameNotFound));
@@ -131,11 +123,9 @@ async fn test_chess_com_draw_result() {
         .mount(&server)
         .await;
 
-    let client = ChessComClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        ChessComClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let res: ChessComGameResult = client.fetch_result("42").await.unwrap();
     assert_eq!(res.winner, contracts_oracle::types::Winner::Draw);
@@ -153,11 +143,9 @@ async fn fetch_result_invalid_response_errors() {
         .mount(&server)
         .await;
 
-    let client = ChessComClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        ChessComClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let err = client.fetch_result("777").await.unwrap_err();
     assert!(matches!(err, ChessComError::InvalidResponse));
@@ -173,11 +161,9 @@ async fn test_chess_com_503_error() {
         .mount(&server)
         .await;
 
-    let client = ChessComClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        ChessComClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let err = client.fetch_result("503").await.unwrap_err();
     match err {
@@ -187,7 +173,9 @@ async fn test_chess_com_503_error() {
         ChessComError::Http(_) => {
             // network-level error is also acceptable
         }
-        _ => panic!("expected service unavailable or network error, got: {:?}", err),
+        _ => panic!(
+            "expected service unavailable or network error, got: {:?}",
+            err
+        ),
     }
 }
-

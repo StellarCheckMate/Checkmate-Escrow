@@ -81,8 +81,8 @@ impl Config {
             )
         })?;
 
-        let database_read_url = env::var("DATABASE_READ_URL")
-            .unwrap_or_else(|_| database_url.clone());
+        let database_read_url =
+            env::var("DATABASE_READ_URL").unwrap_or_else(|_| database_url.clone());
 
         let db_pool_size = env::var("EVENT_INDEXER_DB_POOL_SIZE")
             .unwrap_or_else(|_| "5".to_string())
@@ -125,8 +125,8 @@ impl Config {
         }
 
         // ── API server ────────────────────────────────────────────────────
-        let bind_addr = env::var("EVENT_INDEXER_BIND_ADDR")
-            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        let bind_addr =
+            env::var("EVENT_INDEXER_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
 
         let bind_port = env::var("EVENT_INDEXER_PORT")
             .unwrap_or_else(|_| "8080".to_string())
@@ -158,7 +158,7 @@ impl Config {
             .unwrap_or_else(|_| "5".to_string())
             .parse::<u64>()?;
 
-        if poll_interval_secs < 1 || poll_interval_secs > 60 {
+        if !(1..=60).contains(&poll_interval_secs) {
             return Err(anyhow!(
                 "poll_interval_secs must be between 1 and 60, got {}",
                 poll_interval_secs
@@ -300,7 +300,10 @@ mod tests {
         set_base_env();
         env::set_var("DATABASE_READ_URL", "postgres://ro:pass@replica:5432/test");
         let cfg = Config::from_env().unwrap();
-        assert_eq!(cfg.database_read_url, "postgres://ro:pass@replica:5432/test");
+        assert_eq!(
+            cfg.database_read_url,
+            "postgres://ro:pass@replica:5432/test"
+        );
         env::remove_var("DATABASE_READ_URL");
     }
 

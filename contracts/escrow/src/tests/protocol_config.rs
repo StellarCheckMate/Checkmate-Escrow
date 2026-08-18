@@ -89,7 +89,10 @@ fn test_get_protocol_config_unaffected_by_update_oracle() {
     client.update_oracle(&new_oracle);
 
     let cfg_after = client.get_protocol_config();
-    assert_eq!(cfg_before, cfg_after, "update_oracle must not mutate ProtocolConfig");
+    assert_eq!(
+        cfg_before, cfg_after,
+        "update_oracle must not mutate ProtocolConfig"
+    );
 }
 
 /// `get_protocol_config` must still return the previous config after
@@ -112,7 +115,10 @@ fn test_get_protocol_config_unaffected_by_transfer_admin() {
 
     // Re-read as the new admin.
     let cfg_after = client.get_protocol_config();
-    assert_eq!(cfg_after, cfg, "transfer_admin must not mutate ProtocolConfig");
+    assert_eq!(
+        cfg_after, cfg,
+        "transfer_admin must not mutate ProtocolConfig"
+    );
 }
 
 /// `set_protocol_config` must be rejected when called by a non-admin.
@@ -128,5 +134,8 @@ fn test_set_protocol_config_rejected_for_non_admin() {
     env.set_auths(&[]);
 
     let result = client.try_set_protocol_config(&cfg);
-    assert!(result.is_err(), "non-admin must not be able to set ProtocolConfig");
+    assert!(
+        result.is_err(),
+        "non-admin must not be able to set ProtocolConfig"
+    );
 }

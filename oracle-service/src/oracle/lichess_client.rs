@@ -224,12 +224,10 @@ impl GameProvider for LichessClient {
                         provider: "lichess",
                         reason,
                     },
-                    ProviderError::RateLimited { retry_after, .. } => {
-                        ProviderError::RateLimited {
-                            provider: "lichess",
-                            retry_after,
-                        }
-                    }
+                    ProviderError::RateLimited { retry_after, .. } => ProviderError::RateLimited {
+                        provider: "lichess",
+                        retry_after,
+                    },
                     ProviderError::InvalidResponse { detail, .. } => {
                         ProviderError::InvalidResponse {
                             provider: "lichess",

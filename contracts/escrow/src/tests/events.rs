@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::testutils::{Address as _, Ledger as _};
+use soroban_sdk::testutils::Ledger as _;
 
 #[test]
 fn test_initialize_emits_event() {
@@ -127,7 +127,10 @@ fn test_deposit_emits_event_with_state_when_match_activates() {
         .iter()
         .rev()
         .find(|(_, topics, _)| *topics == expected_topics);
-    assert!(matched.is_some(), "match deposit event not emitted on activation");
+    assert!(
+        matched.is_some(),
+        "match deposit event not emitted on activation"
+    );
 
     let (_, _, data) = matched.unwrap();
     let (ev_id, ev_player, ev_state): (u64, Address, Option<MatchState>) =
@@ -419,7 +422,11 @@ fn test_deposit_emits_event_for_player2_and_includes_final_state() {
         .iter()
         .filter(|(_, topics, _)| *topics == deposit_topics)
         .collect();
-    assert_eq!(deposit_events.len(), 2, "two deposit events should be emitted");
+    assert_eq!(
+        deposit_events.len(),
+        2,
+        "two deposit events should be emitted"
+    );
 
     let (_, _, data) = deposit_events[1];
     let (ev_match_id, ev_player, _ev_state): (u64, Address, Option<MatchState>) =
@@ -511,8 +518,8 @@ fn test_expire_match_emits_event() {
         &Platform::Lichess,
     );
 
-    // Advance ledger past the configured timeout.
-    env.ledger().set_sequence_number(17_281);
+    // Advance ledger past the configured timeout (created at ledger 100).
+    env.ledger().set_sequence_number(100 + 17_280 + 1);
     client.expire_match(&id);
 
     let events = env.events().all();
@@ -591,7 +598,11 @@ fn test_transfer_admin_emits_event() {
     assert!(matched.is_some(), "admin/xfer event not emitted");
 
     let (_, _, data) = matched.unwrap();
-    let (ev_old_admin, ev_new_admin): (Address, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    let (ev_old_admin, ev_new_admin): (Address, Address) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_old_admin, admin, "old admin must match current admin");
-    assert_eq!(ev_new_admin, new_admin, "new admin must match provided address");
+    assert_eq!(
+        ev_new_admin, new_admin,
+        "new admin must match provided address"
+    );
 }

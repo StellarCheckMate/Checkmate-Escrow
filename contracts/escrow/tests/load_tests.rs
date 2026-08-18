@@ -31,11 +31,9 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use escrow::types::{Platform, ProtocolConfig, Winner};
-use escrow::{DEFAULT_MINIMUM_STAKE, EscrowContract, EscrowContractClient};
+use escrow::{EscrowContract, EscrowContractClient, DEFAULT_MINIMUM_STAKE};
 use soroban_sdk::{
-    testutils::Address as _,
-    token::StellarAssetClient,
-    Address, Env, String as SorobanString,
+    testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -90,7 +88,7 @@ struct LoadHarness {
 
 impl LoadHarness {
     fn new() -> Self {
-        let env = Env::default();
+        let mut env = Env::default();
         env.set_config(soroban_sdk::testutils::EnvTestConfig {
             capture_snapshot_at_drop: false,
         });
@@ -111,9 +109,18 @@ impl LoadHarness {
             cancellation_fee_basis_points: 0,
             treasury: admin.clone(),
             minimum_stake: DEFAULT_MINIMUM_STAKE,
-        });
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+    });
 
-        Self { env, contract_id, token }
+        Self {
+            env,
+            contract_id,
+            token,
+        }
     }
 
     fn client(&self) -> EscrowContractClient<'_> {
@@ -143,14 +150,8 @@ impl LoadHarness {
             let p1 = self.new_player();
             let p2 = self.new_player();
             let game_id = SorobanString::from_str(&self.env, &format!("bg{:08}", i));
-            let mid = client.create_match(
-                &p1,
-                &p2,
-                &STAKE,
-                &self.token,
-                &game_id,
-                &Platform::Lichess,
-            );
+            let mid =
+                client.create_match(&p1, &p2, &STAKE, &self.token, &game_id, &Platform::Lichess);
             client.deposit(&mid, &p1);
             client.deposit(&mid, &p2);
         }
@@ -196,9 +197,7 @@ fn load_create_match_at_scale() {
             client.create_match(&p1, &p2, &STAKE, &h.token, &game_id, &Platform::Lichess);
         });
 
-        println!(
-            "[load] create_match | n={n:>6} | cpu={cpu:>12} | mem={mem:>10} | wall={wt:>8}µs"
-        );
+        println!("[load] create_match | n={n:>6} | cpu={cpu:>12} | mem={mem:>10} | wall={wt:>8}µs");
         results.push(LoadMeasurement {
             operation: "create_match",
             n_background_matches: n,
@@ -402,9 +401,7 @@ fn load_correctness_no_cross_match_contamination() {
         let p1 = h.new_player();
         let p2 = h.new_player();
         let game_id = make_game_id(&h.env, "cr", i);
-        let mid = client.create_match(
-            &p1, &p2, &STAKE, &h.token, &game_id, &Platform::Lichess,
-        );
+        let mid = client.create_match(&p1, &p2, &STAKE, &h.token, &game_id, &Platform::Lichess);
         client.deposit(&mid, &p1);
         client.deposit(&mid, &p2);
         match_ids.push(mid);
@@ -414,7 +411,7 @@ fn load_correctness_no_cross_match_contamination() {
     // Resolve every RESOLVE_EVERY-th match.
     let mut resolved: Vec<u64> = Vec::new();
     for (i, &mid) in match_ids.iter().enumerate() {
-        if (i as u32) % RESOLVE_EVERY == 0 {
+        if (i as u32).is_multiple_of(RESOLVE_EVERY) {
             client.submit_result(&mid, &Winner::Player1);
             let (p1, _) = &players[i];
             client.claim_vested_payout(&mid, p1);
@@ -463,9 +460,7 @@ fn load_draw_refunds_correct_at_scale() {
         let p1 = h.new_player();
         let p2 = h.new_player();
         let game_id = make_game_id(&h.env, "dr", i);
-        let mid = client.create_match(
-            &p1, &p2, &STAKE, &h.token, &game_id, &Platform::Lichess,
-        );
+        let mid = client.create_match(&p1, &p2, &STAKE, &h.token, &game_id, &Platform::Lichess);
         client.deposit(&mid, &p1);
         client.deposit(&mid, &p2);
         players_list.push((p1, p2));
@@ -507,8 +502,8 @@ fn persist_results(section: &str, results: &[LoadMeasurement]) {
     }
 
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()  // contracts/
-        .and_then(|p| p.parent())  // repo root
+        .parent() // contracts/
+        .and_then(|p| p.parent()) // repo root
         .unwrap()
         .to_path_buf();
     let report_dir = repo_root.join("reports").join("performance");
@@ -528,7 +523,10 @@ fn persist_results(section: &str, results: &[LoadMeasurement]) {
         format!("[\n{block}\n]\n")
     } else {
         // Naive append: insert before the last `]`.
-        let trimmed = existing.trim_end_matches('\n').trim_end_matches(']').trim_end_matches('\n');
+        let trimmed = existing
+            .trim_end_matches('\n')
+            .trim_end_matches(']')
+            .trim_end_matches('\n');
         format!("{trimmed},\n{block}\n]\n")
     };
     let _ = fs::write(&path, content);

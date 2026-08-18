@@ -12,9 +12,11 @@ pub mod helpers;
 
 mod admin;
 mod balance_history_edge_cases;
+mod consensus;
 mod dispute;
 mod events;
 mod fee_calculation_scenarios;
+mod fee_tiers;
 mod fuzz;
 mod index;
 mod integration;
@@ -29,9 +31,7 @@ mod security;
 mod snapshots;
 mod tier;
 mod token_allowlist;
-mod consensus;
 mod ttl;
-mod fee_tiers;
 mod validation;
 
 // ── Base fixture ─────────────────────────────────────────────────────────────
@@ -175,7 +175,7 @@ pub fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, 
     asset_client.mint(player, &amount);
 }
 mod cancellation_fee;
-mod stablecoin;
 mod dispute_rollback;
-mod protocol_config;
 mod platform_stats;
+mod protocol_config;
+mod stablecoin;

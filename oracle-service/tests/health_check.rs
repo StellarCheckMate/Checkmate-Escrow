@@ -3,12 +3,9 @@
 //! Tests the health checker's ability to detect real and simulated failures
 //! across all dependencies.
 
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
 
 mod common;
-use common::*;
 
 #[tokio::test]
 async fn test_health_check_all_dependencies_up() {
@@ -100,7 +97,7 @@ async fn test_service_ready_only_when_critical_up() {
 
 #[cfg(test)]
 mod chaos_fault_injection {
-    use super::*;
+    
 
     #[tokio::test]
     async fn test_stellar_rpc_injection_detects_failure() {
@@ -165,7 +162,7 @@ mod chaos_fault_injection {
 
 #[cfg(test)]
 mod regression_tests {
-    use super::*;
+    
 
     #[tokio::test]
     async fn test_health_check_never_returns_hardcoded_healthy() {

@@ -126,7 +126,10 @@ fn test_stablecoin_mode_disabled_by_default_allows_any_token() {
 
     // Mode off by default — any token should work.
     let config = client.get_protocol_config();
-    assert!(!config.stablecoin_only_mode, "stablecoin_only_mode must be false by default");
+    assert!(
+        !config.stablecoin_only_mode,
+        "stablecoin_only_mode must be false by default"
+    );
 
     let id = client.create_match(
         &player1,
@@ -179,7 +182,10 @@ fn test_stablecoin_mode_accepts_registered_stablecoin_token() {
         &String::from_str(&env, "679329e5"),
         &Platform::Lichess,
     );
-    assert_eq!(id, 0, "create_match should succeed for a registered stablecoin token");
+    assert_eq!(
+        id, 0,
+        "create_match should succeed for a registered stablecoin token"
+    );
 }
 
 #[test]

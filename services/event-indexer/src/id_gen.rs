@@ -60,13 +60,19 @@ mod tests {
     fn different_event_index_different_id() {
         let id1 = compute_event_id(100, "txhash123", 0);
         let id2 = compute_event_id(100, "txhash123", 1);
-        assert_ne!(id1, id2, "different event indices must produce different IDs");
+        assert_ne!(
+            id1, id2,
+            "different event indices must produce different IDs"
+        );
     }
 
     #[test]
     fn id_is_valid_hex_64_chars() {
         let id = compute_event_id(100, "txhash123", 0);
         assert_eq!(id.len(), 64, "SHA-256 hex must be 64 characters");
-        assert!(id.chars().all(|c| c.is_ascii_hexdigit()), "ID must be valid hex");
+        assert!(
+            id.chars().all(|c| c.is_ascii_hexdigit()),
+            "ID must be valid hex"
+        );
     }
 }

@@ -50,7 +50,10 @@ async fn main() -> Result<()> {
     let mut total_duplicates = 0i64;
     let mut total_extra_rows = 0i64;
 
-    println!("{:<6} {:<20} {:<40} {:<15} {:<35}", "Count", "Ledger", "Tx Hash", "Event Type", "Match ID");
+    println!(
+        "{:<6} {:<20} {:<40} {:<15} {:<35}",
+        "Count", "Ledger", "Tx Hash", "Event Type", "Match ID"
+    );
     println!("{}", "─".repeat(135));
 
     for row in &rows {
@@ -77,7 +80,10 @@ async fn main() -> Result<()> {
             event_type.clone()
         };
 
-        println!("{:<6} {:<20} {:<40} {:<15} {:<35}", dup_count, ledger, tx_display, event_display, match_id);
+        println!(
+            "{:<6} {:<20} {:<40} {:<15} {:<35}",
+            dup_count, ledger, tx_display, event_display, match_id
+        );
 
         total_duplicates += dup_count;
         total_extra_rows += dup_count - 1;
@@ -87,10 +93,16 @@ async fn main() -> Result<()> {
     println!("\nSummary:");
     println!("  Total duplicate event groups: {}", rows.len());
     println!("  Total duplicate events: {}", total_duplicates);
-    println!("  Extra rows to remove: {} (keeping 1 per group)", total_extra_rows);
+    println!(
+        "  Extra rows to remove: {} (keeping 1 per group)",
+        total_extra_rows
+    );
 
     let total_events: i64 = conn
-        .query_one("SELECT COUNT(*) FROM events WHERE reorg_invalidated_at IS NULL", &[])
+        .query_one(
+            "SELECT COUNT(*) FROM events WHERE reorg_invalidated_at IS NULL",
+            &[],
+        )
         .await?
         .get(0);
 
@@ -100,7 +112,10 @@ async fn main() -> Result<()> {
         0.0
     };
 
-    println!("  Database inflation: {:.1}% ({} extra rows / {} total)", inflation_pct, total_extra_rows, total_events);
+    println!(
+        "  Database inflation: {:.1}% ({} extra rows / {} total)",
+        inflation_pct, total_extra_rows, total_events
+    );
     println!("\nRecommendation:");
     if total_extra_rows == 0 {
         println!("  ✓ No migration needed.");

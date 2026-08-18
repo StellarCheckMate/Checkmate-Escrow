@@ -18,7 +18,6 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum ProviderError {
     // ── Backpressure signals ──────────────────────────────────────────────
-
     /// The client-side token bucket is exhausted, **or** the upstream
     /// provider returned HTTP 429.  The caller should wait before retrying.
     ///
@@ -39,14 +38,12 @@ pub enum ProviderError {
     },
 
     // ── Concurrency gate ─────────────────────────────────────────────────
-
     /// The per-provider concurrency semaphore is exhausted.  Too many
     /// in-flight requests right now; the caller should queue or back off.
     #[error("concurrency limit reached for {provider}")]
     ConcurrencyLimitReached { provider: &'static str },
 
     // ── Logical / validation errors ───────────────────────────────────────
-
     /// The supplied game ID did not pass format validation.
     #[error("invalid game id: {0}")]
     InvalidGameId(String),
@@ -67,7 +64,6 @@ pub enum ProviderError {
     },
 
     // ── Multi-provider failover exhaustion ────────────────────────────────
-
     /// All providers in the registry were tried and all failed.  The inner
     /// `Vec` holds one error per provider in precedence order.
     #[error("all providers exhausted ({count} tried)")]
@@ -118,9 +114,7 @@ use crate::oracle::errors::{ChessComError, LichessError};
 impl From<ChessComError> for ProviderError {
     fn from(e: ChessComError) -> Self {
         match e {
-            ChessComError::InvalidGameId => {
-                ProviderError::InvalidGameId("chess.com".to_string())
-            }
+            ChessComError::InvalidGameId => ProviderError::InvalidGameId("chess.com".to_string()),
             ChessComError::GameNotFound => ProviderError::GameNotFound,
             ChessComError::GameNotFinished => ProviderError::GameNotFinished,
             ChessComError::InvalidResponse => ProviderError::InvalidResponse {
@@ -167,9 +161,7 @@ impl From<ChessComError> for ProviderError {
 impl From<LichessError> for ProviderError {
     fn from(e: LichessError) -> Self {
         match e {
-            LichessError::InvalidGameId => {
-                ProviderError::InvalidGameId("lichess".to_string())
-            }
+            LichessError::InvalidGameId => ProviderError::InvalidGameId("lichess".to_string()),
             LichessError::GameNotFound => ProviderError::GameNotFound,
             LichessError::GameNotFinished => ProviderError::GameNotFinished,
             LichessError::InvalidResponse => ProviderError::InvalidResponse {

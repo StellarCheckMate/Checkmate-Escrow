@@ -182,7 +182,10 @@ impl ChessComClient {
             .await
             .expect("semaphore closed");
 
-        let url = format!("{}/pub/player/profiles", self.api_base.trim_end_matches('/'));
+        let url = format!(
+            "{}/pub/player/profiles",
+            self.api_base.trim_end_matches('/')
+        );
 
         let resp = self.http.get(&url).send().await.map_err(|e| {
             if e.is_timeout() {

@@ -9,7 +9,6 @@
 
 use std::sync::Arc;
 
-use axum::body::to_bytes;
 use axum::http::{Request, StatusCode};
 use tokio::sync::RwLock;
 use tower::ServiceExt;
@@ -194,7 +193,7 @@ async fn request_id_header_case_insensitive_retrieval() {
         .oneshot(
             Request::builder()
                 .uri("/health")
-                .header("x-request-id", custom_id)  // lowercase
+                .header("x-request-id", custom_id) // lowercase
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -203,8 +202,8 @@ async fn request_id_header_case_insensitive_retrieval() {
 
     let request_id = response
         .headers()
-        .get("x-request-id")  // Try lowercase
-        .or_else(|| response.headers().get("X-Request-ID"))  // Try uppercase
+        .get("x-request-id") // Try lowercase
+        .or_else(|| response.headers().get("X-Request-ID")) // Try uppercase
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
 

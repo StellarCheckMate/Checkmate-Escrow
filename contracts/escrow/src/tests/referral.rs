@@ -41,6 +41,11 @@ fn setup_referral_match(
         vesting_duration_seconds: 0,
         cancellation_fee_basis_points: cancellation_fee_bps,
         treasury: admin.clone(),
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: crate::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
     client.set_referral_share_bps(&referral_share_bps);
 
@@ -67,7 +72,7 @@ fn setup_referral_match(
 #[test]
 fn test_create_match_with_referrer_stores_referrer() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin, referrer, match_id) =
-        setup_referral_match("ref_store_game", 200, 2000, 100);
+        setup_referral_match("134a6ef2", 200, 2000, 100);
 
     let client = EscrowContractClient::new(&env, &contract_id);
     let m = client.get_match(&match_id);
@@ -89,7 +94,7 @@ fn test_create_match_with_referrer_stores_referrer() {
 fn test_referral_fee_calculation_and_payment() {
     let stake: i128 = 10_000;
     let (env, contract_id, _oracle, player1, _player2, token, _admin, referrer, match_id) =
-        setup_referral_match("ref_fee_calc_game", 200, 2000, stake);
+        setup_referral_match("1e742e87", 200, 2000, stake);
 
     let client = EscrowContractClient::new(&env, &contract_id);
     let tok = token_client(&env, &token);
@@ -123,7 +128,7 @@ fn test_referral_fee_calculation_and_payment() {
 fn test_referral_fee_no_fee_when_platform_fee_zero() {
     let stake: i128 = 10_000;
     let (env, contract_id, _oracle, player1, _player2, token, _admin, referrer, match_id) =
-        setup_referral_match("ref_no_fee_game", 0, 2000, stake);
+        setup_referral_match("1011529c", 0, 2000, stake);
 
     let client = EscrowContractClient::new(&env, &contract_id);
     let tok = token_client(&env, &token);
@@ -152,7 +157,7 @@ fn test_referral_fee_no_fee_when_platform_fee_zero() {
 fn test_referral_fee_draw_no_referral_payment() {
     let stake: i128 = 10_000;
     let (env, contract_id, _oracle, player1, player2, token, _admin, referrer, match_id) =
-        setup_referral_match("ref_draw_game", 200, 2000, stake);
+        setup_referral_match("fbdadf73", 200, 2000, stake);
 
     let client = EscrowContractClient::new(&env, &contract_id);
     let tok = token_client(&env, &token);

@@ -21,7 +21,10 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    info!("Event Indexer starting — instance_id={}", config.instance_id);
+    info!(
+        "Event Indexer starting — instance_id={}",
+        config.instance_id
+    );
 
     // ── PostgreSQL pools ──────────────────────────────────────────────────
     let database = Arc::new(db::Database::from_dsns(

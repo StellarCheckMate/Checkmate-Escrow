@@ -129,6 +129,78 @@ pub struct PendingOracleRotation {
     pub new_oracle: Address,
 }
 
+/// Combined oracle-rotation state, stored under a single `DataKey::OracleRotation`
+/// key so the two independent rotation mechanisms (temporary auto-expiring vs.
+/// permanent two-step) don't each need their own top-level storage key.
+///
+/// Fields are flattened rather than `Option<TempOracleRotation>` /
+/// `Option<PendingOracleRotation>` because this SDK version's `#[contracttype]`
+/// doesn't support `Option<CustomStruct>` fields — only `Option<primitive>`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct OracleRotationState {
+    pub temp_old_oracle: Option<Address>,
+    pub temp_new_oracle: Option<Address>,
+    pub temp_expiry: Option<u64>,
+    pub pending_old_oracle: Option<Address>,
+    pub pending_new_oracle: Option<Address>,
+}
+
+impl OracleRotationState {
+    pub fn temp(&self) -> Option<TempOracleRotation> {
+        match (&self.temp_old_oracle, &self.temp_new_oracle, self.temp_expiry) {
+            (Some(old), Some(new), Some(expiry)) => Some(TempOracleRotation {
+                old_oracle: old.clone(),
+                temp_oracle: new.clone(),
+                expiry,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn set_temp(&mut self, temp: Option<TempOracleRotation>) {
+        match temp {
+            Some(t) => {
+                self.temp_old_oracle = Some(t.old_oracle);
+                self.temp_new_oracle = Some(t.temp_oracle);
+                self.temp_expiry = Some(t.expiry);
+            }
+            None => {
+                self.temp_old_oracle = None;
+                self.temp_new_oracle = None;
+                self.temp_expiry = None;
+            }
+        }
+    }
+
+    pub fn pending(&self) -> Option<PendingOracleRotation> {
+        match (&self.pending_old_oracle, &self.pending_new_oracle) {
+            (Some(old), Some(new)) => Some(PendingOracleRotation {
+                old_oracle: old.clone(),
+                new_oracle: new.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn set_pending(&mut self, pending: Option<PendingOracleRotation>) {
+        match pending {
+            Some(p) => {
+                self.pending_old_oracle = Some(p.old_oracle);
+                self.pending_new_oracle = Some(p.new_oracle);
+            }
+            None => {
+                self.pending_old_oracle = None;
+                self.pending_new_oracle = None;
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.temp_old_oracle.is_none() && self.pending_old_oracle.is_none()
+    }
+}
+
 #[contracttype]
 pub enum DataKey {
     Match(u64),
@@ -138,7 +210,6 @@ pub enum DataKey {
     PendingAdmin,
     Paused,
     GameId(String),
-    ActiveMatches,
     PlayerMatches(Address),
     AllowedToken(Address),
     AllowedTokenCount,
@@ -208,6 +279,10 @@ pub enum DataKey {
     ApprovedOracles,
     /// Stores the required number of confirmations for consensus (u32).
     RequiredOracleConfirmations,
+    /// Reentrancy guard for `deposit`, keyed by match id.
+    DepositInProgress(u64),
+    /// Combined temp + pending oracle rotation state (see `OracleRotationState`).
+    OracleRotation,
 }
 
 /// The lifecycle event that triggered a balance snapshot.

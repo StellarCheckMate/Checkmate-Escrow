@@ -1,5 +1,4 @@
 use super::*;
-use soroban_sdk::testutils::{Address as _, Ledger as _};
 
 #[test]
 fn test_pause_on_uninitialized_contract_returns_unauthorized() {
@@ -496,7 +495,6 @@ fn test_is_paused_cycle() {
     assert!(!client.is_paused());
 }
 
-
 // #593 - propose_admin stores the pending admin and emits an event
 #[test]
 fn test_propose_admin_stores_pending_admin_and_emits_event() {
@@ -522,11 +520,10 @@ fn test_propose_admin_stores_pending_admin_and_emits_event() {
     assert_eq!(ev_pending, new_admin);
 }
 
-
 // #594 - accept_admin finalizes the transfer and emits an event
 #[test]
 fn test_accept_admin_finalizes_transfer_and_emits_event() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let new_admin = Address::generate(&env);
@@ -561,7 +558,6 @@ fn test_accept_admin_finalizes_transfer_and_emits_event() {
     assert_eq!(ev_new_admin, new_admin);
 }
 
-
 // #595 - current admin retains privileges after propose_admin and before accept_admin
 #[test]
 fn test_current_admin_retains_privileges_after_propose_before_accept() {
@@ -584,7 +580,6 @@ fn test_current_admin_retains_privileges_after_propose_before_accept() {
     client.pause();
     assert!(client.is_paused());
 }
-
 
 // #596 - proposing a second pending admin cleanly replaces the first proposal
 #[test]
@@ -609,7 +604,10 @@ fn test_second_pending_admin_replaces_first_proposal() {
     }]);
 
     let result = client.try_accept_admin();
-    assert!(result.is_err(), "pending_admin_a should not be able to accept");
+    assert!(
+        result.is_err(),
+        "pending_admin_a should not be able to accept"
+    );
 
     env.mock_auths(&[MockAuth {
         address: &pending_admin_b,
@@ -624,7 +622,6 @@ fn test_second_pending_admin_replaces_first_proposal() {
     client.accept_admin();
     assert_eq!(client.get_admin(), pending_admin_b);
 }
-
 
 // #737 / #1160 - set_match_timeout validates minimum bound
 #[test]
@@ -698,7 +695,10 @@ fn test_set_match_timeout_requires_admin_authorization() {
     }]);
 
     let result = client.try_set_match_timeout(&new_timeout);
-    assert!(result.is_err(), "non-admin should not be able to set timeout");
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to set timeout"
+    );
 }
 
 // #1159 - set_maximum_stake requires admin authorization
@@ -721,7 +721,10 @@ fn test_set_maximum_stake_requires_admin_authorization() {
     }]);
 
     let result = client.try_set_maximum_stake(&new_max);
-    assert!(result.is_err(), "non-admin should not be able to set maximum_stake");
+    assert!(
+        result.is_err(),
+        "non-admin should not be able to set maximum_stake"
+    );
 }
 
 // #1159 - set_maximum_stake updates ProtocolConfig.maximum_stake
@@ -797,7 +800,11 @@ fn test_two_step_admin_transfer() {
 
     // Propose: current admin should not change yet
     client.propose_admin(&new_admin);
-    assert_eq!(client.get_admin(), admin, "admin must not change before accept");
+    assert_eq!(
+        client.get_admin(),
+        admin,
+        "admin must not change before accept"
+    );
 
     // Accept: new_admin calls accept_admin
     env.mock_auths(&[MockAuth {
@@ -812,11 +819,18 @@ fn test_two_step_admin_transfer() {
     client.accept_admin();
 
     // Admin is now new_admin and PendingAdmin key is cleared
-    assert_eq!(client.get_admin(), new_admin, "admin must be new_admin after accept");
+    assert_eq!(
+        client.get_admin(),
+        new_admin,
+        "admin must be new_admin after accept"
+    );
     let pending: Option<Address> = env.as_contract(&contract_id, || {
         env.storage().instance().get(&DataKey::PendingAdmin)
     });
-    assert!(pending.is_none(), "PendingAdmin key must be cleared after acceptance");
+    assert!(
+        pending.is_none(),
+        "PendingAdmin key must be cleared after acceptance"
+    );
 }
 
 // #1101 — pause blocks create_match and unpause restores it
@@ -835,7 +849,11 @@ fn test_pause_blocks_create_match() {
         &String::from_str(&env, "fdc7c9d7"),
         &Platform::Lichess,
     );
-    assert_eq!(result, Err(Ok(Error::ContractPaused)), "create_match must fail when paused");
+    assert_eq!(
+        result,
+        Err(Ok(Error::ContractPaused)),
+        "create_match must fail when paused"
+    );
 
     client.unpause();
 

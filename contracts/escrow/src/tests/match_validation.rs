@@ -14,7 +14,10 @@ fn test_create_match_with_zero_stake_rejected() {
         &Platform::Lichess,
     );
 
-    assert!(result.is_err(), "match creation with zero stake must be rejected");
+    assert!(
+        result.is_err(),
+        "match creation with zero stake must be rejected"
+    );
 }
 
 #[test]
@@ -81,7 +84,7 @@ fn test_create_match_with_empty_game_id_rejected() {
 
 #[test]
 fn test_deposit_insufficient_balance_rejected() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let (env, contract_id, _oracle, _player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let asset_client = StellarAssetClient::new(&env, &token);
@@ -106,7 +109,7 @@ fn test_deposit_insufficient_balance_rejected() {
 
 #[test]
 fn test_deposit_on_completed_match_rejected() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin, match_id) =
+    let (env, contract_id, _oracle, player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 

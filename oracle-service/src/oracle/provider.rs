@@ -76,7 +76,10 @@ impl ProviderRegistry {
     /// Panics if `providers` is empty — a registry without providers cannot
     /// resolve any game.
     pub fn new(providers: Vec<Arc<dyn GameProvider>>) -> Self {
-        assert!(!providers.is_empty(), "ProviderRegistry requires at least one provider");
+        assert!(
+            !providers.is_empty(),
+            "ProviderRegistry requires at least one provider"
+        );
         Self { providers }
     }
 
@@ -128,9 +131,7 @@ impl ProviderRegistry {
 fn tracing_or_eprintln(provider: &str, game_id: &str, err: &ProviderError) {
     // Use eprintln as a lightweight stand-in; replace with `tracing::warn!`
     // once the oracle service grows a tracing subscriber.
-    eprintln!(
-        "[oracle] provider={provider} game_id={game_id} failover triggered: {err}"
-    );
+    eprintln!("[oracle] provider={provider} game_id={game_id} failover triggered: {err}");
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -267,9 +268,6 @@ mod tests {
             const_p("primary", Ok(Winner::Player1)),
             const_p("secondary", Ok(Winner::Player2)),
         ]);
-        assert_eq!(
-            reg.fetch_result("abc12345").await.unwrap(),
-            Winner::Player1
-        );
+        assert_eq!(reg.fetch_result("abc12345").await.unwrap(), Winner::Player1);
     }
 }

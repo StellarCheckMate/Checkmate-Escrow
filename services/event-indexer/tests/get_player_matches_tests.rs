@@ -35,10 +35,7 @@ fn app() -> axum::Router {
 }
 
 /// Issue a GET request to the player matches endpoint and return status and response body.
-async fn get_player_matches(
-    address: &str,
-    query: Option<&str>,
-) -> (StatusCode, String) {
+async fn get_player_matches(address: &str, query: Option<&str>) -> (StatusCode, String) {
     let uri = if let Some(q) = query {
         format!("/players/{}/matches{}", address, q)
     } else {
@@ -66,8 +63,8 @@ async fn get_player_matches(
 async fn get_player_matches_returns_valid_response_structure() {
     let (status, body) = get_player_matches(VALID_ACCOUNT, None).await;
 
-    let _response: ApiResponse<Option<PlayerMatchesResponse>> = serde_json::from_str(&body)
-        .expect("Response should be valid JSON ApiResponse");
+    let _response: ApiResponse<Option<PlayerMatchesResponse>> =
+        serde_json::from_str(&body).expect("Response should be valid JSON ApiResponse");
 
     // The request will fail with 500 due to unreachable DB, not 400 (validation),
     // which means the endpoint routing and parameter parsing works correctly
@@ -82,8 +79,8 @@ async fn get_player_matches_returns_valid_response_structure() {
 async fn get_player_matches_with_status_filter_passes_validation() {
     let (status, body) = get_player_matches(VALID_ACCOUNT, Some("?status=completed")).await;
 
-    let _response: ApiResponse<Option<PlayerMatchesResponse>> = serde_json::from_str(&body)
-        .expect("Response should be valid JSON ApiResponse");
+    let _response: ApiResponse<Option<PlayerMatchesResponse>> =
+        serde_json::from_str(&body).expect("Response should be valid JSON ApiResponse");
 
     assert_ne!(
         status,
@@ -94,11 +91,10 @@ async fn get_player_matches_with_status_filter_passes_validation() {
 
 #[tokio::test]
 async fn get_player_matches_with_pagination_passes_validation() {
-    let (status, body) =
-        get_player_matches(VALID_ACCOUNT, Some("?limit=50&offset=10")).await;
+    let (status, body) = get_player_matches(VALID_ACCOUNT, Some("?limit=50&offset=10")).await;
 
-    let _response: ApiResponse<Option<PlayerMatchesResponse>> = serde_json::from_str(&body)
-        .expect("Response should be valid JSON ApiResponse");
+    let _response: ApiResponse<Option<PlayerMatchesResponse>> =
+        serde_json::from_str(&body).expect("Response should be valid JSON ApiResponse");
 
     assert_ne!(
         status,
@@ -109,14 +105,11 @@ async fn get_player_matches_with_pagination_passes_validation() {
 
 #[tokio::test]
 async fn get_player_matches_with_all_parameters_passes_validation() {
-    let (status, body) = get_player_matches(
-        VALID_ACCOUNT,
-        Some("?status=active&limit=100&offset=0"),
-    )
-    .await;
+    let (status, body) =
+        get_player_matches(VALID_ACCOUNT, Some("?status=active&limit=100&offset=0")).await;
 
-    let _response: ApiResponse<Option<PlayerMatchesResponse>> = serde_json::from_str(&body)
-        .expect("Response should be valid JSON ApiResponse");
+    let _response: ApiResponse<Option<PlayerMatchesResponse>> =
+        serde_json::from_str(&body).expect("Response should be valid JSON ApiResponse");
 
     assert_ne!(
         status,
@@ -142,8 +135,8 @@ async fn get_player_matches_with_invalid_status_is_rejected() {
     let (status, body) = get_player_matches(VALID_ACCOUNT, Some("?status=invalid")).await;
 
     // Invalid status should fail validation
-    let response: ApiResponse<Option<PlayerMatchesResponse>> = serde_json::from_str(&body)
-        .expect("Response should be valid JSON");
+    let response: ApiResponse<Option<PlayerMatchesResponse>> =
+        serde_json::from_str(&body).expect("Response should be valid JSON");
 
     assert_eq!(
         status,
@@ -158,8 +151,7 @@ async fn get_player_matches_with_invalid_status_is_rejected() {
 async fn get_player_matches_with_valid_statuses() {
     for status in &["pending", "active", "completed", "cancelled", "expired"] {
         let (http_status, _body) =
-            get_player_matches(VALID_ACCOUNT, Some(&format!("?status={}", status)))
-                .await;
+            get_player_matches(VALID_ACCOUNT, Some(&format!("?status={}", status))).await;
 
         assert_ne!(
             http_status,

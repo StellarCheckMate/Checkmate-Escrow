@@ -1,11 +1,13 @@
 use crate::tests::token_client;
 use crate::types::{MatchState, Platform, ProtocolConfig, Winner};
-use crate::{EscrowContract, EscrowContractClient, DEFAULT_MATCH_TIMEOUT_SECONDS, DEFAULT_MINIMUM_STAKE};
+use crate::{
+    EscrowContract, EscrowContractClient, DEFAULT_MATCH_TIMEOUT_SECONDS, DEFAULT_MINIMUM_STAKE,
+};
 use oracle::{OracleContract, OracleContractClient};
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, Ledger as _, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Ledger as _},
     token::StellarAssetClient,
-    Address, Env, String, Symbol, IntoVal,
+    Address, Env, String,
 };
 
 fn setup_multi_token_fixture() -> (
@@ -62,7 +64,7 @@ fn setup_multi_token_fixture() -> (
     // Player2 also gets token_b for receiving payouts in multi-token mode
     asset_a_client.mint(&player1, &1000);
     asset_a_client.mint(&player2, &1000);
-    asset_b_client.mint(&player2, &500);  // 500 = stake_amount * conversion_rate / 10^7
+    asset_b_client.mint(&player2, &500); // 500 = stake_amount * conversion_rate / 10^7
 
     // Also fund Oracle contract with token pool for swapping
     asset_a_client.mint(&oracle_id, &10000);
@@ -141,8 +143,8 @@ fn test_multi_token_deposits_and_refunds() {
 
     let stake_amount = 100; // 100 token_a
     let rate = 50_000_000; // 5.0
-    // Expected token_b stake = 100 * 5.0 = 500 token_b
-    let expected_b_stake: i128 = 500;
+                           // Expected token_b stake = 100 * 5.0 = 500 token_b
+    let _expected_b_stake: i128 = 500;
 
     let match_id = escrow_client.create_match_with_conversion(
         &player1,
@@ -158,12 +160,18 @@ fn test_multi_token_deposits_and_refunds() {
     // Player 1 deposits token_a
     escrow_client.deposit(&match_id, &player1);
     assert_eq!(token_client(&env, &token_a).balance(&player1), 900);
-    assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), stake_amount);
+    assert_eq!(
+        token_client(&env, &token_a).balance(&escrow_client.address),
+        stake_amount
+    );
 
     // Player 2 deposits token_a (same as player1, deposit() always uses m.token)
     escrow_client.deposit(&match_id, &player2);
     assert_eq!(token_client(&env, &token_a).balance(&player2), 900); // 1000 - 100 = 900
-    assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), 200); // 100 + 100
+    assert_eq!(
+        token_client(&env, &token_a).balance(&escrow_client.address),
+        200
+    ); // 100 + 100
 
     let m = escrow_client.get_match(&match_id);
     assert_eq!(m.state, MatchState::Active);
@@ -171,7 +179,7 @@ fn test_multi_token_deposits_and_refunds() {
     // Cancel match and verify refunds in correct tokens
     // Note: Since match is active, cancel_match should fail unless we do it before active,
     // let's test refunds via cancel/expire by setting up a pending match.
-    
+
     let match_id2 = escrow_client.create_match_with_conversion(
         &player1,
         &player2,
@@ -238,8 +246,14 @@ fn test_multi_token_payout_player1_wins() {
     assert_eq!(token_client(&env, &token_b).balance(&player2), 500);
 
     // Escrow contract should have 0 balances for this match
-    assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), 0);
-    assert_eq!(token_client(&env, &token_b).balance(&escrow_client.address), 0);
+    assert_eq!(
+        token_client(&env, &token_a).balance(&escrow_client.address),
+        0
+    );
+    assert_eq!(
+        token_client(&env, &token_b).balance(&escrow_client.address),
+        0
+    );
 }
 
 #[test]
@@ -280,8 +294,14 @@ fn test_multi_token_payout_player2_wins() {
     // Player 2: 500 starting + 1000 payout = 1500 token_b
     assert_eq!(token_client(&env, &token_b).balance(&player2), 1500);
 
-    assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), 0);
-    assert_eq!(token_client(&env, &token_b).balance(&escrow_client.address), 0);
+    assert_eq!(
+        token_client(&env, &token_a).balance(&escrow_client.address),
+        0
+    );
+    assert_eq!(
+        token_client(&env, &token_b).balance(&escrow_client.address),
+        0
+    );
 }
 
 #[test]
@@ -316,10 +336,16 @@ fn test_multi_token_payout_draw() {
 
     // Refund player 1 their token_a stake, and player 2 their stake in token_a
     assert_eq!(token_client(&env, &token_a).balance(&player1), 1000); // 900 + 100 = 1000
-    assert_eq!(token_client(&env, &token_b).balance(&player2), 500);  // token_b unchanged (refund in token_a)
+    assert_eq!(token_client(&env, &token_b).balance(&player2), 500); // token_b unchanged (refund in token_a)
 
-    assert_eq!(token_client(&env, &token_a).balance(&escrow_client.address), 0);
-    assert_eq!(token_client(&env, &token_b).balance(&escrow_client.address), 0);
+    assert_eq!(
+        token_client(&env, &token_a).balance(&escrow_client.address),
+        0
+    );
+    assert_eq!(
+        token_client(&env, &token_b).balance(&escrow_client.address),
+        0
+    );
 }
 
 #[test]
@@ -491,15 +517,27 @@ fn test_multi_token_payout_rejects_stale_rate() {
     // Rate was set at ledger 100, so at ledger 1101+ it's stale
     env.ledger().set_sequence_number(1101);
 
-    // Submit result with stale rate — should panic due to ConversionRateStalePriceSource error
+    // submit_result only transitions match state; the stale-rate check lives
+    // in the payout path, so it's claim_vested_payout that panics here with
+    // ConversionRateStalePriceSource.
     escrow_client.submit_result(&match_id, &Winner::Player1);
+    escrow_client.claim_vested_payout(&match_id, &player1);
 }
 
 #[test]
 #[should_panic]
 fn test_create_match_with_conversion_missing_oracle_rate() {
-    let (env, _admin, _oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
-        setup_multi_token_fixture();
+    let (
+        env,
+        _admin,
+        _oracle_client,
+        escrow_client,
+        player1,
+        player2,
+        token_a,
+        token_b,
+        _oracle_id,
+    ) = setup_multi_token_fixture();
 
     // Do NOT set rate in oracle — this should cause create_match_with_conversion to fail
     // when it tries to fetch the oracle rate

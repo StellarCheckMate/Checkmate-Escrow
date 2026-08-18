@@ -77,7 +77,12 @@ impl PendingEntry {
     ///
     /// Returns `true` if the entry has exhausted all retries and should be
     /// moved to the dead-letter store.
-    pub fn record_failure(&mut self, error: String, base_delay_secs: u64, max_retries: u32) -> bool {
+    pub fn record_failure(
+        &mut self,
+        error: String,
+        base_delay_secs: u64,
+        max_retries: u32,
+    ) -> bool {
         self.attempts += 1;
         self.last_error = Some(error);
 
@@ -86,11 +91,9 @@ impl PendingEntry {
         }
 
         // Exponential backoff: base * 2^(attempt-1), capped at 1 hour.
-        let exp = (self.attempts - 1) as u32;
+        let exp = self.attempts - 1;
         let multiplier = 1u64.checked_shl(exp).unwrap_or(u64::MAX);
-        let delay_secs = base_delay_secs
-            .saturating_mul(multiplier)
-            .min(3600); // cap at 1 hour
+        let delay_secs = base_delay_secs.saturating_mul(multiplier).min(3600); // cap at 1 hour
 
         self.next_attempt_at = Utc::now() + chrono::Duration::seconds(delay_secs as i64);
         false
@@ -210,7 +213,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let q = make_queue(&dir);
 
-        let added = q.enqueue(1, "abcd1234".into(), Platform::Lichess).await.unwrap();
+        let added = q
+            .enqueue(1, "abcd1234".into(), Platform::Lichess)
+            .await
+            .unwrap();
         assert!(added);
 
         let entries = q.load().await.unwrap();
@@ -224,8 +230,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let q = make_queue(&dir);
 
-        q.enqueue(1, "abcd1234".into(), Platform::Lichess).await.unwrap();
-        let added = q.enqueue(1, "abcd1234".into(), Platform::Lichess).await.unwrap();
+        q.enqueue(1, "abcd1234".into(), Platform::Lichess)
+            .await
+            .unwrap();
+        let added = q
+            .enqueue(1, "abcd1234".into(), Platform::Lichess)
+            .await
+            .unwrap();
         assert!(!added, "should not add duplicate");
         assert_eq!(q.load().await.unwrap().len(), 1);
     }
@@ -252,8 +263,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let q = make_queue(&dir);
 
-        q.enqueue(1, "abcd1234".into(), Platform::Lichess).await.unwrap();
-        q.enqueue(2, "efgh5678".into(), Platform::ChessDotCom).await.unwrap();
+        q.enqueue(1, "abcd1234".into(), Platform::Lichess)
+            .await
+            .unwrap();
+        q.enqueue(2, "efgh5678".into(), Platform::ChessDotCom)
+            .await
+            .unwrap();
         q.remove(1).await.unwrap();
 
         let entries = q.load().await.unwrap();

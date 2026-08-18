@@ -68,7 +68,10 @@ fn test_create_match_valid_lichess_game_id() {
         &String::from_str(&env, "abcd1234"),
         &Platform::Lichess,
     );
-    assert_eq!(client.get_match(&id).game_id, String::from_str(&env, "abcd1234"));
+    assert_eq!(
+        client.get_match(&id).game_id,
+        String::from_str(&env, "abcd1234")
+    );
 }
 
 #[test]

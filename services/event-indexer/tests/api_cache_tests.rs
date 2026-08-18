@@ -135,14 +135,21 @@ async fn each_status_list_is_cached_independently() {
         .await
         .unwrap();
     assert_eq!(got.len(), 1);
-    assert_eq!(got[0].match_id, 1, "pending list must not serve the active list");
+    assert_eq!(
+        got[0].match_id, 1,
+        "pending list must not serve the active list"
+    );
 }
 
 #[tokio::test]
 async fn entry_expires_after_its_ttl() {
     let cache = ApiCache::in_memory();
     cache
-        .set_json(&match_key(1), &match_info(1, MatchStatus::Pending), Duration::from_secs(1))
+        .set_json(
+            &match_key(1),
+            &match_info(1, MatchStatus::Pending),
+            Duration::from_secs(1),
+        )
         .await;
 
     assert!(cache.get_json::<MatchInfo>(&match_key(1)).await.is_some());
@@ -163,11 +170,19 @@ async fn state_change_invalidates_the_match_and_every_list() {
 
     // Warm: the match itself, all list variants, and analytics.
     cache
-        .set_json(&match_key(5), &match_info(5, MatchStatus::Pending), match_ttl())
+        .set_json(
+            &match_key(5),
+            &match_info(5, MatchStatus::Pending),
+            match_ttl(),
+        )
         .await;
     for key in all_match_list_keys() {
         cache
-            .set_json(&key, &vec![match_info(5, MatchStatus::Pending)], pending_matches_ttl())
+            .set_json(
+                &key,
+                &vec![match_info(5, MatchStatus::Pending)],
+                pending_matches_ttl(),
+            )
             .await;
     }
     cache
@@ -207,10 +222,18 @@ async fn state_change_invalidates_the_match_and_every_list() {
 async fn invalidation_is_scoped_to_the_changed_match() {
     let cache = ApiCache::in_memory();
     cache
-        .set_json(&match_key(1), &match_info(1, MatchStatus::Active), match_ttl())
+        .set_json(
+            &match_key(1),
+            &match_info(1, MatchStatus::Active),
+            match_ttl(),
+        )
         .await;
     cache
-        .set_json(&match_key(2), &match_info(2, MatchStatus::Active), match_ttl())
+        .set_json(
+            &match_key(2),
+            &match_info(2, MatchStatus::Active),
+            match_ttl(),
+        )
         .await;
 
     cache.invalidate_match(1).await;
@@ -226,7 +249,11 @@ async fn invalidation_is_scoped_to_the_changed_match() {
 async fn reorg_invalidation_clears_aggregates_only() {
     let cache = ApiCache::in_memory();
     cache
-        .set_json(&match_key(3), &match_info(3, MatchStatus::Completed), match_ttl())
+        .set_json(
+            &match_key(3),
+            &match_info(3, MatchStatus::Completed),
+            match_ttl(),
+        )
         .await;
     cache
         .set_json(
@@ -255,7 +282,11 @@ async fn reorg_invalidation_clears_aggregates_only() {
 async fn repeated_invalidation_is_idempotent() {
     let cache = ApiCache::in_memory();
     cache
-        .set_json(&match_key(1), &match_info(1, MatchStatus::Pending), match_ttl())
+        .set_json(
+            &match_key(1),
+            &match_info(1, MatchStatus::Pending),
+            match_ttl(),
+        )
         .await;
 
     for _ in 0..5 {
@@ -264,7 +295,11 @@ async fn repeated_invalidation_is_idempotent() {
 
     assert!(cache.get_json::<MatchInfo>(&match_key(1)).await.is_none());
     assert_eq!(cache.stats().invalidations, 5);
-    assert_eq!(cache.stats().errors, 0, "deleting a missing key is not an error");
+    assert_eq!(
+        cache.stats().errors,
+        0,
+        "deleting a missing key is not an error"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -275,7 +310,11 @@ async fn repeated_invalidation_is_idempotent() {
 async fn cached_match_is_served_without_touching_the_database() {
     let cache = Arc::new(ApiCache::in_memory());
     cache
-        .set_json(&match_key(42), &match_info(42, MatchStatus::Active), match_ttl())
+        .set_json(
+            &match_key(42),
+            &match_info(42, MatchStatus::Active),
+            match_ttl(),
+        )
         .await;
 
     let app = router_with(cache.clone());
@@ -313,7 +352,10 @@ async fn pending_match_list_is_served_from_cache() {
     cache
         .set_json(
             &matches_key(Some(&MatchStatus::Pending)),
-            &vec![match_info(1, MatchStatus::Pending), match_info(2, MatchStatus::Pending)],
+            &vec![
+                match_info(1, MatchStatus::Pending),
+                match_info(2, MatchStatus::Pending),
+            ],
             pending_matches_ttl(),
         )
         .await;
@@ -375,7 +417,11 @@ async fn analytics_are_served_from_cache() {
 async fn invalidated_match_is_no_longer_served_from_cache() {
     let cache = Arc::new(ApiCache::in_memory());
     cache
-        .set_json(&match_key(42), &match_info(42, MatchStatus::Pending), match_ttl())
+        .set_json(
+            &match_key(42),
+            &match_info(42, MatchStatus::Pending),
+            match_ttl(),
+        )
         .await;
 
     let app = router_with(cache.clone());
@@ -401,7 +447,10 @@ async fn a_404_is_not_cached() {
     let _ = get(&app, "/match/12345").await;
 
     assert!(
-        cache.get_json::<MatchInfo>(&match_key(12345)).await.is_none(),
+        cache
+            .get_json::<MatchInfo>(&match_key(12345))
+            .await
+            .is_none(),
         "a negative result must not be cached"
     );
 }
@@ -414,7 +463,11 @@ async fn a_404_is_not_cached() {
 async fn disabled_cache_always_reaches_the_database() {
     let cache = Arc::new(ApiCache::disabled());
     cache
-        .set_json(&match_key(1), &match_info(1, MatchStatus::Pending), match_ttl())
+        .set_json(
+            &match_key(1),
+            &match_info(1, MatchStatus::Pending),
+            match_ttl(),
+        )
         .await;
 
     let app = router_with(cache.clone());
@@ -504,7 +557,9 @@ async fn cache_does_not_rewrite_timestamps() {
     };
     let expected = event.timestamp;
 
-    cache.set_json("cm:api:test:event", &event, match_ttl()).await;
+    cache
+        .set_json("cm:api:test:event", &event, match_ttl())
+        .await;
     let restored: IndexedEvent = cache.get_json("cm:api:test:event").await.unwrap();
 
     assert_eq!(restored.timestamp, expected);

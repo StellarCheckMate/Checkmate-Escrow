@@ -1,27 +1,27 @@
-/// Kani Model-Checking Harness for Checkmate-Escrow Escrow Contract
-///
-/// This harness exhaustively verifies critical safety invariants using symbolic execution.
-/// It covers all state transitions, field mutations, and known vulnerability scenarios.
-///
-/// To run the harness:
-///   cargo kani --harness=test_invariant_no_double_payout
-///   cargo kani --harness=test_invariant_no_fund_loss
-///   cargo kani --harness=test_invariant_monotonic_progression
-///   cargo kani (runs all harnesses)
-///
-/// NOTE: Full Kani integration requires additional setup for Soroban contracts.
-/// This harness provides the verification logic that can be adapted to Kani's requirements.
+//! Kani Model-Checking Harness for Checkmate-Escrow Escrow Contract
+//!
+//! This harness exhaustively verifies critical safety invariants using symbolic execution.
+//! It covers all state transitions, field mutations, and known vulnerability scenarios.
+//!
+//! To run the harness:
+//!   cargo kani --harness=test_invariant_no_double_payout
+//!   cargo kani --harness=test_invariant_no_fund_loss
+//!   cargo kani --harness=test_invariant_monotonic_progression
+//!   cargo kani (runs all harnesses)
+//!
+//! NOTE: Full Kani integration requires additional setup for Soroban contracts.
+//! This harness provides the verification logic that can be adapted to Kani's requirements.
 
 #[cfg(test)]
 mod kani_verification {
     use crate::formal_verification::*;
     use crate::types::MatchState;
-    use std::{collections::HashMap, format, println, string::ToString, vec};
+    use std::{collections::HashMap, println, string::ToString, vec};
 
     /// HARNESS 1: INV_NO_DOUBLE_PAYOUT
-    /// 
+    ///
     /// Safety Property: No player receives payout more than once per match.
-    /// 
+    ///
     /// Verification:
     /// - For all matches m in state Completed:
     ///   - If m.winner == Player1: m.player1_claimed must be true, m.player2_claimed must be false
@@ -94,9 +94,8 @@ mod kani_verification {
         context.player1_deposited = true;
         context.player2_deposited = true;
 
-        let escrow_balance =
-            if context.player1_deposited { stake } else { 0 } +
-            if context.player2_deposited { stake } else { 0 };
+        let escrow_balance = if context.player1_deposited { stake } else { 0 }
+            + if context.player2_deposited { stake } else { 0 };
 
         assert_eq!(
             escrow_balance, 200,
@@ -106,7 +105,7 @@ mod kani_verification {
         // Simulate payout: funds leave escrow
         let payout_amount = 2 * stake; // Winner gets full pot
         let contract_balance_after = 0; // All funds paid out
-        let escrow_after = 0;
+        let _escrow_after = 0;
 
         assert!(
             InvariantValidator::check_no_fund_loss(&context, payout_amount, contract_balance_after),
@@ -185,25 +184,46 @@ mod kani_verification {
 
         // Cancellation path: Pending → Cancelled
         assert!(
-            InvariantValidator::check_monotonic_progression(&MatchState::Pending, &MatchState::Cancelled),
+            InvariantValidator::check_monotonic_progression(
+                &MatchState::Pending,
+                &MatchState::Cancelled
+            ),
             "VIOLATION: Valid cancellation transition rejected"
         );
 
         // Pause/resume path: Active ↔ Paused
         assert!(
-            InvariantValidator::check_monotonic_progression(&MatchState::Active, &MatchState::Paused),
+            InvariantValidator::check_monotonic_progression(
+                &MatchState::Active,
+                &MatchState::Paused
+            ),
             "VIOLATION: Valid pause transition rejected"
         );
         assert!(
-            InvariantValidator::check_monotonic_progression(&MatchState::Paused, &MatchState::Active),
+            InvariantValidator::check_monotonic_progression(
+                &MatchState::Paused,
+                &MatchState::Active
+            ),
             "VIOLATION: Valid resume transition rejected"
         );
 
         // Invalid: backward transitions
         let invalid_transitions = vec![
-            (MatchState::Completed, MatchState::Active, "backward to Active"),
-            (MatchState::Active, MatchState::Pending, "backward to Pending"),
-            (MatchState::Cancelled, MatchState::Active, "backward from Cancelled"),
+            (
+                MatchState::Completed,
+                MatchState::Active,
+                "backward to Active",
+            ),
+            (
+                MatchState::Active,
+                MatchState::Pending,
+                "backward to Pending",
+            ),
+            (
+                MatchState::Cancelled,
+                MatchState::Active,
+                "backward from Cancelled",
+            ),
         ];
 
         for (from, to, desc) in &invalid_transitions {
@@ -267,7 +287,7 @@ mod kani_verification {
     fn test_invariant_oracle_auth_required() {
         let oracle = "oracle_address";
         let player1 = "player1_address";
-        let player2 = "player2_address";
+        let _player2 = "player2_address";
         let attacker = "attacker_address";
 
         // Valid: Oracle calls submit_result
@@ -311,7 +331,10 @@ mod kani_verification {
             if from == to {
                 assert!(is_valid, "Self-transition should be valid");
             } else {
-                assert!(!is_valid, "Transition out of Completed terminal state should fail");
+                assert!(
+                    !is_valid,
+                    "Transition out of Completed terminal state should fail"
+                );
             }
         }
 
@@ -356,10 +379,7 @@ mod kani_verification {
         }
 
         // Verify no ID was created twice
-        assert_eq!(
-            ids.len(), 100,
-            "VIOLATION: ID collision detected"
-        );
+        assert_eq!(ids.len(), 100, "VIOLATION: ID collision detected");
 
         // Try to create duplicate (should fail)
         let duplicate_id = 50u64;

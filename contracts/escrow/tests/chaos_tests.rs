@@ -36,7 +36,7 @@
 
 use escrow::errors::Error;
 use escrow::types::{MatchState, Platform, ProtocolConfig, Winner};
-use escrow::{DEFAULT_MINIMUM_STAKE, EscrowContract, EscrowContractClient};
+use escrow::{EscrowContract, EscrowContractClient, DEFAULT_MINIMUM_STAKE};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::StellarAssetClient,
@@ -52,7 +52,7 @@ const MINT_AMOUNT: i128 = 10_000;
 ///
 /// Returns `(env, contract_id, oracle, player1, player2, token, admin)`.
 fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
-    let env = Env::default();
+    let mut env = Env::default();
     env.set_config(soroban_sdk::testutils::EnvTestConfig {
         capture_snapshot_at_drop: false,
     });
@@ -77,6 +77,11 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
 
     (env, contract_id, oracle, player1, player2, token, admin)
@@ -140,7 +145,11 @@ fn chaos_oracle_timeout_match_expires_and_refunds() {
     client.expire_match(&match_id);
 
     let m = client.get_match(&match_id);
-    assert_eq!(m.state, MatchState::Cancelled, "expired match must be Cancelled");
+    assert_eq!(
+        m.state,
+        MatchState::Cancelled,
+        "expired match must be Cancelled"
+    );
     assert_eq!(
         client.get_escrow_balance(&match_id),
         0,
@@ -280,7 +289,7 @@ fn chaos_unauthorized_address_cannot_submit_result() {
 /// We test this by creating a fresh env *without* mock_all_auths.
 #[test]
 fn chaos_player_cannot_impersonate_oracle() {
-    let env = Env::default();
+    let mut env = Env::default();
     env.set_config(soroban_sdk::testutils::EnvTestConfig {
         capture_snapshot_at_drop: false,
     });
@@ -308,6 +317,11 @@ fn chaos_player_cannot_impersonate_oracle() {
         cancellation_fee_basis_points: 0,
         treasury: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
 
     let match_id = client.create_match(
@@ -605,8 +619,8 @@ fn chaos_fund_conservation_across_failure_scenarios() {
         client.claim_vested_payout(&match_id, &player2);
     }
 
-    let final_supply =
-        token_client.balance(&player1) + token_client.balance(&player2)
+    let final_supply = token_client.balance(&player1)
+        + token_client.balance(&player2)
         + token_client.balance(&contract_id);
 
     assert_eq!(

@@ -163,9 +163,7 @@ fn prop_draw_refunds_exact_stakes(stake: i128) -> TestResult {
     client.deposit(&match_id, &player2);
     client.submit_result(&match_id, &Winner::Draw);
 
-    TestResult::from_bool(
-        tc.balance(&player1) == before_p1 && tc.balance(&player2) == before_p2,
-    )
+    TestResult::from_bool(tc.balance(&player1) == before_p1 && tc.balance(&player2) == before_p2)
 }
 
 // ── Unauthorised result submission ────────────────────────────────────────────
@@ -228,7 +226,7 @@ fn prop_timeout_bounds_enforced(timeout: u64) -> bool {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result = client.try_set_match_timeout(&timeout);
-    let valid = timeout >= MIN_MATCH_TIMEOUT_SECONDS && timeout <= MAX_MATCH_TIMEOUT_SECONDS;
+    let valid = (MIN_MATCH_TIMEOUT_SECONDS..=MAX_MATCH_TIMEOUT_SECONDS).contains(&timeout);
 
     if valid {
         result.is_ok()
@@ -236,7 +234,6 @@ fn prop_timeout_bounds_enforced(timeout: u64) -> bool {
         result.is_err()
     }
 }
-
 
 // ── Match State Machine Invariants (Property-Based) ───────────────────────────
 
@@ -252,7 +249,7 @@ fn prop_completed_match_never_transitions(op: u8) -> TestResult {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "state_invariant_game"),
+        &String::from_str(&env, "daa9c3f1"),
         &Platform::Lichess,
     );
 
@@ -278,7 +275,7 @@ fn prop_completed_match_never_transitions(op: u8) -> TestResult {
             // Try to cancel (should fail: invalid state)
             client.try_cancel_match(&match_id, &player1)
         }
-        _ => TestResult::discard(),
+        _ => unreachable!("modulo guarantees this arm is never hit"),
     };
 
     TestResult::from_bool(result.is_err())
@@ -292,7 +289,7 @@ fn prop_cancelled_match_never_pays_out(game_id_variant: u8) -> TestResult {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Create match and move to Cancelled via early timeout
-    let game_id = format!("cancel_no_payout_{}", game_id_variant);
+    let game_id = format!("{:08x}", game_id_variant);
     let match_id = client.create_match(
         &player1,
         &player2,
@@ -328,7 +325,7 @@ fn prop_active_match_can_complete_or_pause(transition: u8) -> TestResult {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "active_transition_test"),
+        &String::from_str(&env, "06fc01a4"),
         &Platform::Lichess,
     );
 
@@ -349,7 +346,7 @@ fn prop_active_match_can_complete_or_pause(transition: u8) -> TestResult {
             // Pause the match (should succeed, moving to Paused)
             client.try_pause_match(&match_id, &player1)
         }
-        _ => TestResult::discard(),
+        _ => unreachable!("modulo guarantees this arm is never hit"),
     };
 
     TestResult::from_bool(result.is_ok())
@@ -367,7 +364,7 @@ fn prop_pending_match_limited_transitions() -> bool {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "pending_transitions"),
+        &String::from_str(&env, "b7631888"),
         &Platform::Lichess,
     );
 

@@ -2,7 +2,6 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::testutils::Address as _;
 
 #[test]
 fn test_cancellation_fee_deduction() {
@@ -27,7 +26,8 @@ fn test_cancellation_fee_deduction() {
     // Initial balances
     assert_eq!(token_client.balance(&player1), 1000);
 
-    let match_id = helpers::create_default_match(&client, &env, &player1, &player2, &token, "tstfeegm");
+    let match_id =
+        helpers::create_default_match(&client, &env, &player1, &player2, &token, "tstfeegm");
 
     // Player 1 deposits
     client.deposit(&match_id, &player1);
@@ -50,7 +50,8 @@ fn test_cancellation_no_fee_if_no_deposit() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = token_client(&env, &token);
 
-    let match_id = helpers::create_default_match(&client, &env, &player1, &player2, &token, "tnfee001");
+    let match_id =
+        helpers::create_default_match(&client, &env, &player1, &player2, &token, "tnfee001");
 
     // Neither player deposits
     // Player 1 cancels
@@ -64,12 +65,12 @@ fn test_cancellation_no_fee_if_no_deposit() {
 
 #[test]
 fn test_cancellation_fee_with_custom_config() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = token_client(&env, &token);
 
     let new_treasury = Address::generate(&env);
-    
+
     // Admin sets new config: 5% fee
     let config = types::ProtocolConfig {
         vesting_duration_seconds: 0,
@@ -82,11 +83,12 @@ fn test_cancellation_fee_with_custom_config() {
         fee_recipient: new_treasury.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
     };
-    
+
     env.mock_all_auths();
     client.set_protocol_config(&config);
 
-    let match_id = helpers::create_default_match(&client, &env, &player1, &player2, &token, "tcstmfee");
+    let match_id =
+        helpers::create_default_match(&client, &env, &player1, &player2, &token, "tcstmfee");
 
     // Player 2 deposits
     client.deposit(&match_id, &player2);

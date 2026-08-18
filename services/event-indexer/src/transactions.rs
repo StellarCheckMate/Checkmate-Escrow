@@ -377,8 +377,7 @@ mod tests {
                     "pattern for {} missing",
                     marker
                 );
-                assert!(TransactionType::all_sql_patterns()
-                    .contains(&format!("%{}%", marker)));
+                assert!(TransactionType::all_sql_patterns().contains(&format!("%{}%", marker)));
             }
         }
     }
@@ -387,9 +386,18 @@ mod tests {
 
     #[test]
     fn transaction_type_parsing_accepts_singular_and_plural() {
-        assert_eq!(TransactionType::parse("deposit"), Some(TransactionType::Deposit));
-        assert_eq!(TransactionType::parse("DEPOSITS"), Some(TransactionType::Deposit));
-        assert_eq!(TransactionType::parse(" payout "), Some(TransactionType::Payout));
+        assert_eq!(
+            TransactionType::parse("deposit"),
+            Some(TransactionType::Deposit)
+        );
+        assert_eq!(
+            TransactionType::parse("DEPOSITS"),
+            Some(TransactionType::Deposit)
+        );
+        assert_eq!(
+            TransactionType::parse(" payout "),
+            Some(TransactionType::Payout)
+        );
         assert_eq!(TransactionType::parse("fees"), Some(TransactionType::Fee));
     }
 

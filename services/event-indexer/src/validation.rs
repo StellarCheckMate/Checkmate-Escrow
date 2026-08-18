@@ -285,10 +285,7 @@ pub fn validate_token_amount(field: &str, raw: &str) -> ValidationResult<i128> {
     }
 
     if !trimmed.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(ValidationError::new(
-            field,
-            "must contain digits only",
-        ));
+        return Err(ValidationError::new(field, "must contain digits only"));
     }
 
     let amount = trimmed.parse::<i128>().map_err(|_| {
@@ -370,15 +367,12 @@ pub fn validate_match_id(field: &str, raw: &str) -> ValidationResult<u64> {
     }
 
     if !trimmed.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(ValidationError::new(
-            field,
-            "must be a whole number",
-        ));
+        return Err(ValidationError::new(field, "must be a whole number"));
     }
 
-    trimmed.parse::<u64>().map_err(|_| {
-        ValidationError::new(field, "is out of range for a 64-bit match id")
-    })
+    trimmed
+        .parse::<u64>()
+        .map_err(|_| ValidationError::new(field, "is out of range for a 64-bit match id"))
 }
 
 /// Validate a token filter: either a contract address or a short symbol.
@@ -458,16 +452,15 @@ pub fn validate_sort_by(field: &str, raw: &str) -> ValidationResult<TransactionS
 }
 
 pub fn validate_sort_order(field: &str, raw: &str) -> ValidationResult<SortOrder> {
-    SortOrder::parse(raw).ok_or_else(|| {
-        ValidationError::new(field, format!("must be asc or desc; got {:?}", raw))
-    })
+    SortOrder::parse(raw)
+        .ok_or_else(|| ValidationError::new(field, format!("must be asc or desc; got {:?}", raw)))
 }
 
 // ── Pagination ────────────────────────────────────────────────────────────────
 
 pub fn validate_limit(field: &str, raw: &str) -> ValidationResult<i64> {
     let value = parse_i64(field, raw)?;
-    if value < MIN_PAGE_LIMIT || value > MAX_PAGE_LIMIT {
+    if !(MIN_PAGE_LIMIT..=MAX_PAGE_LIMIT).contains(&value) {
         return Err(ValidationError::new(
             field,
             format!(
@@ -612,9 +605,7 @@ fn validate_query_param(key: &str, value: &str) -> ValidationResult<()> {
     }
 
     match key {
-        "player_address" | "player" | "address" => {
-            validate_stellar_address(key, value).map(|_| ())
-        }
+        "player_address" | "player" | "address" => validate_stellar_address(key, value).map(|_| ()),
         "status" => validate_match_status(key, value).map(|_| ()),
         "limit" => validate_limit(key, value).map(|_| ()),
         "offset" => validate_offset(key, value).map(|_| ()),
@@ -665,8 +656,17 @@ pub fn validate_path(path: &str) -> ValidationResult<()> {
     match segments.as_slice() {
         // /match/:match_id and /events/:match_id
         ["match", id] | ["events", id] => validate_match_id("match_id", id).map(|_| ()),
+        // /matches/:match_id — "active" and "pending" are static sibling routes,
+        // not match ids, so they're left for routing to handle.
+        ["matches", id] if *id != "active" && *id != "pending" => {
+            validate_match_id("match_id", id).map(|_| ())
+        }
         // /transactions/player/:player_address
         ["transactions", "player", address] => {
+            validate_account_address("player_address", address).map(|_| ())
+        }
+        // /players/:address/matches
+        ["players", address, "matches"] => {
             validate_account_address("player_address", address).map(|_| ())
         }
         _ => Ok(()),
@@ -791,17 +791,17 @@ mod tests {
     #[test]
     fn contract_address_is_rejected_where_an_account_is_required() {
         let err = validate_account_address("player_address", VALID_CONTRACT).unwrap_err();
-        assert!(
-            err.message.contains("G (account)"),
-            "got {:?}",
-            err.message
-        );
+        assert!(err.message.contains("G (account)"), "got {:?}", err.message);
     }
 
     #[test]
     fn account_address_is_rejected_where_a_contract_is_required() {
         let err = validate_contract_address("token", VALID_ACCOUNT).unwrap_err();
-        assert!(err.message.contains("C (contract)"), "got {:?}", err.message);
+        assert!(
+            err.message.contains("C (contract)"),
+            "got {:?}",
+            err.message
+        );
     }
 
     #[test]
@@ -1015,7 +1015,11 @@ mod tests {
     #[test]
     fn limit_error_message_states_the_range() {
         let err = validate_limit("limit", "5000").unwrap_err();
-        assert!(err.message.contains("between 1 and 1000"), "got {:?}", err.message);
+        assert!(
+            err.message.contains("between 1 and 1000"),
+            "got {:?}",
+            err.message
+        );
     }
 
     #[test]

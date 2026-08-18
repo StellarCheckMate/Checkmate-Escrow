@@ -20,7 +20,10 @@ use chrono::{DateTime, Utc};
 use deadpool_postgres::{Config as PoolConfig, ManagerConfig, Pool, RecyclingMethod, Runtime};
 use tokio_postgres::NoTls;
 
-use crate::models::{IndexedEvent, MatchInfo, MatchStatus, QueryFilters, Winner};
+use crate::models::{
+    AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters,
+    TokenAnalytics, Winner,
+};
 use crate::transactions::{TransactionHistoryFilters, TransactionRecord, TransactionType};
 
 // ── Pool helpers ──────────────────────────────────────────────────────────────
@@ -50,7 +53,10 @@ pub struct Database {
 
 impl Database {
     pub fn new(write_pool: Pool, read_pool: Pool) -> Self {
-        Database { write_pool, read_pool }
+        Database {
+            write_pool,
+            read_pool,
+        }
     }
 
     /// Build a `Database` from DSN strings and pool sizes.
@@ -62,13 +68,19 @@ impl Database {
     ) -> Result<Self> {
         let write_pool = build_pool(write_dsn, write_pool_size)?;
         let read_pool = build_pool(read_dsn, read_pool_size)?;
-        Ok(Database { write_pool, read_pool })
+        Ok(Database {
+            write_pool,
+            read_pool,
+        })
     }
 
     // ── Schema ────────────────────────────────────────────────────────────
 
     pub async fn init_schema(&self) -> Result<()> {
-        let conn = self.write_pool.get().await
+        let conn = self
+            .write_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Pool error: {}", e))?;
 
         conn.batch_execute(
@@ -144,7 +156,10 @@ impl Database {
 
     /// Insert an event.  Uses `ON CONFLICT DO NOTHING` so re-ingestion is safe.
     pub async fn insert_event(&self, event: &IndexedEvent) -> Result<()> {
-        let conn = self.write_pool.get().await
+        let conn = self
+            .write_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Pool error: {}", e))?;
 
         conn.execute(
@@ -186,7 +201,10 @@ impl Database {
 
     /// Get the latest polled ledger for a contract.
     pub async fn get_latest_polled_ledger(&self, contract_id: &str) -> Result<Option<u32>> {
-        let conn = self.write_pool.get().await
+        let conn = self
+            .write_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Pool error: {}", e))?;
 
         let row = conn
@@ -197,7 +215,9 @@ impl Database {
             .await
             .map_err(|e| anyhow!("get_latest_polled_ledger failed: {}", e))?;
 
-        Ok(row.and_then(|r| r.get::<_, Option<i32>>(0)).map(|l| l as u32))
+        Ok(row
+            .and_then(|r| r.get::<_, Option<i32>>(0))
+            .map(|l| l as u32))
     }
 
     /// Update ingestion state after a poll.
@@ -207,7 +227,10 @@ impl Database {
         ledger: u32,
         error: Option<&str>,
     ) -> Result<()> {
-        let conn = self.write_pool.get().await
+        let conn = self
+            .write_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Pool error: {}", e))?;
 
         conn.execute(
@@ -232,7 +255,10 @@ impl Database {
         end_ledger: u32,
         reason: &str,
     ) -> Result<i64> {
-        let conn = self.write_pool.get().await
+        let conn = self
+            .write_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Pool error: {}", e))?;
 
         // Mark events as invalidated
@@ -249,7 +275,12 @@ impl Database {
         conn.execute(
             "INSERT INTO reorg_events (contract_id, reorg_ledger, reason, events_invalidated_count)
              VALUES ($1, $2, $3, $4)",
-            &[&contract_id, &(start_ledger as i32), &reason, &(count as i32)],
+            &[
+                &contract_id,
+                &(start_ledger as i32),
+                &reason,
+                &(count as i32),
+            ],
         )
         .await
         .map_err(|e| anyhow!("Failed to log reorg event: {}", e))?;
@@ -260,7 +291,10 @@ impl Database {
     // ── Read path (via read_pool) ─────────────────────────────────────────
 
     pub async fn get_events_by_match(&self, match_id: u64) -> Result<Vec<IndexedEvent>> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error: {}", e))?;
 
         let rows = conn
@@ -285,7 +319,10 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<Vec<IndexedEvent>> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error: {}", e))?;
 
         let rows = conn
@@ -306,7 +343,10 @@ impl Database {
     }
 
     pub async fn query_events(&self, filters: &QueryFilters) -> Result<Vec<IndexedEvent>> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error: {}", e))?;
 
         // Build a parameterised query dynamically to avoid SQL injection while
@@ -388,7 +428,10 @@ impl Database {
         &self,
         status: Option<&MatchStatus>,
     ) -> Result<Vec<MatchInfo>> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error: {}", e))?;
 
         let match_ids: Vec<i64> = if let Some(s) = status {
@@ -437,7 +480,10 @@ impl Database {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<MatchInfo>, i64)> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error: {}", e))?;
 
         // Build the WHERE clause for status filtering
@@ -596,7 +642,10 @@ impl Database {
     // ── Utility ───────────────────────────────────────────────────────────
 
     pub async fn ping(&self) -> Result<()> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error: {}", e))?;
         conn.query_one("SELECT 1", &[])
             .await
@@ -605,7 +654,10 @@ impl Database {
     }
 
     pub async fn total_event_count(&self) -> Result<i64> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error: {}", e))?;
         let row = conn
             .query_one("SELECT COUNT(*)::BIGINT FROM events", &[])
@@ -615,7 +667,10 @@ impl Database {
     }
 
     pub async fn get_latest_ledger(&self) -> Result<Option<u32>> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error (get_latest_ledger): {}", e))?;
         let row = conn
             .query_one("SELECT MAX(ledger_sequence) FROM events", &[])
@@ -693,7 +748,10 @@ impl Database {
         start_date: Option<DateTime<Utc>>,
         end_date: Option<DateTime<Utc>>,
     ) -> Result<AnalyticsOverview> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error: {}", e))?;
 
         let mut query = String::from(
@@ -755,7 +813,10 @@ impl Database {
         start_date: Option<DateTime<Utc>>,
         end_date: Option<DateTime<Utc>>,
     ) -> Result<PlayerAnalytics> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error: {}", e))?;
 
         // Build time-range clause (reused in both queries)
@@ -774,7 +835,6 @@ impl Database {
         if let Some(end) = end_date {
             time_clause.push_str(&format!(" AND timestamp <= ${idx}"));
             params.push(Box::new(end));
-            idx += 1;
         }
 
         let stats_query = format!(
@@ -818,7 +878,11 @@ impl Database {
         let draws: i64 = stats_row.get(3);
         let total_winnings: String = stats_row.get(4);
         let played = wins + losses + draws;
-        let win_rate = if played > 0 { wins as f64 / played as f64 * 100.0 } else { 0.0 };
+        let win_rate = if played > 0 {
+            wins as f64 / played as f64 * 100.0
+        } else {
+            0.0
+        };
 
         // Fetch paginated match IDs for this player
         let mut params2: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
@@ -898,7 +962,10 @@ impl Database {
         start_date: Option<DateTime<Utc>>,
         end_date: Option<DateTime<Utc>>,
     ) -> Result<TokenAnalytics> {
-        let conn = self.read_pool.get().await
+        let conn = self
+            .read_pool
+            .get()
+            .await
             .map_err(|e| anyhow!("Read pool error: {}", e))?;
 
         let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
@@ -914,7 +981,6 @@ impl Database {
         if let Some(end) = end_date {
             time_clause.push_str(&format!(" AND timestamp <= ${idx}"));
             params.push(Box::new(end));
-            idx += 1;
         }
 
         let stats_query = format!(
@@ -1033,7 +1099,9 @@ fn row_to_transaction(row: &tokio_postgres::Row) -> Option<TransactionRecord> {
         tx_type,
         // Events that carry no amount (e.g. a fee event whose value lives in the
         // match record) report "0" rather than dropping the row.
-        amount: amount.filter(|a| !a.is_empty()).unwrap_or_else(|| "0".to_string()),
+        amount: amount
+            .filter(|a| !a.is_empty())
+            .unwrap_or_else(|| "0".to_string()),
         token: token.unwrap_or_default(),
         event_id: row.get(0),
         event_type,

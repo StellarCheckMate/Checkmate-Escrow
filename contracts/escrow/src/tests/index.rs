@@ -1,8 +1,5 @@
 use super::*;
-use soroban_sdk::testutils::{
-    storage::{Instance as _, Persistent as _},
-    Address as _, Ledger as _,
-};
+use soroban_sdk::testutils::Ledger as _;
 
 /// Test #584: game ID reservation remains enforced after ledger advancement
 #[test]
@@ -23,7 +20,8 @@ fn test_game_id_reservation_survives_ledger_advancement() {
     );
 
     // Advance ledgers
-    env.ledger().set_sequence_number(env.ledger().sequence() + 100);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 100);
 
     // Assert duplicate create still fails
     let result = client.try_create_match(
@@ -153,11 +151,12 @@ fn test_active_index_ordering_stable_after_cancellation_gaps() {
 fn test_active_pagination_handles_empty_and_partial_pages() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+    env.budget().reset_unlimited();
 
     // Mint extra tokens so players can fund all 25 matches (25 × 100 = 2500 each)
     let asset_client = StellarAssetClient::new(&env, &token);
-    asset_client.mint(&player1, &1500);
-    asset_client.mint(&player2, &1500);
+    asset_client.mint(&player1, &2500);
+    asset_client.mint(&player2, &2500);
 
     // Create enough matches for multiple pages (assuming page size of 10)
     let mut match_ids = Vec::new();
@@ -167,7 +166,7 @@ fn test_active_pagination_handles_empty_and_partial_pages() {
             &player2,
             &100,
             &token,
-            &String::from_str(&env, &format!("game_{}", i)),
+            &String::from_str(&env, &format!("{:08x}", i)),
             &Platform::Lichess,
         );
         match_ids.push(match_id);
@@ -355,7 +354,7 @@ fn test_get_completed_matches_returns_only_completed() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "completed_a"),
+        &String::from_str(&env, "cdbb31f1"),
         &Platform::Lichess,
     );
 
@@ -365,7 +364,7 @@ fn test_get_completed_matches_returns_only_completed() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "completed_b"),
+        &String::from_str(&env, "58296124"),
         &Platform::ChessDotCom,
     );
 
@@ -375,7 +374,7 @@ fn test_get_completed_matches_returns_only_completed() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "pending_only"),
+        &String::from_str(&env, "7db638e2"),
         &Platform::Lichess,
     );
     let _ = match_c; // suppress unused warning — intentionally left Pending
@@ -446,7 +445,7 @@ fn test_get_completed_matches_empty_when_none_completed() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "still_pending"),
+        &String::from_str(&env, "5a172d4e"),
         &Platform::Lichess,
     );
 
@@ -472,8 +471,15 @@ fn test_get_completed_matches_paginated() {
     // Create and complete three matches.
     let mut ids = std::vec::Vec::new();
     for i in 0..3u32 {
-        let game_id = String::from_str(&env, &format!("page_game_{}", i));
-        let id = client.create_match(&player1, &player2, &100, &token, &game_id, &Platform::Lichess);
+        let game_id = String::from_str(&env, &format!("{:08x}", i));
+        let id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &game_id,
+            &Platform::Lichess,
+        );
         client.deposit(&id, &player1);
         client.deposit(&id, &player2);
         client.submit_result(&id, &Winner::Player1);

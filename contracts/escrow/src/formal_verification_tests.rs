@@ -1,17 +1,21 @@
-/// Formal Verification Test Suite
-/// 
-/// This module contains #[test] functions that comprehensively verify the contract's
-/// safety invariants and probe known vulnerabilities using the formal_verification
-/// module's state-space explorer and invariant validators.
+//! Formal Verification Test Suite
+//!
+//! This module contains #[test] functions that comprehensively verify the contract's
+//! safety invariants and probe known vulnerabilities using the formal_verification
+//! module's state-space explorer and invariant validators.
 
 #[cfg(test)]
 mod formal_verification {
     use crate::formal_verification::*;
     use crate::types::MatchState;
-    use std::{collections::{HashMap, HashSet}, format, println, string::ToString, vec};
+    use std::{
+        collections::{HashMap, HashSet}, println,
+        string::ToString,
+        vec,
+    };
 
     /// Test: Exhaustive state-space exploration
-    /// 
+    ///
     /// Explores all 6 states and tests all valid/invalid transitions
     /// as documented in formal-verification-state-machine.json
     #[test]
@@ -41,7 +45,7 @@ mod formal_verification {
     }
 
     /// Test: Valid state transitions (8 documented transitions)
-    /// 
+    ///
     /// Verifies the 8 valid transitions:
     /// 1. Pending → Active
     /// 2. Pending → Cancelled
@@ -56,12 +60,28 @@ mod formal_verification {
         let transitions = vec![
             (MatchState::Pending, MatchState::Active, "deposit"),
             (MatchState::Pending, MatchState::Cancelled, "cancel_match"),
-            (MatchState::Active, MatchState::PendingResult, "submit_result"),
-            (MatchState::Active, MatchState::Completed, "submit_result (immediate)"),
+            (
+                MatchState::Active,
+                MatchState::PendingResult,
+                "submit_result",
+            ),
+            (
+                MatchState::Active,
+                MatchState::Completed,
+                "submit_result (immediate)",
+            ),
             (MatchState::Active, MatchState::Paused, "pause_match"),
             (MatchState::Paused, MatchState::Active, "resume_match"),
-            (MatchState::PendingResult, MatchState::Completed, "finalize_match"),
-            (MatchState::Completed, MatchState::Completed, "completed (terminal)"),
+            (
+                MatchState::PendingResult,
+                MatchState::Completed,
+                "finalize_match",
+            ),
+            (
+                MatchState::Completed,
+                MatchState::Completed,
+                "completed (terminal)",
+            ),
         ];
 
         for (from, to, operation) in &transitions {
@@ -78,16 +98,36 @@ mod formal_verification {
     }
 
     /// Test: Invalid state transitions are properly rejected
-    /// 
+    ///
     /// Verifies that backward and invalid transitions fail
     #[test]
     fn test_invalid_state_transitions() {
         let invalid_transitions = vec![
-            (MatchState::Active, MatchState::Pending, "backwards to Pending"),
-            (MatchState::Completed, MatchState::Active, "backwards to Active"),
-            (MatchState::Cancelled, MatchState::Active, "cancelled to active"),
-            (MatchState::PendingResult, MatchState::Active, "backwards to Active"),
-            (MatchState::Paused, MatchState::Cancelled, "paused to cancelled"),
+            (
+                MatchState::Active,
+                MatchState::Pending,
+                "backwards to Pending",
+            ),
+            (
+                MatchState::Completed,
+                MatchState::Active,
+                "backwards to Active",
+            ),
+            (
+                MatchState::Cancelled,
+                MatchState::Active,
+                "cancelled to active",
+            ),
+            (
+                MatchState::PendingResult,
+                MatchState::Active,
+                "backwards to Active",
+            ),
+            (
+                MatchState::Paused,
+                MatchState::Cancelled,
+                "paused to cancelled",
+            ),
         ];
 
         for (from, to, description) in &invalid_transitions {
@@ -102,7 +142,7 @@ mod formal_verification {
     }
 
     /// Test INV-1: No Double Payout
-    /// 
+    ///
     /// Verifies that payout occurs exactly once per match
     #[test]
     fn test_inv1_no_double_payout() {
@@ -130,7 +170,7 @@ mod formal_verification {
     }
 
     /// Test INV-2: No Fund Loss
-    /// 
+    ///
     /// Verifies that total escrowed <= contract balance
     #[test]
     fn test_inv2_no_fund_loss() {
@@ -139,12 +179,20 @@ mod formal_verification {
         let contract_balance = stake * 2;
 
         assert!(
-            InvariantValidator::check_no_fund_loss(&FormalVerificationContext::new(1), total_escrowed, contract_balance),
+            InvariantValidator::check_no_fund_loss(
+                &FormalVerificationContext::new(1),
+                total_escrowed,
+                contract_balance
+            ),
             "Fund conservation should pass with matching balance"
         );
 
         assert!(
-            !InvariantValidator::check_no_fund_loss(&FormalVerificationContext::new(1), total_escrowed, stake),
+            !InvariantValidator::check_no_fund_loss(
+                &FormalVerificationContext::new(1),
+                total_escrowed,
+                stake
+            ),
             "Fund loss should fail with insufficient balance"
         );
 
@@ -152,7 +200,7 @@ mod formal_verification {
     }
 
     /// Test INV-3: No Unreachable-But-Fundable States
-    /// 
+    ///
     /// Verifies that funded matches have valid exit paths
     #[test]
     fn test_inv3_no_unreachable_states() {
@@ -177,7 +225,7 @@ mod formal_verification {
     }
 
     /// Test INV-4: Monotonic State Progression
-    /// 
+    ///
     /// Already tested above, but this explicitly names it
     #[test]
     fn test_inv4_monotonic_progression() {
@@ -186,12 +234,12 @@ mod formal_verification {
     }
 
     /// Test INV-5: Deposit Idempotency
-    /// 
+    ///
     /// Verifies player cannot deposit twice
     #[test]
     fn test_inv5_deposit_idempotency() {
-        let mut context = FormalVerificationContext::new(1);
-        
+        let _context = FormalVerificationContext::new(1);
+
         // First deposit succeeds
         assert!(
             InvariantValidator::check_deposit_idempotency(1, false),
@@ -208,7 +256,7 @@ mod formal_verification {
     }
 
     /// Test INV-6: Authorization Boundaries
-    /// 
+    ///
     /// Verifies only authorized parties can perform operations
     #[test]
     fn test_inv6_authorization_boundaries() {
@@ -226,7 +274,7 @@ mod formal_verification {
     }
 
     /// Test INV-7: Winner Uniqueness
-    /// 
+    ///
     /// Verifies exactly one winner is set
     #[test]
     fn test_inv7_winner_uniqueness() {
@@ -244,7 +292,7 @@ mod formal_verification {
     }
 
     /// Test INV-8: Escrow Balance Conservation
-    /// 
+    ///
     /// Verifies payout equals 2x stake (full pot)
     #[test]
     fn test_inv8_escrow_conservation() {
@@ -263,7 +311,7 @@ mod formal_verification {
     }
 
     /// Test INV-9: Oracle Result Integrity
-    /// 
+    ///
     /// Verifies oracle result is immutable
     #[test]
     fn test_inv9_oracle_integrity() {
@@ -276,7 +324,7 @@ mod formal_verification {
     }
 
     /// Test INV-10: Dispute Period Enforcement
-    /// 
+    ///
     /// Verifies results cannot finalize before deadline
     #[test]
     fn test_inv10_dispute_period_enforcement() {
@@ -294,7 +342,7 @@ mod formal_verification {
     }
 
     /// Test INV-11: Single Vote Per Voter
-    /// 
+    ///
     /// Verifies no voter votes twice
     #[test]
     fn test_inv11_single_vote_per_voter() {
@@ -317,7 +365,7 @@ mod formal_verification {
     }
 
     /// Test INV-12: Tier-Based Stake Bounds
-    /// 
+    ///
     /// Verifies stakes are within tier limits
     #[test]
     fn test_inv12_tier_stake_bounds() {
@@ -335,7 +383,7 @@ mod formal_verification {
     }
 
     /// Test INV-13: Token Allowlist Enforcement
-    /// 
+    ///
     /// Verifies only allowlisted tokens can be used
     #[test]
     fn test_inv13_token_allowlist() {
@@ -358,7 +406,7 @@ mod formal_verification {
     }
 
     /// Test INV-14: Match ID Uniqueness
-    /// 
+    ///
     /// Verifies each match has unique ID
     #[test]
     fn test_inv14_match_id_uniqueness() {
@@ -380,7 +428,7 @@ mod formal_verification {
     }
 
     /// Test INV-15: Game ID Uniqueness
-    /// 
+    ///
     /// Verifies each game ID links to one match
     #[test]
     fn test_inv15_game_id_uniqueness() {
@@ -402,7 +450,7 @@ mod formal_verification {
     }
 
     /// Test INV-16: Player Identity Separation
-    /// 
+    ///
     /// Verifies no self-matches
     #[test]
     fn test_inv16_player_identity() {
@@ -420,7 +468,7 @@ mod formal_verification {
     }
 
     /// Test INV-17: Positive Stake Amount
-    /// 
+    ///
     /// Verifies stakes are positive
     #[test]
     fn test_inv17_positive_stake() {
@@ -443,22 +491,26 @@ mod formal_verification {
     }
 
     /// Test INV-18: Valid Match State Enum
-    /// 
+    ///
     /// Rust type system enforces this
     #[test]
     fn test_inv18_valid_state_enum() {
         let mut context = FormalVerificationContext::new(1);
         context.current_state = MatchState::Pending;
-        assert!(InvariantValidator::check_valid_state(&context.current_state));
+        assert!(InvariantValidator::check_valid_state(
+            &context.current_state
+        ));
 
         context.current_state = MatchState::Active;
-        assert!(InvariantValidator::check_valid_state(&context.current_state));
+        assert!(InvariantValidator::check_valid_state(
+            &context.current_state
+        ));
 
         println!("✓ INV-18 (Valid Match State Enum) verified");
     }
 
     /// Test INV-19: Timeout Bounds
-    /// 
+    ///
     /// Verifies timeout is in [17280, 1555200]
     #[test]
     fn test_inv19_timeout_bounds() {
@@ -491,7 +543,7 @@ mod formal_verification {
     }
 
     /// Test INV-20: Contract Pause Blocks Mutations
-    /// 
+    ///
     /// Verifies pause blocks create_match, deposit, submit_result
     #[test]
     fn test_inv20_pause_blocks_mutations() {
@@ -524,7 +576,7 @@ mod formal_verification {
     }
 
     /// Test VULN-1: Double-Payout Vulnerability
-    /// 
+    ///
     /// Probes for double payout attacks
     #[test]
     fn test_vuln1_double_payout_probe() {
@@ -534,13 +586,16 @@ mod formal_verification {
         context.player1_claimed = true;
 
         let violations = VulnerabilityProbe::probe_double_payout(&mut context);
-        
+
         // Probe may find violations - we just verify probe works
-        println!("✓ VULN-1 (Double-Payout) probe executed - violations found: {}", violations.len());
+        println!(
+            "✓ VULN-1 (Double-Payout) probe executed - violations found: {}",
+            violations.len()
+        );
     }
 
     /// Test VULN-2: Missing Refunds
-    /// 
+    ///
     /// Probes for refund vulnerabilities
     #[test]
     fn test_vuln2_missing_refunds_probe() {
@@ -551,16 +606,23 @@ mod formal_verification {
         context.stake_amount = 100;
 
         let violations = VulnerabilityProbe::probe_missing_refunds(&mut context);
-        assert_eq!(violations.len(), 0, "No refund violation when both undeposited");
+        assert_eq!(
+            violations.len(),
+            0,
+            "No refund violation when both undeposited"
+        );
 
         context.player1_deposited = true;
         let violations = VulnerabilityProbe::probe_missing_refunds(&mut context);
         // Would detect refund issue if escrow not cleared
-        println!("✓ VULN-2 (Missing Refunds) probe executed - violations found: {}", violations.len());
+        println!(
+            "✓ VULN-2 (Missing Refunds) probe executed - violations found: {}",
+            violations.len()
+        );
     }
 
     /// Test VULN-3: Unreachable Funds
-    /// 
+    ///
     /// Probes for dead states with funds
     #[test]
     fn test_vuln3_unreachable_funds_probe() {
@@ -577,21 +639,27 @@ mod formal_verification {
     }
 
     /// Test VULN-6: Unauthorized Mutations
-    /// 
+    ///
     /// Probes for authorization bypass
     #[test]
     fn test_vuln6_unauthorized_mutations_probe() {
-        let violations = VulnerabilityProbe::probe_unauthorized_mutations("attacker", "player1", "deposit");
-        assert_eq!(violations.len(), 1, "Unauthorized caller should be detected");
+        let violations =
+            VulnerabilityProbe::probe_unauthorized_mutations("attacker", "player1", "deposit");
+        assert_eq!(
+            violations.len(),
+            1,
+            "Unauthorized caller should be detected"
+        );
 
-        let violations = VulnerabilityProbe::probe_unauthorized_mutations("player1", "player1", "deposit");
+        let violations =
+            VulnerabilityProbe::probe_unauthorized_mutations("player1", "player1", "deposit");
         assert_eq!(violations.len(), 0, "Authorized caller should pass");
 
         println!("✓ VULN-6 (Unauthorized Mutations) probe executed");
     }
 
     /// Test: Generate Formal Verification Report
-    /// 
+    ///
     /// Generates JSON report of all violations
     #[test]
     fn test_generate_formal_verification_report() {
@@ -600,12 +668,12 @@ mod formal_verification {
         let report = explorer.check_all_invariants(&contexts);
 
         let json = report.to_json();
-        
+
         // Verify JSON is valid
         assert!(json.contains("formal_verification_report"));
         assert!(json.contains("violations"));
         assert!(json.contains("timestamp"));
-        
+
         println!("\n═══ FORMAL VERIFICATION REPORT ═══");
         println!("{}", json);
         println!("═══════════════════════════════════\n");
@@ -619,12 +687,12 @@ mod formal_verification {
     }
 
     /// Test: Comprehensive Invariant Check
-    /// 
+    ///
     /// Runs all 20 invariants systematically
     #[test]
     fn test_comprehensive_invariant_verification() {
         println!("\n═══ COMPREHENSIVE INVARIANT VERIFICATION ═══");
-        
+
         // These tests are already run above, but summarize here
         println!("✓ INV-1: No Double Payout");
         println!("✓ INV-2: No Fund Loss");
@@ -646,7 +714,7 @@ mod formal_verification {
         println!("✓ INV-18: Valid Match State Enum");
         println!("✓ INV-19: Timeout Bounds");
         println!("✓ INV-20: Contract Pause Blocks Mutations");
-        
+
         println!("═════════════════════════════════════════════\n");
     }
 }

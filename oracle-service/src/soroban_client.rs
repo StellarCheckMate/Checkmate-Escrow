@@ -82,7 +82,7 @@ impl SorobanClient {
         winner: &crate::oracle::Winner,
         signing_key: &Zeroizing<[u8; 32]>,
     ) -> Result<String, OracleServiceError> {
-        let signing_key_obj = SigningKey::from_bytes(&**signing_key);
+        let signing_key_obj = SigningKey::from_bytes(signing_key);
         let pubkey_bytes: [u8; 32] = signing_key_obj.verifying_key().to_bytes();
 
         // ── 1. Fetch account sequence number ─────────────────────────────
@@ -90,12 +90,8 @@ impl SorobanClient {
         let sequence = self.get_account_sequence(&g_address).await?;
 
         // ── 2. Build the InvokeHostFunction operation ─────────────────────
-        let (op, _winner_val) = build_invoke_op(
-            &self.contract_escrow,
-            match_id,
-            winner,
-            &pubkey_bytes,
-        )?;
+        let (op, _winner_val) =
+            build_invoke_op(&self.contract_escrow, match_id, winner, &pubkey_bytes)?;
 
         // ── 3. Build a preliminary transaction (no resource fees yet) ──────
         let source = MuxedAccount::Ed25519(Uint256(pubkey_bytes));
@@ -201,10 +197,7 @@ impl SorobanClient {
         // simulateTransaction accepts either a raw transaction or a
         // TransactionEnvelope; use a FeeBumpTransaction wrapper format.
         let result = self
-            .rpc_call(
-                "simulateTransaction",
-                json!({ "transaction": xdr }),
-            )
+            .rpc_call("simulateTransaction", json!({ "transaction": xdr }))
             .await?;
 
         let error = result.get("error").and_then(|v| v.as_str());
@@ -212,14 +205,8 @@ impl SorobanClient {
             return Err(OracleServiceError::SimulateError(e.to_string()));
         }
 
-        let min_resource_fee = result["minResourceFee"]
-            .as_str()
-            .unwrap_or("0")
-            .to_string();
-        let transaction_data = result["transactionData"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let min_resource_fee = result["minResourceFee"].as_str().unwrap_or("0").to_string();
+        let transaction_data = result["transactionData"].as_str().unwrap_or("").to_string();
 
         let results = result["results"].clone();
 
@@ -230,7 +217,10 @@ impl SorobanClient {
         })
     }
 
-    async fn send_transaction(&self, envelope: &TransactionEnvelope) -> Result<String, OracleServiceError> {
+    async fn send_transaction(
+        &self,
+        envelope: &TransactionEnvelope,
+    ) -> Result<String, OracleServiceError> {
         let xdr = envelope
             .to_xdr_base64(Limits::none())
             .map_err(|e| OracleServiceError::XdrError(e.to_string()))?;
@@ -248,9 +238,9 @@ impl SorobanClient {
             )));
         }
 
-        let hash = result["hash"]
-            .as_str()
-            .ok_or_else(|| OracleServiceError::RpcError("missing hash in sendTransaction".into()))?;
+        let hash = result["hash"].as_str().ok_or_else(|| {
+            OracleServiceError::RpcError("missing hash in sendTransaction".into())
+        })?;
 
         Ok(hash.to_string())
     }
@@ -292,9 +282,7 @@ impl SorobanClient {
 
     /// Health check: test Stellar RPC connectivity.
     pub async fn health_check(&self) -> Result<(), OracleServiceError> {
-        self.rpc_call("getNetwork", json!({}))
-            .await
-            .map(|_| ())
+        self.rpc_call("getNetwork", json!({})).await.map(|_| ())
     }
 
     /// Health check: test contract reachability by attempting a read.
@@ -341,8 +329,9 @@ fn winner_to_sc_val(winner: &crate::oracle::Winner) -> ScVal {
 
 fn decode_contract_id(strkey: &str) -> Result<[u8; 32], OracleServiceError> {
     use stellar_strkey::Contract;
-    let contract = Contract::from_string(strkey)
-        .map_err(|e| OracleServiceError::Config(format!("invalid contract strkey '{}': {}", strkey, e)))?;
+    let contract = Contract::from_string(strkey).map_err(|e| {
+        OracleServiceError::Config(format!("invalid contract strkey '{}': {}", strkey, e))
+    })?;
     Ok(contract.0)
 }
 
@@ -473,7 +462,9 @@ fn decode_soroban_data(base64_xdr: &str) -> Result<SorobanTransactionData, Oracl
         .map_err(|e| OracleServiceError::XdrError(format!("soroban data decode: {}", e)))
 }
 
-fn decode_auth_entries(results: &Value) -> Result<Vec<SorobanAuthorizationEntry>, OracleServiceError> {
+fn decode_auth_entries(
+    results: &Value,
+) -> Result<Vec<SorobanAuthorizationEntry>, OracleServiceError> {
     use stellar_xdr::ReadXdr;
     let arr = match results.as_array() {
         Some(a) => a,

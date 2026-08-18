@@ -87,11 +87,7 @@ async fn test_ip_rate_limit_enforced() {
             .send()
             .await
             .unwrap();
-        assert_eq!(
-            resp.status().as_u16(),
-            200,
-            "request {i} must succeed"
-        );
+        assert_eq!(resp.status().as_u16(), 200, "request {i} must succeed");
     }
 
     // The 101st must be rate-limited.
@@ -101,11 +97,7 @@ async fn test_ip_rate_limit_enforced() {
         .send()
         .await
         .unwrap();
-    assert_eq!(
-        resp.status().as_u16(),
-        429,
-        "request 101 must return 429"
-    );
+    assert_eq!(resp.status().as_u16(), 429, "request 101 must return 429");
 
     // The 429 response must include Retry-After.
     assert!(

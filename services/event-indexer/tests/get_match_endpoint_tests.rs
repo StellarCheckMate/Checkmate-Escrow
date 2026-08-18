@@ -35,7 +35,7 @@ async fn get_match(match_id: u64) -> (StatusCode, String) {
     let response = app()
         .oneshot(
             Request::builder()
-                .uri(&format!("/matches/{}", match_id))
+                .uri(format!("/matches/{}", match_id))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -52,19 +52,26 @@ async fn get_match(match_id: u64) -> (StatusCode, String) {
 #[tokio::test]
 async fn get_match_invalid_match_id_returns_404() {
     let (status, body) = get_match(99999).await;
-    
+
     // Parse the response to ensure it's proper JSON
-    let response: ApiResponse<Option<MatchInfo>> = serde_json::from_str(&body)
-        .expect("Response should be valid JSON");
-    
-    assert_eq!(status, StatusCode::NOT_FOUND, "Expected 404 for non-existent match");
+    let response: ApiResponse<Option<MatchInfo>> =
+        serde_json::from_str(&body).expect("Response should be valid JSON");
+
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "Expected 404 for non-existent match"
+    );
     assert!(!response.success, "Response success should be false");
-    assert!(response.data.is_none(), "Response data should be None for 404");
+    assert!(
+        response.data.is_none(),
+        "Response data should be None for 404"
+    );
     assert!(
         response.error.is_some(),
         "Response should have an error message"
     );
-    
+
     let error_msg = response.error.unwrap();
     assert!(
         error_msg.contains("99999"),
@@ -81,11 +88,11 @@ async fn get_match_invalid_match_id_returns_404() {
 #[tokio::test]
 async fn get_match_endpoint_returns_valid_response_structure() {
     let (status, body) = get_match(1).await;
-    
+
     // Even though the database is unreachable, the response structure should be valid
-    let _response: ApiResponse<Option<MatchInfo>> = serde_json::from_str(&body)
-        .expect("Response should always be valid JSON ApiResponse");
-    
+    let _response: ApiResponse<Option<MatchInfo>> =
+        serde_json::from_str(&body).expect("Response should always be valid JSON ApiResponse");
+
     // The request will fail with 500 due to unreachable DB, not 400 (validation),
     // which means the endpoint routing and parameter parsing works correctly
     assert_ne!(
@@ -104,17 +111,16 @@ async fn get_match_with_non_numeric_id_returns_validation_error() {
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
-        .await;
-    
+        .await
+        .unwrap();
+
     // The route won't even match if the parameter can't be parsed as u64
     // This should result in a 404 from the router (no matching route)
-    if let Ok(resp) = response {
-        let status = resp.status();
-        // Either 404 (route not matched) or 400 (validation) are acceptable
-        assert!(
-            status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST,
-            "Non-numeric match_id should be rejected, got: {}",
-            status
-        );
-    }
+    let status = response.status();
+    // Either 404 (route not matched) or 400 (validation) are acceptable
+    assert!(
+        status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST,
+        "Non-numeric match_id should be rejected, got: {}",
+        status
+    );
 }

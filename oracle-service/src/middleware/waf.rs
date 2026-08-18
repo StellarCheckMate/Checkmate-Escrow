@@ -111,8 +111,7 @@ pub struct WafState {
 impl WafState {
     /// Create a new state and spawn the background cleanup task.
     pub fn new() -> Self {
-        let burst: Arc<Mutex<HashMap<String, BurstEntry>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let burst: Arc<Mutex<HashMap<String, BurstEntry>>> = Arc::new(Mutex::new(HashMap::new()));
 
         let burst_clone = Arc::clone(&burst);
         tokio::spawn(async move {
@@ -121,9 +120,7 @@ impl WafState {
                 ticker.tick().await;
                 let mut guard = burst_clone.lock().await;
                 let now = Instant::now();
-                guard.retain(|_, e| {
-                    now.saturating_duration_since(e.last_seen) < BURST_STALE_AFTER
-                });
+                guard.retain(|_, e| now.saturating_duration_since(e.last_seen) < BURST_STALE_AFTER);
             }
         });
 
@@ -150,7 +147,10 @@ pub async fn waf_middleware(
 
     if uri.len() > MAX_URI_LEN {
         warn!(uri_len = uri.len(), "WAF: URI too long");
-        return bad_request("uri_too_long", "Request URI exceeds maximum allowed length.");
+        return bad_request(
+            "uri_too_long",
+            "Request URI exceeds maximum allowed length.",
+        );
     }
 
     if uri.contains('\0') {

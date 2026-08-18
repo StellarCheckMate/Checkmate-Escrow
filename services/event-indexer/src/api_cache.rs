@@ -381,10 +381,7 @@ impl ApiCache {
             Backend::Redis(manager) => {
                 use redis::AsyncCommands;
                 let mut conn = manager.clone();
-                if let Err(e) = conn
-                    .set_ex::<_, _, ()>(key, payload, ttl_secs)
-                    .await
-                {
+                if let Err(e) = conn.set_ex::<_, _, ()>(key, payload, ttl_secs).await {
                     self.record_error("SETEX", key, &e);
                 }
             }
@@ -430,7 +427,10 @@ impl ApiCache {
 
         self.delete(&keys).await;
         self.counters.invalidations.fetch_add(1, Ordering::Relaxed);
-        debug!(match_id, "invalidated cached responses after contract event");
+        debug!(
+            match_id,
+            "invalidated cached responses after contract event"
+        );
     }
 
     /// Invalidate all list and analytics responses without touching individual
@@ -499,7 +499,10 @@ mod tests {
     #[test]
     fn keys_are_namespaced_and_distinct() {
         assert_eq!(match_key(7), "cm:api:match:7");
-        assert_eq!(matches_key(Some(&MatchStatus::Pending)), "cm:api:matches:pending");
+        assert_eq!(
+            matches_key(Some(&MatchStatus::Pending)),
+            "cm:api:matches:pending"
+        );
         assert_eq!(matches_key(None), "cm:api:matches:all");
         assert_eq!(analytics_key(ANALYTICS_STATS), "cm:api:analytics:stats");
         assert_ne!(match_key(7), match_key(8));
@@ -525,7 +528,9 @@ mod tests {
     #[tokio::test]
     async fn set_then_get_returns_the_value() {
         let cache = ApiCache::in_memory();
-        cache.set_json(&match_key(1), &payload(1), match_ttl()).await;
+        cache
+            .set_json(&match_key(1), &payload(1), match_ttl())
+            .await;
 
         let got: Option<Payload> = cache.get_json(&match_key(1)).await;
         assert_eq!(got, Some(payload(1)));
@@ -545,7 +550,9 @@ mod tests {
     #[tokio::test]
     async fn disabled_cache_never_stores() {
         let cache = ApiCache::disabled();
-        cache.set_json(&match_key(1), &payload(1), match_ttl()).await;
+        cache
+            .set_json(&match_key(1), &payload(1), match_ttl())
+            .await;
         let got: Option<Payload> = cache.get_json(&match_key(1)).await;
         assert!(got.is_none(), "disabled cache must always miss");
         assert!(!cache.is_enabled());
@@ -582,7 +589,9 @@ mod tests {
     async fn undecodable_payload_is_treated_as_a_miss_and_dropped() {
         let cache = ApiCache::in_memory();
         // Store a differently-shaped value under the same key.
-        cache.set_json(&match_key(4), &"not-a-payload", match_ttl()).await;
+        cache
+            .set_json(&match_key(4), &"not-a-payload", match_ttl())
+            .await;
 
         let got: Option<Payload> = cache.get_json(&match_key(4)).await;
         assert!(got.is_none(), "shape mismatch must not be served");
@@ -599,7 +608,9 @@ mod tests {
     #[tokio::test]
     async fn invalidate_match_drops_that_match() {
         let cache = ApiCache::in_memory();
-        cache.set_json(&match_key(9), &payload(9), match_ttl()).await;
+        cache
+            .set_json(&match_key(9), &payload(9), match_ttl())
+            .await;
 
         cache.invalidate_match(9).await;
 
@@ -612,7 +623,9 @@ mod tests {
     async fn invalidate_match_drops_every_match_list() {
         let cache = ApiCache::in_memory();
         for key in all_match_list_keys() {
-            cache.set_json(&key, &payload(1), pending_matches_ttl()).await;
+            cache
+                .set_json(&key, &payload(1), pending_matches_ttl())
+                .await;
         }
 
         cache.invalidate_match(1).await;
@@ -638,8 +651,12 @@ mod tests {
     #[tokio::test]
     async fn invalidating_one_match_leaves_other_matches_cached() {
         let cache = ApiCache::in_memory();
-        cache.set_json(&match_key(1), &payload(1), match_ttl()).await;
-        cache.set_json(&match_key(2), &payload(2), match_ttl()).await;
+        cache
+            .set_json(&match_key(1), &payload(1), match_ttl())
+            .await;
+        cache
+            .set_json(&match_key(2), &payload(2), match_ttl())
+            .await;
 
         cache.invalidate_match(1).await;
 
@@ -652,9 +669,15 @@ mod tests {
     #[tokio::test]
     async fn clear_removes_everything() {
         let cache = ApiCache::in_memory();
-        cache.set_json(&match_key(1), &payload(1), match_ttl()).await;
         cache
-            .set_json(&matches_key(Some(&MatchStatus::Pending)), &payload(2), pending_matches_ttl())
+            .set_json(&match_key(1), &payload(1), match_ttl())
+            .await;
+        cache
+            .set_json(
+                &matches_key(Some(&MatchStatus::Pending)),
+                &payload(2),
+                pending_matches_ttl(),
+            )
             .await;
 
         cache.clear().await;
@@ -674,7 +697,9 @@ mod tests {
     #[tokio::test]
     async fn hit_rate_reflects_hits_and_misses() {
         let cache = ApiCache::in_memory();
-        cache.set_json(&match_key(1), &payload(1), match_ttl()).await;
+        cache
+            .set_json(&match_key(1), &payload(1), match_ttl())
+            .await;
 
         let _: Option<Payload> = cache.get_json(&match_key(1)).await; // hit
         let _: Option<Payload> = cache.get_json(&match_key(1)).await; // hit

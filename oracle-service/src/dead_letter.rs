@@ -29,8 +29,8 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tracing::error;
 
-use crate::queue::PendingEntry;
 use crate::oracle::errors::OracleServiceError;
+use crate::queue::PendingEntry;
 
 /// A record in the dead-letter store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,7 +121,10 @@ impl DeadLetterStore {
 
         let mut entries = self.load().await?;
         // Avoid duplicates (idempotent push)
-        if !entries.iter().any(|e| e.entry.match_id == dl.entry.match_id) {
+        if !entries
+            .iter()
+            .any(|e| e.entry.match_id == dl.entry.match_id)
+        {
             entries.push(dl);
             self.save(&entries).await?;
         }

@@ -30,7 +30,6 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
@@ -40,7 +39,10 @@ use crate::{
     api_cache::{self, ApiCache},
     cache::EventCache,
     db::Database,
-    models::{AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters, TokenAnalytics},
+    models::{
+        AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters,
+        TokenAnalytics,
+    },
     request_id,
     rpc::SorobanRpcClient,
     transactions::{
@@ -129,6 +131,13 @@ pub struct ActiveMatchesQuery {
 }
 
 #[derive(Deserialize)]
+pub struct PlayerMatchesQuery {
+    pub status: Option<MatchStatus>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
 pub struct AnalyticsQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
@@ -210,11 +219,15 @@ pub fn build_router(
         .route("/matches/active", get(get_active_matches))
         .route("/matches/pending", get(get_pending_matches))
         .route("/match/:match_id", get(get_match_info))
+        .route("/matches/:match_id", get(get_match_info))
         .route("/players/:address/matches", get(get_player_matches))
         .route(
             "/transactions/player/:player_address",
             get(get_player_transactions),
         )
+        .route("/analytics/overview", get(analytics_overview))
+        .route("/analytics/player/:player_address", get(analytics_player))
+        .route("/analytics/token/:token_address", get(analytics_token))
         .route("/stats", get(get_stats))
         // Request ID middleware must run first (outermost) to capture all requests
         .layer(axum::middleware::from_fn(request_id::request_id_middleware))
@@ -237,8 +250,7 @@ pub async fn start_server(
 ) -> anyhow::Result<()> {
     let app = build_router(db, cache, rpc, api_cache);
 
-    let listener =
-        tokio::net::TcpListener::bind(format!("{}:{}", bind_addr, bind_port)).await?;
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind_addr, bind_port)).await?;
 
     info!("API server listening on {}:{}", bind_addr, bind_port);
 
@@ -255,7 +267,7 @@ pub async fn start_server(
 /// `/api/openapi.yaml` so the interactive docs always reflect the canonical
 /// schema bundled with the service binary.
 async fn api_docs_ui() -> Html<&'static str> {
-    Html(include_str!("../../../../docs/swagger-ui.html"))
+    Html(include_str!("../../../docs/swagger-ui.html"))
 }
 
 /// `GET /api/openapi.yaml` — serves the raw OpenAPI 3.0 schema.
@@ -266,9 +278,17 @@ async fn api_docs_ui() -> Html<&'static str> {
 async fn api_openapi_yaml() -> Response {
     (
         [(header::CONTENT_TYPE, "application/yaml")],
-        include_str!("../../../../docs/openapi.yaml"),
+        include_str!("../../../docs/openapi.yaml"),
     )
         .into_response()
+}
+
+/// Response body for `GET /health`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HealthResponse {
+    pub status: String,
+    pub db_reachable: bool,
+    pub rpc_reachable: bool,
 }
 
 /// `GET /health` – health check for load balancers and monitoring tools.
@@ -466,7 +486,7 @@ async fn get_matches(
 /// Returns an empty array when no active matches exist.
 async fn get_active_matches(
     State(state): State<AppState>,
-    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
+    TypedQuery(_query): TypedQuery<ActiveMatchesQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
     let cache_key = api_cache::matches_key(Some(&MatchStatus::Active));
 
@@ -481,7 +501,11 @@ async fn get_active_matches(
         );
     }
 
-    match state.db.get_matches_by_status(Some(&MatchStatus::Active)).await {
+    match state
+        .db
+        .get_matches_by_status(Some(&MatchStatus::Active))
+        .await
+    {
         Ok(matches) => {
             state
                 .api_cache
@@ -513,7 +537,7 @@ async fn get_active_matches(
 /// Returns an empty array when no pending matches exist.
 async fn get_pending_matches(
     State(state): State<AppState>,
-    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
+    TypedQuery(_query): TypedQuery<ActiveMatchesQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
     let cache_key = api_cache::matches_key(Some(&MatchStatus::Pending));
 
@@ -528,7 +552,11 @@ async fn get_pending_matches(
         );
     }
 
-    match state.db.get_matches_by_status(Some(&MatchStatus::Pending)).await {
+    match state
+        .db
+        .get_matches_by_status(Some(&MatchStatus::Pending))
+        .await
+    {
         Ok(matches) => {
             state
                 .api_cache
@@ -554,7 +582,9 @@ async fn get_pending_matches(
     }
 }
 
-/// `GET /match/:match_id` – full match summary with all events.
+/// `GET /match/:match_id` / `GET /matches/:match_id` – full match summary.
+///
+/// `/matches/:match_id` is the frontend-facing alias of `/match/:match_id`.
 ///
 /// Cached for 5 seconds and invalidated eagerly on any contract event for this
 /// match, so the TTL only bounds staleness for matches nothing is happening to.
@@ -611,53 +641,39 @@ async fn get_match_info(
     }
 }
 
-/// `GET /matches/:match_id` – single match lookup endpoint for frontends.
+/// `GET /players/:address/matches` – matches a player has participated in.
 ///
-/// Returns the full match object including current state.
-/// Returns 404 with descriptive message if the match does not exist.
+/// Query parameters: `status` (optional filter), `limit` (default 50) and
+/// `offset` (default 0). The address and status, if present, are already
+/// known-good by the time this handler runs — [`validation::validate_request`]
+/// rejects a malformed address or status with a `400` before routing gets here.
 ///
-/// Cached for 5 seconds and invalidated eagerly on any contract event for this
-/// match, so the TTL only bounds staleness for matches nothing is happening to.
-/// Only successful lookups are cached — a `404` for a match that is about to be
-/// indexed must not be sticky.
-async fn get_match_by_id(
+/// Not cached: the response is per-player and per-filter, so the hit rate would
+/// be poor while the staleness would be user-visible.
+async fn get_player_matches(
     State(state): State<AppState>,
-    Path(match_id): Path<u64>,
-) -> (StatusCode, Json<ApiResponse<MatchInfo>>) {
-    let cache_key = api_cache::match_key(match_id);
+    Path(address): Path<String>,
+    TypedQuery(query): TypedQuery<PlayerMatchesQuery>,
+) -> (StatusCode, Json<ApiResponse<PlayerMatchesResponse>>) {
+    let limit = query.limit.unwrap_or(50);
+    let offset = query.offset.unwrap_or(0);
 
-    if let Some(cached) = state.api_cache.get_json::<MatchInfo>(&cache_key).await {
-        return (
+    match state
+        .db
+        .get_matches_by_player(&address, query.status.as_ref(), limit, offset)
+        .await
+    {
+        Ok((matches, total)) => (
             StatusCode::OK,
             Json(ApiResponse {
                 success: true,
-                data: Some(cached),
-                error: None,
-            }),
-        );
-    }
-
-    match state.db.build_match_info(match_id).await {
-        Ok(Some(match_info)) => {
-            state
-                .api_cache
-                .set_json(&cache_key, &match_info, api_cache::match_ttl())
-                .await;
-            (
-                StatusCode::OK,
-                Json(ApiResponse {
-                    success: true,
-                    data: Some(match_info),
-                    error: None,
+                data: Some(PlayerMatchesResponse {
+                    matches,
+                    total,
+                    limit,
+                    offset,
                 }),
-            )
-        }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Match {} not found", match_id)),
+                error: None,
             }),
         ),
         Err(e) => (
@@ -783,10 +799,7 @@ pub fn build_transaction_filters(
 
 /// Treat a blank query value as absent, matching how an omitted field behaves.
 fn non_empty(value: &Option<String>) -> Option<&str> {
-    value
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
+    value.as_deref().map(str::trim).filter(|v| !v.is_empty())
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
@@ -797,7 +810,7 @@ pub struct Stats {
     pub cache_size: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct PlayerMatchesResponse {
     pub matches: Vec<MatchInfo>,
     pub total: i64,
@@ -855,7 +868,11 @@ async fn analytics_overview(
     State(state): State<AppState>,
     TypedQuery(query): TypedQuery<AnalyticsQuery>,
 ) -> (StatusCode, Json<ApiResponse<AnalyticsOverview>>) {
-    match state.db.analytics_overview(query.start_date, query.end_date).await {
+    match state
+        .db
+        .analytics_overview(query.start_date, query.end_date)
+        .await
+    {
         Ok(overview) => (
             StatusCode::OK,
             Json(ApiResponse {
@@ -890,7 +907,13 @@ async fn analytics_player(
 
     match state
         .db
-        .analytics_player(&player_address, limit, offset, query.start_date, query.end_date)
+        .analytics_player(
+            &player_address,
+            limit,
+            offset,
+            query.start_date,
+            query.end_date,
+        )
         .await
     {
         Ok(analytics) => (
@@ -927,7 +950,13 @@ async fn analytics_token(
 
     match state
         .db
-        .analytics_token(&token_address, limit, offset, query.start_date, query.end_date)
+        .analytics_token(
+            &token_address,
+            limit,
+            offset,
+            query.start_date,
+            query.end_date,
+        )
         .await
     {
         Ok(analytics) => (

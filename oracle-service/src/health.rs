@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::config::OracleConfig;
 use crate::oracle::{ChessComClient, LichessClient};
@@ -225,12 +225,9 @@ impl HealthChecker {
             state.checks.oracle_contract.status,
         ];
 
-        let overall_status = if critical_checks.iter().any(|s| *s == CheckStatus::Down) {
+        let overall_status = if critical_checks.contains(&CheckStatus::Down) {
             HealthStatus::Unhealthy
-        } else if critical_checks
-            .iter()
-            .any(|s| *s == CheckStatus::Degraded)
-        {
+        } else if critical_checks.contains(&CheckStatus::Degraded) {
             HealthStatus::Degraded
         } else {
             HealthStatus::Healthy
@@ -241,15 +238,12 @@ impl HealthChecker {
             && state.checks.escrow_contract.status != CheckStatus::Unknown
             && state.checks.oracle_contract.status != CheckStatus::Unknown;
 
-        let uptime = (Utc::now() - state.started_at)
-            .num_seconds()
-            .max(0) as u64;
+        let uptime = (Utc::now() - state.started_at).num_seconds().max(0) as u64;
 
         HealthCheckResponse {
             status: overall_status,
             service_ready,
-            network: std::env::var("STELLAR_NETWORK")
-                .unwrap_or_else(|_| "testnet".to_string()),
+            network: std::env::var("STELLAR_NETWORK").unwrap_or_else(|_| "testnet".to_string()),
             contract_escrow: self.inner.config.contract_escrow.clone(),
             contract_oracle: self.inner.config.contract_oracle.clone(),
             oracle_address: self.inner.config.oracle_address.clone(),
@@ -308,7 +302,9 @@ impl HealthChecker {
         let start = std::time::Instant::now();
         match tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            self.inner.soroban.contract_health_check(&self.inner.config.contract_escrow),
+            self.inner
+                .soroban
+                .contract_health_check(&self.inner.config.contract_escrow),
         )
         .await
         {
@@ -349,7 +345,9 @@ impl HealthChecker {
         let start = std::time::Instant::now();
         match tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            self.inner.soroban.contract_health_check(&self.inner.config.contract_oracle),
+            self.inner
+                .soroban
+                .contract_health_check(&self.inner.config.contract_oracle),
         )
         .await
         {

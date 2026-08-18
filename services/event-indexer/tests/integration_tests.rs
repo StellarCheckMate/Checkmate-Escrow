@@ -22,10 +22,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 use chrono::Utc;
-use event_indexer::{
-    cache::EventCache,
-    models::IndexedEvent,
-};
+use event_indexer::{cache::EventCache, models::IndexedEvent};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -78,7 +75,10 @@ fn lru_reinsertion_promotes_to_mru() {
     cache.insert(make_event("a", 1, 1));
     // Now insert "c" → must evict "b".
     cache.insert(make_event("c", 1, 3));
-    assert!(cache.get("b").is_none(), "b must be evicted (LRU after reinsertion of a)");
+    assert!(
+        cache.get("b").is_none(),
+        "b must be evicted (LRU after reinsertion of a)"
+    );
     assert!(cache.get("a").is_some());
     assert!(cache.get("c").is_some());
 }
@@ -179,7 +179,13 @@ async fn leader_only_ingestion_produces_no_duplicates() {
         let events = events.clone();
         tokio::spawn(async move {
             for e in events {
-                let inserted = store.lock().unwrap().entry(e.id.clone()).or_insert(e.clone()).id == e.id;
+                let inserted = store
+                    .lock()
+                    .unwrap()
+                    .entry(e.id.clone())
+                    .or_insert(e.clone())
+                    .id
+                    == e.id;
                 if inserted {
                     counter.fetch_add(1, Ordering::Relaxed);
                 }
@@ -204,7 +210,11 @@ async fn leader_only_ingestion_produces_no_duplicates() {
 
     assert_eq!(ingested_by_leader.load(Ordering::Relaxed), 50);
     assert_eq!(ingested_by_follower.load(Ordering::Relaxed), 0);
-    assert_eq!(store.lock().unwrap().len(), 50, "exactly 50 unique events in store");
+    assert_eq!(
+        store.lock().unwrap().len(),
+        50,
+        "exactly 50 unique events in store"
+    );
 }
 
 /// Simulate leader failover: first leader ingests ledgers 1-25, then crashes
@@ -257,7 +267,11 @@ async fn load_test_concurrent_cache_throughput() {
     {
         let mut c = cache.write().await;
         for i in 0..N_EVENTS {
-            c.insert(make_event(&format!("load-{}", i), (i % 100) as u64, i as u32));
+            c.insert(make_event(
+                &format!("load-{}", i),
+                (i % 100) as u64,
+                i as u32,
+            ));
         }
     }
 
@@ -342,7 +356,10 @@ async fn load_test_n_instance_read_scaling() {
                 let cache = Arc::new(RwLock::new(EventCache::new(EVENTS_PER_INSTANCE)));
                 for i in 0..EVENTS_PER_INSTANCE {
                     let id = format!("inst{}-evt-{}", instance, i);
-                    cache.write().await.insert(make_event(&id, (i % 10) as u64, i as u32));
+                    cache
+                        .write()
+                        .await
+                        .insert(make_event(&id, (i % 10) as u64, i as u32));
                 }
                 // Query phase.
                 let mut hits = 0usize;
@@ -429,9 +446,7 @@ async fn api_unknown_status_returns_400() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
@@ -462,7 +477,10 @@ async fn api_unknown_status_returns_400() {
         // runs, so the message names the offending field and the allowed values.
         let error = parsed.error.as_deref().unwrap_or("");
         assert!(error.contains("status"), "unhelpful error: {error}");
-        assert!(error.contains("pending"), "error should list valid values: {error}");
+        assert!(
+            error.contains("pending"),
+            "error should list valid values: {error}"
+        );
     }
 }
 
@@ -474,9 +492,7 @@ async fn api_get_events_by_player_returns_correct_subset() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     // Insert test events.
@@ -498,7 +514,7 @@ async fn api_get_events_by_player_returns_correct_subset() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri(&format!("/events?player_address={PLAYER_X}"))
+                .uri(format!("/events?player_address={PLAYER_X}"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -533,9 +549,7 @@ async fn api_match_info_not_found_returns_404() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
@@ -596,7 +610,10 @@ fn deterministic_id_different_event_index_different_id() {
 
     let id1 = compute_event_id(100, "txhash123", 0);
     let id2 = compute_event_id(100, "txhash123", 1);
-    assert_ne!(id1, id2, "different event indices must produce different IDs");
+    assert_ne!(
+        id1, id2,
+        "different event indices must produce different IDs"
+    );
 }
 
 #[test]
@@ -605,7 +622,10 @@ fn deterministic_id_is_valid_hex_64_chars() {
 
     let id = compute_event_id(100, "txhash123", 0);
     assert_eq!(id.len(), 64, "SHA-256 hex must be 64 characters");
-    assert!(id.chars().all(|c| c.is_ascii_hexdigit()), "ID must be valid hex");
+    assert!(
+        id.chars().all(|c| c.is_ascii_hexdigit()),
+        "ID must be valid hex"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -647,12 +667,15 @@ fn idempotency_event_state_byte_identical() {
     e1.id = "deterministic-evt-1".to_string();
     e1.event_index_in_txn = Some(0);
 
-    let mut e2 = e1.clone();
+    let e2 = e1.clone();
 
     let json1 = to_string(&e1).expect("serialize e1");
     let json2 = to_string(&e2).expect("serialize e2");
 
-    assert_eq!(json1, json2, "identical events must serialize to identical JSON");
+    assert_eq!(
+        json1, json2,
+        "identical events must serialize to identical JSON"
+    );
 }
 
 #[tokio::test]
@@ -701,25 +724,39 @@ async fn poll_ingestion_state_tracking() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     let contract_id = "test-contract-state-tracking";
 
     // Initially, no polled state
-    let initial = db.get_latest_polled_ledger(contract_id).await.expect("query");
-    assert!(initial.is_none(), "new contract should have no polled ledger");
+    let initial = db
+        .get_latest_polled_ledger(contract_id)
+        .await
+        .expect("query");
+    assert!(
+        initial.is_none(),
+        "new contract should have no polled ledger"
+    );
 
     // After first poll, state is persisted
-    db.update_ingestion_state(contract_id, 100, None).await.expect("update");
-    let after_first = db.get_latest_polled_ledger(contract_id).await.expect("query");
+    db.update_ingestion_state(contract_id, 100, None)
+        .await
+        .expect("update");
+    let after_first = db
+        .get_latest_polled_ledger(contract_id)
+        .await
+        .expect("query");
     assert_eq!(after_first, Some(100), "should persist ledger 100");
 
     // After second poll, state advances
-    db.update_ingestion_state(contract_id, 150, None).await.expect("update");
-    let after_second = db.get_latest_polled_ledger(contract_id).await.expect("query");
+    db.update_ingestion_state(contract_id, 150, None)
+        .await
+        .expect("update");
+    let after_second = db
+        .get_latest_polled_ledger(contract_id)
+        .await
+        .expect("query");
     assert_eq!(after_second, Some(150), "should advance to ledger 150");
 
     // Cleanup
@@ -729,7 +766,10 @@ async fn poll_ingestion_state_tracking() {
         .await
         .unwrap();
     let _ = conn
-        .execute("DELETE FROM ingestion_state WHERE contract_id = $1", &[&contract_id])
+        .execute(
+            "DELETE FROM ingestion_state WHERE contract_id = $1",
+            &[&contract_id],
+        )
         .await;
 }
 
@@ -742,16 +782,14 @@ async fn reorg_event_marking() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     let contract_id = "test-contract-reorg";
 
     // Insert test events at ledgers 100-105
     for ledger in 100..=105 {
-        let mut e = make_event(&format!("reorg-test-{}", ledger), 1, ledger);
+        let e = make_event(&format!("reorg-test-{}", ledger), 1, ledger);
         db.insert_event(&e).await.expect("insert");
     }
 
@@ -785,7 +823,10 @@ async fn reorg_event_marking() {
             .await;
     }
     let _ = conn
-        .execute("DELETE FROM reorg_events WHERE contract_id = $1", &[&contract_id])
+        .execute(
+            "DELETE FROM reorg_events WHERE contract_id = $1",
+            &[&contract_id],
+        )
         .await;
 }
 
@@ -819,14 +860,12 @@ async fn analytics_overview_returns_200_with_correct_shape() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc);
+    let app = build_router(db, cache, rpc, no_cache());
 
     let response = app
         .oneshot(
@@ -861,14 +900,12 @@ async fn analytics_overview_accepts_time_range_params() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc);
+    let app = build_router(db, cache, rpc, no_cache());
 
     let response = app
         .oneshot(
@@ -896,14 +933,12 @@ async fn analytics_player_returns_200_with_correct_shape() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc);
+    let app = build_router(db, cache, rpc, no_cache());
 
     let response = app
         .oneshot(
@@ -942,14 +977,12 @@ async fn analytics_player_accepts_pagination_params() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc);
+    let app = build_router(db, cache, rpc, no_cache());
 
     let response = app
         .oneshot(
@@ -973,14 +1006,12 @@ async fn analytics_token_returns_200_with_correct_shape() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc);
+    let app = build_router(db, cache, rpc, no_cache());
 
     let response = app
         .oneshot(
@@ -1016,14 +1047,12 @@ async fn analytics_token_accepts_pagination_and_time_range() {
     }
 
     let db_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Arc::new(
-        event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"),
-    );
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
     db.init_schema().await.expect("schema");
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc);
+    let app = build_router(db, cache, rpc, no_cache());
 
     let response = app
         .oneshot(

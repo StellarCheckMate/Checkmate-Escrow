@@ -53,6 +53,17 @@ fn setup_consensus(
     let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&primary_oracle, &admin);
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 0,
+        treasury: admin.clone(),
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: crate::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: crate::DEFAULT_MINIMUM_STAKE,
+    });
 
     // Register approved oracles.
     let mut oracle_list = soroban_sdk::vec![&env];
@@ -71,13 +82,22 @@ fn setup_consensus(
         &player2,
         &100,
         &token_addr,
-        &String::from_str(&env, "consensus_game"),
+        &String::from_str(&env, "6f402c9e"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
 
-    (env, contract_id, admin, player1, player2, token_addr, oracle_list, match_id)
+    (
+        env,
+        contract_id,
+        admin,
+        player1,
+        player2,
+        token_addr,
+        oracle_list,
+        match_id,
+    )
 }
 
 // ── Admin management tests ────────────────────────────────────────────────────
@@ -173,13 +193,19 @@ fn test_consensus_two_of_two_pays_out_player1() {
     client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
     assert_eq!(client.get_oracle_confirmations(&match_id), 1);
     let m = client.get_match(&match_id);
-    assert_eq!(m.state, MatchState::Active, "payout must not happen after 1 of 2 votes");
+    assert_eq!(
+        m.state,
+        MatchState::Active,
+        "payout must not happen after 1 of 2 votes"
+    );
 
     // Second vote — payout should execute.
     client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(1).unwrap());
     assert_eq!(client.get_oracle_confirmations(&match_id), 2);
     let m = client.get_match(&match_id);
     assert_eq!(m.state, MatchState::Completed);
+
+    client.claim_vested_payout(&match_id, &player1);
 
     // Player1 wins the pot (200).
     assert_eq!(tc.balance(&player1), p1_before + 200);
@@ -201,6 +227,7 @@ fn test_consensus_two_of_two_pays_out_player2() {
 
     let m = client.get_match(&match_id);
     assert_eq!(m.state, MatchState::Completed);
+    client.claim_vested_payout(&match_id, &player2);
     assert_eq!(tc.balance(&player1), p1_before);
     assert_eq!(tc.balance(&player2), p2_before + 200);
 }
@@ -220,6 +247,8 @@ fn test_consensus_draw_refunds_both_players() {
 
     let m = client.get_match(&match_id);
     assert_eq!(m.state, MatchState::Completed);
+    client.claim_vested_payout(&match_id, &player1);
+    client.claim_vested_payout(&match_id, &player2);
     // Both get their stake back.
     assert_eq!(tc.balance(&player1), p1_before + 100);
     assert_eq!(tc.balance(&player2), p2_before + 100);
@@ -241,6 +270,7 @@ fn test_consensus_two_of_three_reaches_threshold_at_second_vote() {
     // Vote 2 — threshold reached.
     client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(1).unwrap());
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
+    client.claim_vested_payout(&match_id, &player1);
     assert_eq!(tc.balance(&player1), p1_before + 200);
 }
 
@@ -261,6 +291,7 @@ fn test_consensus_three_of_three_requires_all_votes() {
 
     client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(2).unwrap());
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
+    client.claim_vested_payout(&match_id, &player1);
     assert_eq!(tc.balance(&player1), p1_before + 200);
 }
 
@@ -268,8 +299,7 @@ fn test_consensus_three_of_three_requires_all_votes() {
 
 #[test]
 fn test_partial_consensus_does_not_trigger_payout() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
-        setup_consensus(3, 3);
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(3, 3);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
@@ -292,35 +322,27 @@ fn test_get_oracle_confirmations_starts_at_zero() {
 
 #[test]
 fn test_conflicting_vote_returns_conflicting_result() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
-        setup_consensus(2, 2);
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Oracle 0 votes Player1.
     client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
 
     // Oracle 1 votes Player2 — conflict.
-    let result = client.try_submit_result_consensus(
-        &match_id,
-        &Winner::Player2,
-        &oracles.get(1).unwrap(),
-    );
+    let result =
+        client.try_submit_result_consensus(&match_id, &Winner::Player2, &oracles.get(1).unwrap());
     assert_eq!(result, Err(Ok(Error::ConflictingResult)));
 }
 
 #[test]
 fn test_conflicting_draw_vote_returns_conflicting_result() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
-        setup_consensus(2, 2);
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
 
-    let result = client.try_submit_result_consensus(
-        &match_id,
-        &Winner::Draw,
-        &oracles.get(1).unwrap(),
-    );
+    let result =
+        client.try_submit_result_consensus(&match_id, &Winner::Draw, &oracles.get(1).unwrap());
     assert_eq!(result, Err(Ok(Error::ConflictingResult)));
 }
 
@@ -328,8 +350,7 @@ fn test_conflicting_draw_vote_returns_conflicting_result() {
 
 #[test]
 fn test_duplicate_oracle_vote_returns_already_confirmed() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
-        setup_consensus(2, 2);
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
     let client = EscrowContractClient::new(&env, &contract_id);
     let oracle = oracles.get(0).unwrap();
 
@@ -343,8 +364,7 @@ fn test_duplicate_oracle_vote_returns_already_confirmed() {
 
 #[test]
 fn test_unapproved_oracle_returns_not_an_oracle() {
-    let (env, contract_id, _admin, _p1, _p2, _token, _oracles, match_id) =
-        setup_consensus(2, 2);
+    let (env, contract_id, _admin, _p1, _p2, _token, _oracles, match_id) = setup_consensus(2, 2);
     let client = EscrowContractClient::new(&env, &contract_id);
     let rogue = Address::generate(&env);
 
@@ -356,17 +376,13 @@ fn test_unapproved_oracle_returns_not_an_oracle() {
 
 #[test]
 fn test_consensus_blocked_when_paused() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
-        setup_consensus(2, 2);
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.pause();
 
-    let result = client.try_submit_result_consensus(
-        &match_id,
-        &Winner::Player1,
-        &oracles.get(0).unwrap(),
-    );
+    let result =
+        client.try_submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
@@ -384,22 +400,18 @@ fn test_consensus_on_pending_match_returns_invalid_state() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "pending_game"),
+        &String::from_str(&env, "ba217f6b"),
         &Platform::Lichess,
     );
 
-    let result = client.try_submit_result_consensus(
-        &pending_id,
-        &Winner::Player1,
-        &oracles.get(0).unwrap(),
-    );
+    let result =
+        client.try_submit_result_consensus(&pending_id, &Winner::Player1, &oracles.get(0).unwrap());
     assert_eq!(result, Err(Ok(Error::InvalidState)));
 }
 
 #[test]
 fn test_consensus_on_completed_match_returns_invalid_state() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
-        setup_consensus(2, 2);
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Complete the match with 2 votes.
@@ -410,15 +422,13 @@ fn test_consensus_on_completed_match_returns_invalid_state() {
     // Try to vote again (with a third oracle added).
     let extra_oracle = Address::generate(&env);
     client.add_approved_oracle(&extra_oracle);
-    let result =
-        client.try_submit_result_consensus(&match_id, &Winner::Player1, &extra_oracle);
+    let result = client.try_submit_result_consensus(&match_id, &Winner::Player1, &extra_oracle);
     assert_eq!(result, Err(Ok(Error::InvalidState)));
 }
 
 #[test]
 fn test_consensus_on_nonexistent_match_returns_not_found() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, _match_id) =
-        setup_consensus(2, 2);
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, _match_id) = setup_consensus(2, 2);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let result =
@@ -473,7 +483,7 @@ fn test_legacy_submit_result_still_works_independently() {
         &Address::generate(&env),
         &100,
         &token,
-        &String::from_str(&env, "legacy_game"),
+        &String::from_str(&env, "58900fc4"),
         &Platform::Lichess,
     );
     // mint for new player2
@@ -487,6 +497,7 @@ fn test_legacy_submit_result_still_works_independently() {
     let _ = oracle; // oracle used via mock_all_auths
     let p1_before = tc.balance(&player1);
     client.submit_result(&match_id, &Winner::Player1);
+    client.claim_vested_payout(&match_id, &player1);
     assert_eq!(tc.balance(&player1), p1_before + 200);
     assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
 }
@@ -495,8 +506,7 @@ fn test_legacy_submit_result_still_works_independently() {
 
 #[test]
 fn test_get_oracle_confirmations_increments_correctly() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
-        setup_consensus(3, 3);
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(3, 3);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     assert_eq!(client.get_oracle_confirmations(&match_id), 0);
@@ -513,8 +523,7 @@ fn test_get_oracle_confirmations_increments_correctly() {
 
 #[test]
 fn test_escrow_balance_zero_after_consensus_payout() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
-        setup_consensus(2, 2);
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
@@ -527,8 +536,7 @@ fn test_escrow_balance_zero_after_consensus_payout() {
 
 #[test]
 fn test_active_matches_cleared_after_consensus_payout() {
-    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
-        setup_consensus(2, 2);
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let active_before = client.get_active_matches();

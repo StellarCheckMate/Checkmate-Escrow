@@ -5,14 +5,7 @@
 //! - Attaches it as `X-Request-ID` response header
 //! - Includes it in all log lines via the `layer_request_id` tracing layer
 
-use axum::{
-    extract::Request,
-    http::HeaderMap,
-    middleware::Next,
-    response::{IntoResponse, Response},
-};
-use std::task::{Context, Poll};
-use tower::Service;
+use axum::{extract::Request, http::HeaderMap, http::HeaderValue, middleware::Next, response::Response};
 use uuid::Uuid;
 
 const REQUEST_ID_HEADER: &str = "X-Request-ID";
@@ -37,10 +30,7 @@ pub fn extract_or_generate_request_id(headers: &HeaderMap) -> String {
 /// 1. Extracts or generates a request ID from the incoming request
 /// 2. Records it in tracing context (for structured logging)
 /// 3. Attaches it to the response as `X-Request-ID` header
-pub async fn request_id_middleware(
-    mut request: Request,
-    next: Next,
-) -> Response {
+pub async fn request_id_middleware(mut request: Request, next: Next) -> Response {
     let headers = request.headers();
     let request_id = extract_or_generate_request_id(headers);
 
@@ -53,9 +43,12 @@ pub async fn request_id_middleware(
     let mut response = next.run(request).await;
 
     // Attach the request ID to the response header
-    response
-        .headers_mut()
-        .insert(REQUEST_ID_HEADER, request_id.parse().unwrap_or_default());
+    response.headers_mut().insert(
+        REQUEST_ID_HEADER,
+        request_id
+            .parse()
+            .unwrap_or_else(|_| HeaderValue::from_static("invalid")),
+    );
 
     response
 }

@@ -20,9 +20,7 @@ mod errors;
 pub mod types;
 
 use errors::Error;
-use soroban_sdk::{
-    contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
 use types::{
     BatchResultEntry, CandidateTally, ConsensusState, DataKey, OracleMetrics, OracleRegistration,
     OracleVoteRecord, Platform, RateLimitConfig, RateLimitStatus, RateWindow, ResultEntry, Winner,
@@ -119,7 +117,11 @@ impl OracleContract {
         }
 
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&oracle_address, &env.current_contract_address(), &stake_amount);
+        token_client.transfer(
+            &oracle_address,
+            &env.current_contract_address(),
+            &stake_amount,
+        );
 
         env.storage().instance().set(
             &DataKey::OracleRegistration(oracle_address.clone()),
@@ -151,7 +153,11 @@ impl OracleContract {
     }
 
     /// Slash a registered oracle's stake. Admin-only.
-    pub fn slash_oracle(env: Env, oracle_address: Address, slash_amount: i128) -> Result<(), Error> {
+    pub fn slash_oracle(
+        env: Env,
+        oracle_address: Address,
+        slash_amount: i128,
+    ) -> Result<(), Error> {
         extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
@@ -264,11 +270,9 @@ impl OracleContract {
         env.storage()
             .persistent()
             .set(&cache_key, &(result.clone(), expiry));
-        env.storage().persistent().extend_ttl(
-            &cache_key,
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&cache_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
 
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("result")),
@@ -291,10 +295,7 @@ impl OracleContract {
     /// - [`Error::InvalidGameId`] — any entry has an empty `game_id`.
     /// - [`Error::BatchDuplicateEntry`] — two entries share the same `match_id`.
     /// - [`Error::AlreadySubmitted`] — a result for any `match_id` already exists.
-    pub fn submit_batch_results(
-        env: Env,
-        entries: Vec<BatchResultEntry>,
-    ) -> Result<(), Error> {
+    pub fn submit_batch_results(env: Env, entries: Vec<BatchResultEntry>) -> Result<(), Error> {
         extend_instance_ttl(&env);
 
         if env
@@ -381,11 +382,9 @@ impl OracleContract {
             env.storage()
                 .persistent()
                 .set(&cache_key, &(entry.result.clone(), expiry));
-            env.storage().persistent().extend_ttl(
-                &cache_key,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
+            env.storage()
+                .persistent()
+                .extend_ttl(&cache_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
 
             env.events().publish(
                 (Symbol::new(&env, "oracle"), symbol_short!("result")),
@@ -393,10 +392,8 @@ impl OracleContract {
             );
         }
 
-        env.events().publish(
-            (Symbol::new(&env, "oracle"), symbol_short!("batch")),
-            len,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "oracle"), symbol_short!("batch")), len);
 
         Ok(())
     }
@@ -595,11 +592,9 @@ impl OracleContract {
             env.storage()
                 .persistent()
                 .set(&cache_key, &(winning.result.clone(), expiry));
-            env.storage().persistent().extend_ttl(
-                &cache_key,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
+            env.storage()
+                .persistent()
+                .extend_ttl(&cache_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
 
             // Majority wins, minority is slashed: every oracle that voted for
             // a losing candidate is automatically penalized.
@@ -752,11 +747,9 @@ impl OracleContract {
         env.storage()
             .persistent()
             .set(&cache_key, &(result.clone(), expiry));
-        env.storage().persistent().extend_ttl(
-            &cache_key,
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&cache_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
 
         env.storage()
             .persistent()
@@ -1429,12 +1422,7 @@ impl OracleContract {
         }
     }
 
-    pub fn set_rate(
-        env: Env,
-        token_a: Address,
-        token_b: Address,
-        rate: i128,
-    ) -> Result<(), Error> {
+    pub fn set_rate(env: Env, token_a: Address, token_b: Address, rate: i128) -> Result<(), Error> {
         extend_instance_ttl(&env);
         let admin: Address = env
             .storage()
@@ -1458,11 +1446,7 @@ impl OracleContract {
         Ok(())
     }
 
-    pub fn get_rate(
-        env: Env,
-        token_a: Address,
-        token_b: Address,
-    ) -> Result<i128, Error> {
+    pub fn get_rate(env: Env, token_a: Address, token_b: Address) -> Result<i128, Error> {
         extend_instance_ttl(&env);
         env.storage()
             .persistent()
@@ -1563,4 +1547,3 @@ impl OracleContract {
 
 #[cfg(test)]
 mod tests;
-

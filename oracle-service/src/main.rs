@@ -28,10 +28,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use oracle_service::{
     config,
     health::HealthChecker,
-    middleware::{
-        rate_limit::RateLimitState,
-        waf::WafState,
-    },
+    middleware::{rate_limit::RateLimitState, waf::WafState},
     oracle::{ChessComClient, LichessClient},
     poller::Poller,
     soroban_client::SorobanClient,
@@ -153,8 +150,8 @@ async fn main() {
         health_checker: health_checker.clone(),
     };
 
-    let rate_limiter_state = RateLimitState::new();
-    let waf_state = WafState::new();
+    let _rate_limiter_state = RateLimitState::new();
+    let _waf_state = WafState::new();
 
     let app = Router::new()
         .route("/health", get(health_check))

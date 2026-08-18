@@ -59,12 +59,7 @@ fn make_config(
 
 /// Enqueue a pending entry with `next_attempt_at` in the past so it is
 /// immediately due.
-async fn enqueue_due(
-    queue: &PendingQueue,
-    match_id: u64,
-    game_id: &str,
-    platform: Platform,
-) {
+async fn enqueue_due(queue: &PendingQueue, match_id: u64, game_id: &str, platform: Platform) {
     let mut entry = PendingEntry::new(match_id, game_id.to_string(), platform);
     // Force it to be immediately due.
     entry.next_attempt_at = Utc::now() - chrono::Duration::seconds(1);
@@ -221,7 +216,11 @@ async fn pipeline_transient_failure_then_recovery() {
 
     {
         let entries = queue.load().await.unwrap();
-        assert_eq!(entries.len(), 1, "entry should still be in queue after transient failure");
+        assert_eq!(
+            entries.len(),
+            1,
+            "entry should still be in queue after transient failure"
+        );
         assert_eq!(entries[0].attempts, 1, "attempt count should be 1");
         assert!(
             entries[0].last_error.is_some(),

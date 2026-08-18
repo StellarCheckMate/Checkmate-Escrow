@@ -4,6 +4,12 @@ version = "0.2.0"
 edition = "2021"
 publish = false
 
+[features]
+# Opt-in tests in tests/integration_tests.rs that mutate shared DB state
+# (ingestion state tracking, reorg marking) and so aren't safe to run
+# concurrently with the rest of the suite.
+pg_integration = []
+
 [dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }

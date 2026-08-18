@@ -2,7 +2,7 @@ extern crate std;
 
 use super::*;
 use escrow::types::{MatchState, Platform as EscrowPlatform, Winner as EscrowWinner};
-use escrow::{DEFAULT_MINIMUM_STAKE, EscrowContract, EscrowContractClient};
+use escrow::{EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::storage::{Instance as _, Persistent as _},
     testutils::{Address as _, Events as _, Ledger as _},
@@ -82,7 +82,7 @@ fn test_register_oracle_with_stake_transfers_tokens_and_allows_submission() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 }
 
@@ -100,7 +100,10 @@ fn test_slash_oracle_reduces_stake_and_transfers_tokens() {
     client.slash_oracle(&oracle_admin, &75i128);
 
     assert_eq!(balance_client.balance(&contract_id), 225);
-    assert_eq!(balance_client.balance(&oracle_admin), admin_balance_before + 75);
+    assert_eq!(
+        balance_client.balance(&oracle_admin),
+        admin_balance_before + 75
+    );
 }
 
 #[test]
@@ -118,7 +121,7 @@ fn test_submit_result_rejects_registered_oracle_without_sufficient_stake() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::InsufficientStake)));
 }
@@ -187,7 +190,7 @@ fn test_has_result_is_public_and_unauthenticated() {
         &String::from_str(&env, "test_game"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     assert!(client.has_result(&0u64));
@@ -215,7 +218,7 @@ fn test_has_result_admin_returns_true_after_submission() {
         &String::from_str(&env, "test_game"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     assert!(client.has_result_admin(&0u64));
@@ -242,7 +245,7 @@ fn test_submit_and_get_result() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     assert!(client.has_result(&0u64));
@@ -262,7 +265,7 @@ fn test_submit_result_stores_submitted_ledger() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let entry = client.get_result(&0u64);
@@ -282,7 +285,7 @@ fn test_submit_result_stores_submitter() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let entry = client.get_result(&0u64);
@@ -299,7 +302,7 @@ fn test_submit_result_emits_event() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let events = env.events().all();
@@ -330,7 +333,7 @@ fn test_oracle_submit_result_emits_event() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let events = env.events().all();
@@ -362,7 +365,7 @@ fn test_submit_draw_result_emits_event() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Draw,
-        &1000u64
+        &1000u64,
     );
 
     let events = env.events().all();
@@ -396,7 +399,7 @@ fn test_submit_result_duplicate_game_id_rejected() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let result = client.try_submit_result(
@@ -404,7 +407,7 @@ fn test_submit_result_duplicate_game_id_rejected() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player2,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
 }
@@ -420,14 +423,14 @@ fn test_duplicate_submit_fails() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Draw,
-        &1000u64
+        &1000u64,
     );
     client.submit_result(
         &0u64,
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Draw,
-        &1000u64
+        &1000u64,
     );
 }
 
@@ -441,14 +444,14 @@ fn test_duplicate_submit_returns_already_submitted() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Draw,
-        &1000u64
+        &1000u64,
     );
     let result = client.try_submit_result(
         &0u64,
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Draw,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
 }
@@ -478,7 +481,7 @@ fn test_submit_result_on_uninitialized_contract_returns_unauthorized() {
         &String::from_str(&env, "game_abc"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
@@ -506,7 +509,7 @@ fn test_ttl_extended_on_submit_result() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let ttl = env.as_contract(&contract_id, || {
@@ -547,7 +550,7 @@ fn test_pause_admin_only() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
@@ -565,7 +568,7 @@ fn test_unpause_admin_only() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&0u64));
 }
@@ -582,7 +585,7 @@ fn test_oracle_submit_result_while_paused() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
@@ -599,7 +602,7 @@ fn test_submit_result_blocked_when_paused() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
@@ -618,7 +621,7 @@ fn test_submit_result_works_after_unpause() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
@@ -629,7 +632,7 @@ fn test_submit_result_works_after_unpause() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&0u64));
     let entry = client.get_result(&0u64);
@@ -646,7 +649,7 @@ fn test_pause_unpause_state_transitions() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&0u64));
 
@@ -657,7 +660,7 @@ fn test_pause_unpause_state_transitions() {
         &String::from_str(&env, "def456"),
         &Platform::Lichess,
         &Winner::Player2,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 
@@ -668,7 +671,7 @@ fn test_pause_unpause_state_transitions() {
         &String::from_str(&env, "def456"),
         &Platform::Lichess,
         &Winner::Player2,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&1u64));
 
@@ -678,7 +681,7 @@ fn test_pause_unpause_state_transitions() {
         &String::from_str(&env, "ghi789"),
         &Platform::Lichess,
         &Winner::Draw,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
@@ -693,7 +696,7 @@ fn test_get_result_extends_ttl() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let entry = client.get_result(&0u64);
@@ -775,7 +778,7 @@ fn test_oracle_to_escrow_full_payout_flow() {
         &String::from_str(&env, "test_game"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(oracle_client.has_result(&0u64));
 
@@ -802,7 +805,7 @@ fn test_delete_result_removes_from_storage() {
         &String::from_str(&env, "chess_game_42"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&0u64));
 
@@ -829,7 +832,7 @@ fn test_delete_result_blocked_when_paused() {
         &String::from_str(&env, "chess_game_99"),
         &Platform::Lichess,
         &Winner::Player2,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&0u64));
 
@@ -851,7 +854,7 @@ fn test_delete_result_emits_deletion_event() {
         &String::from_str(&env, "chess_game_42"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&0u64));
 
@@ -906,7 +909,7 @@ fn test_instance_ttl_extended_on_submit_result() {
         &String::from_str(&env, "ttl_game"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let ttl = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
@@ -944,7 +947,7 @@ fn test_transfer_admin_old_rejected_new_accepted() {
         &String::from_str(&env, "test_game"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(
         result.is_err(),
@@ -973,7 +976,7 @@ fn test_transfer_admin_old_rejected_new_accepted() {
         &String::from_str(&env, "test_game"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     assert!(
@@ -1075,7 +1078,7 @@ fn test_oracle_admin_rotation() {
 
 #[test]
 fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
-    let (env, oracle_id, escrow_id, oracle_admin, player1, player2, token_addr) = setup();
+    let (env, oracle_id, escrow_id, _oracle_admin, player1, player2, token_addr) = setup();
     let escrow_client = EscrowContractClient::new(&env, &escrow_id);
     let oracle_client = OracleContractClient::new(&env, &oracle_id);
 
@@ -1097,7 +1100,7 @@ fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
         &String::from_str(&env, "integration_game"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     // Verify oracle stored the result
@@ -1112,11 +1115,7 @@ fn test_oracle_escrow_integration_submit_result_with_oracle_record() {
 
 // ── submit_batch_results ─────────────────────────────────────────────────
 
-fn make_batch_entry(
-    env: &Env,
-    match_id: u64,
-    game_id: &str,
-) -> types::BatchResultEntry {
+fn make_batch_entry(env: &Env, match_id: u64, game_id: &str) -> types::BatchResultEntry {
     types::BatchResultEntry {
         match_id,
         game_id: String::from_str(env, game_id),
@@ -1246,7 +1245,7 @@ fn test_batch_already_submitted_returns_error() {
         &String::from_str(&env, "game_existing"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let entries = soroban_sdk::vec![&env, make_batch_entry(&env, 0, "game_a")];
@@ -1264,7 +1263,7 @@ fn test_batch_already_submitted_does_not_overwrite() {
         &String::from_str(&env, "game_existing"),
         &Platform::Lichess,
         &Winner::Draw,
-        &1000u64
+        &1000u64,
     );
 
     let entries = soroban_sdk::vec![
@@ -1362,9 +1361,7 @@ fn test_batch_emits_individual_and_summary_events() {
         Symbol::new(&env, "oracle").into_val(&env),
         symbol_short!("batch").into_val(&env),
     ];
-    let batch_event = events
-        .iter()
-        .find(|(_, topics, _)| *topics == batch_topics);
+    let batch_event = events.iter().find(|(_, topics, _)| *topics == batch_topics);
     assert!(batch_event.is_some(), "batch summary event not emitted");
 
     let (_, _, data) = batch_event.unwrap();
@@ -1423,7 +1420,7 @@ fn test_hourly_rate_limit_blocks_101st_submission_in_same_hour() {
             &String::from_str(&env, "g"),
             &Platform::Lichess,
             &Winner::Player1,
-        &1000u64
+            &1000u64,
         );
     }
 
@@ -1432,7 +1429,7 @@ fn test_hourly_rate_limit_blocks_101st_submission_in_same_hour() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
     assert!(!client.has_result(&100u64));
@@ -1458,7 +1455,7 @@ fn test_batch_submission_counts_full_batch_against_rate_limit() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::RateLimitExceeded)));
 }
@@ -1473,7 +1470,7 @@ fn test_batch_rejected_when_it_would_exceed_hourly_limit_writes_nothing() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let mut entries: soroban_sdk::Vec<types::BatchResultEntry> = soroban_sdk::vec![&env];
@@ -1502,7 +1499,7 @@ fn test_rejected_submission_does_not_consume_quota() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let blocked = client.try_submit_result(
@@ -1510,7 +1507,7 @@ fn test_rejected_submission_does_not_consume_quota() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(blocked, Err(Ok(Error::RateLimitExceeded)));
 
@@ -1531,14 +1528,14 @@ fn test_hourly_window_resets_after_window_elapses() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     let blocked = client.try_submit_result(
         &1u64,
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(blocked, Err(Ok(Error::RateLimitExceeded)));
 
@@ -1551,7 +1548,7 @@ fn test_hourly_window_resets_after_window_elapses() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&1u64));
 
@@ -1572,7 +1569,7 @@ fn test_daily_limit_persists_across_hourly_window_reset() {
             &String::from_str(&env, "g"),
             &Platform::Lichess,
             &Winner::Player1,
-        &1000u64
+            &1000u64,
         );
         match_id += 1;
     }
@@ -1581,7 +1578,7 @@ fn test_daily_limit_persists_across_hourly_window_reset() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(blocked_hourly, Err(Ok(Error::RateLimitExceeded)));
 
@@ -1595,7 +1592,7 @@ fn test_daily_limit_persists_across_hourly_window_reset() {
             &String::from_str(&env, "g"),
             &Platform::Lichess,
             &Winner::Player1,
-        &1000u64
+            &1000u64,
         );
         match_id += 1;
     }
@@ -1605,7 +1602,7 @@ fn test_daily_limit_persists_across_hourly_window_reset() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(blocked_daily, Err(Ok(Error::RateLimitExceeded)));
 
@@ -1698,7 +1695,7 @@ fn test_alert_emitted_at_80_percent_hourly_usage() {
             &String::from_str(&env, "g"),
             &Platform::Lichess,
             &Winner::Player1,
-        &1000u64
+            &1000u64,
         );
     }
 
@@ -1731,7 +1728,7 @@ fn test_no_alert_below_80_percent_usage() {
             &String::from_str(&env, "g"),
             &Platform::Lichess,
             &Winner::Player1,
-        &1000u64
+            &1000u64,
         );
     }
 
@@ -1764,7 +1761,7 @@ fn test_high_volume_burst_is_throttled_then_recovers_next_hour() {
             &String::from_str(&env, "g"),
             &Platform::Lichess,
             &Winner::Player1,
-        &1000u64
+            &1000u64,
         );
         match result {
             Ok(_) => accepted += 1,
@@ -1786,7 +1783,7 @@ fn test_high_volume_burst_is_throttled_then_recovers_next_hour() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&999u64));
 }
@@ -1900,7 +1897,7 @@ fn test_both_legacy_admin_mode_and_new_consensus_mode_work_side_by_side() {
         &String::from_str(&env, "legacy_game"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&0u64));
 
@@ -1913,7 +1910,7 @@ fn test_both_legacy_admin_mode_and_new_consensus_mode_work_side_by_side() {
         &String::from_str(&env, "consensus_game"),
         &Platform::Lichess,
         &Winner::Player2,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&1u64));
     assert_eq!(client.get_result(&1u64).result, Winner::Player2);
@@ -1924,7 +1921,7 @@ fn test_both_legacy_admin_mode_and_new_consensus_mode_work_side_by_side() {
         &String::from_str(&env, "legacy_game_2"),
         &Platform::Lichess,
         &Winner::Draw,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&2u64));
     let _ = oracle_admin; // sanity: admin identity unused beyond setup wiring
@@ -1942,7 +1939,7 @@ fn test_submit_oracle_result_not_registered_rejected() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::NotRegisteredOracle)));
     assert!(!client.has_result(&0u64));
@@ -1962,7 +1959,7 @@ fn test_submit_oracle_result_rejects_zero_stake() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::InsufficientStake)));
 }
@@ -1979,7 +1976,7 @@ fn test_submit_oracle_result_empty_game_id_rejected() {
         &String::from_str(&env, ""),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::InvalidGameId)));
 }
@@ -1998,7 +1995,7 @@ fn test_submit_oracle_result_blocked_when_paused() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
@@ -2023,7 +2020,7 @@ fn test_mofn_threshold_reached_finalizes_result_and_escrow_payout_proceeds() {
         &String::from_str(&env, "test_game"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(!client.has_result(&0u64));
 
@@ -2034,7 +2031,7 @@ fn test_mofn_threshold_reached_finalizes_result_and_escrow_payout_proceeds() {
         &String::from_str(&env, "test_game"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&0u64));
     assert_eq!(client.get_result(&0u64).result, Winner::Player1);
@@ -2065,7 +2062,7 @@ fn test_mofn_threshold_not_reached_match_stays_pending() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     client.submit_oracle_result(
         &oracles[1],
@@ -2073,7 +2070,7 @@ fn test_mofn_threshold_not_reached_match_stays_pending() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     assert!(!client.has_result(&0u64));
@@ -2101,7 +2098,7 @@ fn test_mofn_conflicting_submissions_minority_auto_slashed_on_finalize() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player2,
-        &1000u64
+        &1000u64,
     );
     // Oracles 1 and 2 agree on Player1, reaching the threshold.
     client.submit_oracle_result(
@@ -2110,7 +2107,7 @@ fn test_mofn_conflicting_submissions_minority_auto_slashed_on_finalize() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     client.submit_oracle_result(
         &oracles[2],
@@ -2118,7 +2115,7 @@ fn test_mofn_conflicting_submissions_minority_auto_slashed_on_finalize() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     assert!(client.has_result(&0u64));
@@ -2133,7 +2130,7 @@ fn test_mofn_conflicting_submissions_minority_auto_slashed_on_finalize() {
         &String::from_str(&env, "g2"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(
         result.is_ok(),
@@ -2159,7 +2156,7 @@ fn test_mofn_single_malicious_minority_cannot_force_incorrect_result() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player2,
-        &1000u64
+        &1000u64,
     );
     assert!(
         !client.has_result(&0u64),
@@ -2173,7 +2170,7 @@ fn test_mofn_single_malicious_minority_cannot_force_incorrect_result() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     client.submit_oracle_result(
         &oracles[2],
@@ -2181,7 +2178,7 @@ fn test_mofn_single_malicious_minority_cannot_force_incorrect_result() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     assert!(client.has_result(&0u64));
@@ -2208,7 +2205,7 @@ fn test_mofn_equivocation_slashes_full_stake_and_rejects_submission() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     // The call itself succeeds (Ok) — a contract call returning `Err` would
@@ -2220,7 +2217,7 @@ fn test_mofn_equivocation_slashes_full_stake_and_rejects_submission() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player2, // conflicts with its own earlier vote,
-        &1000u64
+        &1000u64,
     );
 
     let events = env.events().all();
@@ -2246,7 +2243,7 @@ fn test_mofn_equivocation_slashes_full_stake_and_rejects_submission() {
         &String::from_str(&env, "g2"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(further, Err(Ok(Error::InsufficientStake)));
 
@@ -2269,7 +2266,7 @@ fn test_mofn_duplicate_identical_vote_returns_already_submitted_no_slash() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     let result = client.try_submit_oracle_result(
         &oracles[0],
@@ -2277,7 +2274,7 @@ fn test_mofn_duplicate_identical_vote_returns_already_submitted_no_slash() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1, // identical repeat, not equivocation,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
 
@@ -2305,7 +2302,7 @@ fn test_mofn_deadlock_marks_disputed_and_admin_resolves() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     client.submit_oracle_result(
         &oracles[1],
@@ -2313,7 +2310,7 @@ fn test_mofn_deadlock_marks_disputed_and_admin_resolves() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player2,
-        &1000u64
+        &1000u64,
     );
     // Third and final oracle breaks for a third distinct result: no
     // candidate can now possibly reach the threshold of 2.
@@ -2323,7 +2320,7 @@ fn test_mofn_deadlock_marks_disputed_and_admin_resolves() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Draw,
-        &1000u64
+        &1000u64,
     );
 
     assert!(!client.has_result(&0u64));
@@ -2394,7 +2391,7 @@ fn test_mofn_already_finalized_match_rejects_further_oracle_submissions() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert!(client.has_result(&0u64));
 
@@ -2404,7 +2401,7 @@ fn test_mofn_already_finalized_match_rejects_further_oracle_submissions() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
 }
@@ -2423,7 +2420,7 @@ fn test_mofn_finalized_event_reports_submitter_count_and_threshold() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     client.submit_oracle_result(
         &oracles[1],
@@ -2431,7 +2428,7 @@ fn test_mofn_finalized_event_reports_submitter_count_and_threshold() {
         &String::from_str(&env, "g"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
 
     let events = env.events().all();
@@ -2474,7 +2471,7 @@ fn test_oracle_store_result_when_paused() {
         &String::from_str(&env, "abc123"),
         &Platform::Lichess,
         &Winner::Player1,
-        &1000u64
+        &1000u64,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
@@ -2487,12 +2484,12 @@ fn test_oracle_store_result_idempotent() {
     let game_id = String::from_str(&env, "game_idempotent_12345");
     let winner = Winner::Player1;
 
-    client.submit_result(&0u64, &game_id, &Platform::Lichess, &winner);
+    client.submit_result(&0u64, &game_id, &Platform::Lichess, &winner, &1000u64);
     assert!(client.has_result(&0u64));
     let first_result = client.get_result(&0u64);
     assert_eq!(first_result.result, winner);
 
-    client.submit_result(&0u64, &game_id, &Platform::Lichess, &winner);
+    client.submit_result(&0u64, &game_id, &Platform::Lichess, &winner, &1000u64);
     assert!(client.has_result(&0u64));
     let second_result = client.get_result(&0u64);
     assert_eq!(second_result.result, winner);

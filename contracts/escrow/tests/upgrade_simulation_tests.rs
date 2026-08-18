@@ -27,8 +27,8 @@
 
 use escrow::errors::Error;
 use escrow::types::{FeeTier, MatchState, Platform, ProtocolConfig, Winner};
-use escrow::{CONTRACT_VERSION, DEFAULT_MINIMUM_STAKE, UPGRADE_REVIEW_PERIOD_LEDGERS};
 use escrow::{EscrowContract, EscrowContractClient};
+use escrow::{CONTRACT_VERSION, DEFAULT_MINIMUM_STAKE, UPGRADE_REVIEW_PERIOD_LEDGERS};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
     token::StellarAssetClient,
@@ -46,7 +46,7 @@ const MINT_AMOUNT: i128 = 10_000;
 ///
 /// Returns `(env, contract_id, oracle, player1, player2, token, admin)`.
 fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
-    let env = Env::default();
+    let mut env = Env::default();
     env.set_config(soroban_sdk::testutils::EnvTestConfig {
         capture_snapshot_at_drop: false,
     });
@@ -72,6 +72,10 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         treasury: admin.clone(),
         stablecoin_only_mode: false,
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+        maximum_stake: None,
+        match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     });
 
     (env, contract_id, oracle, player1, player2, token, admin)
@@ -114,14 +118,17 @@ fn fund_match(client: &EscrowContractClient, match_id: u64, p1: &Address, p2: &A
 /// Admin address stored before migration must equal the value returned after.
 #[test]
 fn test_admin_preserved_across_migration() {
-    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let before = client.get_admin();
     client.migrate_state(&(CONTRACT_VERSION + 1));
     let after = client.get_admin();
 
-    assert_eq!(before, after, "admin address must be identical after migrate_state");
+    assert_eq!(
+        before, after,
+        "admin address must be identical after migrate_state"
+    );
 }
 
 /// Oracle address stored before migration must equal the value returned after.
@@ -159,7 +166,7 @@ fn test_match_timeout_preserved_across_migration() {
     let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let custom_timeout: u32 = 100_000;
+    let custom_timeout: u64 = 100_000;
     client.set_match_timeout(&custom_timeout);
 
     let before = client.get_match_timeout();
@@ -182,6 +189,10 @@ fn test_protocol_config_preserved_across_migration() {
         treasury: admin.clone(),
         stablecoin_only_mode: false,
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+        maximum_stake: None,
+        match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
     };
     client.set_protocol_config(&config);
 
@@ -201,7 +212,14 @@ fn test_pending_match_readable_after_migration() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let match_id = create_match(&client, &env, &player1, &player2, &token, "pre_migrate_pending");
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "pre_migrate_pending",
+    );
 
     // Migrate
     client.migrate_state(&(CONTRACT_VERSION + 1));
@@ -219,7 +237,14 @@ fn test_active_match_readable_after_migration() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let match_id = create_match(&client, &env, &player1, &player2, &token, "pre_migrate_active");
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "pre_migrate_active",
+    );
     fund_match(&client, match_id, &player1, &player2);
 
     // Migrate
@@ -237,7 +262,14 @@ fn test_escrow_balance_preserved_after_migration() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let match_id = create_match(&client, &env, &player1, &player2, &token, "balance_pre_migrate");
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "balance_pre_migrate",
+    );
     fund_match(&client, match_id, &player1, &player2);
 
     let balance_before = client.get_escrow_balance(&match_id);
@@ -255,7 +287,14 @@ fn test_is_funded_flag_preserved_after_migration() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let match_id = create_match(&client, &env, &player1, &player2, &token, "funded_pre_migrate");
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "funded_pre_migrate",
+    );
     fund_match(&client, match_id, &player1, &player2);
 
     assert!(client.is_funded(&match_id));
@@ -274,7 +313,14 @@ fn test_oracle_can_submit_result_after_migration() {
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
-    let match_id = create_match(&client, &env, &player1, &player2, &token, "oracle_post_migrate");
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "oracle_post_migrate",
+    );
     fund_match(&client, match_id, &player1, &player2);
 
     let p1_before = token_client.balance(&player1);
@@ -303,7 +349,14 @@ fn test_draw_payout_correct_after_migration() {
 
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
-    let match_id = create_match(&client, &env, &player1, &player2, &token, "draw_post_migrate");
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "draw_post_migrate",
+    );
     fund_match(&client, match_id, &player1, &player2);
 
     let p1_before = token_client.balance(&player1);
@@ -317,8 +370,16 @@ fn test_draw_payout_correct_after_migration() {
     let p1_after = token_client.balance(&player1);
     let p2_after = token_client.balance(&player2);
 
-    assert_eq!(p1_after - p1_before, STAKE, "p1 must be refunded their stake");
-    assert_eq!(p2_after - p2_before, STAKE, "p2 must be refunded their stake");
+    assert_eq!(
+        p1_after - p1_before,
+        STAKE,
+        "p1 must be refunded their stake"
+    );
+    assert_eq!(
+        p2_after - p2_before,
+        STAKE,
+        "p2 must be refunded their stake"
+    );
 }
 
 // ── Function-signature compatibility ──────────────────────────────────────────
@@ -332,7 +393,7 @@ fn test_create_match_api_compatible_after_migration() {
     client.migrate_state(&(CONTRACT_VERSION + 1));
 
     // If the function signature changed this would fail to compile or panic.
-    let match_id = client.create_match(
+    let _match_id: u64 = client.create_match(
         &player1,
         &player2,
         &STAKE,
@@ -340,7 +401,6 @@ fn test_create_match_api_compatible_after_migration() {
         &SorobanString::from_str(&env, "c57e2890"),
         &Platform::Lichess,
     );
-    assert!(match_id > 0 || match_id == 0); // always true; checks compile-time type compat
 }
 
 /// deposit still works on a match created after migration.
@@ -381,8 +441,22 @@ fn test_get_player_matches_api_compatible_after_migration() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    create_match(&client, &env, &player1, &player2, &token, "player_matches_compat_1");
-    create_match(&client, &env, &player1, &player2, &token, "player_matches_compat_2");
+    create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "player_matches_compat_1",
+    );
+    create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "player_matches_compat_2",
+    );
 
     let before = client.get_player_matches(&player1);
     client.migrate_state(&(CONTRACT_VERSION + 1));
@@ -408,7 +482,14 @@ fn test_fee_tiers_preserved_and_applied_after_migration() {
     });
     client.set_fee_tiers(&tiers);
 
-    let match_id = create_match(&client, &env, &player1, &player2, &token, "fee_post_migrate");
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "fee_post_migrate",
+    );
     fund_match(&client, match_id, &player1, &player2);
 
     let treasury_before = token_client.balance(&admin);
@@ -554,7 +635,14 @@ fn test_contract_operational_after_cancelled_upgrade() {
     client.cancel_upgrade();
 
     // Normal operations must still work
-    let match_id = create_match(&client, &env, &player1, &player2, &token, "post_cancel_match");
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "post_cancel_match",
+    );
     fund_match(&client, match_id, &player1, &player2);
 
     assert!(client.is_funded(&match_id));
@@ -655,7 +743,14 @@ fn test_new_match_completes_normally_after_migration() {
 
     client.migrate_state(&(CONTRACT_VERSION + 1));
 
-    let match_id = create_match(&client, &env, &player1, &player2, &token, "post_migrate_new");
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "post_migrate_new",
+    );
     fund_match(&client, match_id, &player1, &player2);
 
     let p2_before = token_client.balance(&player2);

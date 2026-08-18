@@ -37,8 +37,8 @@ async fn main() {
             println!("Dead-letter store is empty.");
         } else {
             println!(
-                "{:<8}  {:<12}  {:<10}  {:<8}  {:<30}  {}",
-                "match_id", "game_id", "platform", "attempts", "dead_lettered_at", "last_error"
+                "{:<8}  {:<12}  {:<10}  {:<8}  {:<30}  last_error",
+                "match_id", "game_id", "platform", "attempts", "dead_lettered_at"
             );
             println!("{}", "-".repeat(100));
             for dl in &entries {
@@ -66,11 +66,7 @@ async fn main() {
         for dl in &entries {
             let match_id = dl.entry.match_id;
             match queue
-                .enqueue(
-                    match_id,
-                    dl.entry.game_id.clone(),
-                    dl.entry.platform,
-                )
+                .enqueue(match_id, dl.entry.game_id.clone(), dl.entry.platform)
                 .await
             {
                 Ok(true) => {
@@ -104,10 +100,9 @@ async fn main() {
                                     store.remove(match_id).await.ok();
                                     println!("Re-enqueued match_id={}", match_id);
                                 }
-                                Ok(false) => println!(
-                                    "match_id={} already in pending queue",
-                                    match_id
-                                ),
+                                Ok(false) => {
+                                    println!("match_id={} already in pending queue", match_id)
+                                }
                                 Err(e) => {
                                     eprintln!("ERROR: {}", e);
                                     std::process::exit(1);

@@ -18,7 +18,9 @@ use std::time::Instant;
 
 use escrow::types::{Platform, Winner};
 use escrow::{EscrowContract, EscrowContractClient};
-use soroban_sdk::{testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString};
+use soroban_sdk::{
+    testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString,
+};
 
 const STAKE: i128 = 100;
 const MINT_AMOUNT: i128 = 1_000_000;
@@ -72,7 +74,11 @@ impl Harness {
         let client = EscrowContractClient::new(&env, &contract_id);
         client.initialize(&oracle, &admin);
 
-        Self { env, contract_id, token }
+        Self {
+            env,
+            contract_id,
+            token,
+        }
     }
 
     fn client(&self) -> EscrowContractClient<'_> {
@@ -148,26 +154,44 @@ fn run_all_benchmarks() {
     {
         let h = Harness::new();
         let (id, p1, _p2) = h.new_match("baseline-deposit");
-        results.push(measure(&h.env, "deposit (1st, Pending -> Pending)", 1, || {}, || {
-            h.client().deposit(&id, &p1);
-        }));
+        results.push(measure(
+            &h.env,
+            "deposit (1st, Pending -> Pending)",
+            1,
+            || {},
+            || {
+                h.client().deposit(&id, &p1);
+            },
+        ));
     }
     {
         let h = Harness::new();
         let (id, p1, _p2) = h.new_match("baseline-cancel");
         h.client().deposit(&id, &p1);
-        results.push(measure(&h.env, "cancel_match (Pending, 1 deposit refunded)", 1, || {}, || {
-            h.client().cancel_match(&id, &p1);
-        }));
+        results.push(measure(
+            &h.env,
+            "cancel_match (Pending, 1 deposit refunded)",
+            1,
+            || {},
+            || {
+                h.client().cancel_match(&id, &p1);
+            },
+        ));
     }
     {
         let h = Harness::new();
         let (id, p1, p2) = h.new_match("baseline-submit");
         h.client().deposit(&id, &p1);
         h.client().deposit(&id, &p2);
-        results.push(measure(&h.env, "submit_result (Active -> Completed, 1 active match)", 1, || {}, || {
-            h.client().submit_result(&id, &Winner::Player1);
-        }));
+        results.push(measure(
+            &h.env,
+            "submit_result (Active -> Completed, 1 active match)",
+            1,
+            || {},
+            || {
+                h.client().submit_result(&id, &Winner::Player1);
+            },
+        ));
     }
 
     // ── Scaling: deposit (activation path) vs. # of already-active matches ──
@@ -220,9 +244,15 @@ fn run_all_benchmarks() {
         }
         let (target_id, target_p1, _) = h.new_match("scale-cancel-target");
 
-        results.push(measure(&h.env, "cancel_match (Pending, no deposits)", n, || {}, || {
-            h.client().cancel_match(&target_id, &target_p1);
-        }));
+        results.push(measure(
+            &h.env,
+            "cancel_match (Pending, no deposits)",
+            n,
+            || {},
+            || {
+                h.client().cancel_match(&target_id, &target_p1);
+            },
+        ));
     }
 
     // ── Scaling: get_active_matches vs. total historical match count ────────
@@ -233,9 +263,15 @@ fn run_all_benchmarks() {
         let h = Harness::new();
         h.create_active_matches(n, "scale-readindex-filler");
 
-        results.push(measure(&h.env, "get_active_matches (scans 0..match_count)", n, || {}, || {
-            let _ = h.client().get_active_matches();
-        }));
+        results.push(measure(
+            &h.env,
+            "get_active_matches (scans 0..match_count)",
+            n,
+            || {},
+            || {
+                let _ = h.client().get_active_matches();
+            },
+        ));
     }
 
     // ── Multi-token settlement benchmarks ────────────────────────────────────
@@ -248,7 +284,7 @@ fn run_all_benchmarks() {
 
         let p1 = h.new_player();
         let p2 = h.new_player();
-        asset_b.mint(&p2, &(MINT_AMOUNT as i128 * 50)); // Player2 needs enough token_b
+        asset_b.mint(&p2, &(MINT_AMOUNT * 50)); // Player2 needs enough token_b
 
         let id = h.client().create_match_with_conversion(
             &p1,
@@ -256,7 +292,7 @@ fn run_all_benchmarks() {
             &STAKE,
             &h.token,
             &token_b,
-            &(50_000_000 as i128),
+            &50_000_000_i128,
             &SorobanString::from_str(&h.env, "multi-token-submit"),
             &Platform::Lichess,
         );
@@ -283,7 +319,7 @@ fn run_all_benchmarks() {
 
         let p1 = h.new_player();
         let p2 = h.new_player();
-        asset_b.mint(&p2, &(MINT_AMOUNT as i128 * 50));
+        asset_b.mint(&p2, &(MINT_AMOUNT * 50));
 
         let id = h.client().create_match_with_conversion(
             &p1,
@@ -291,7 +327,7 @@ fn run_all_benchmarks() {
             &STAKE,
             &h.token,
             &token_b,
-            &(50_000_000 as i128),
+            &50_000_000_i128,
             &SorobanString::from_str(&h.env, "multi-token-draw"),
             &Platform::Lichess,
         );

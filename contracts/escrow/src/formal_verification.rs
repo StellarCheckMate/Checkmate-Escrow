@@ -28,8 +28,7 @@
 /// INV-18: Valid Match State Enum
 /// INV-19: Timeout Bounds
 /// INV-20: Contract Pause Blocks Mutations
-
-use crate::types::{Match, MatchState, Winner, Platform};
+use crate::types::{MatchState, Winner};
 
 use std::{
     collections::{HashMap, HashSet},
@@ -70,6 +69,12 @@ pub struct FormalVerificationReport {
     pub timestamp: String,
 }
 
+impl Default for FormalVerificationReport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FormalVerificationReport {
     pub fn new() -> Self {
         Self {
@@ -86,24 +91,52 @@ impl FormalVerificationReport {
         let mut json = String::from("{\n");
         json.push_str("  \"formal_verification_report\": {\n");
         json.push_str(&format!("    \"timestamp\": \"{}\",\n", self.timestamp));
-        json.push_str(&format!("    \"summary\": {{\n"));
-        json.push_str(&format!("      \"violations_found\": {},\n", self.violations.len()));
-        json.push_str(&format!("      \"states_explored\": {},\n", self.states_explored));
-        json.push_str(&format!("      \"transitions_tested\": {},\n", self.transitions_tested));
-        json.push_str(&format!("      \"invariants_checked\": {}\n", self.invariants_checked));
+        json.push_str("    \"summary\": {\n");
+        json.push_str(&format!(
+            "      \"violations_found\": {},\n",
+            self.violations.len()
+        ));
+        json.push_str(&format!(
+            "      \"states_explored\": {},\n",
+            self.states_explored
+        ));
+        json.push_str(&format!(
+            "      \"transitions_tested\": {},\n",
+            self.transitions_tested
+        ));
+        json.push_str(&format!(
+            "      \"invariants_checked\": {}\n",
+            self.invariants_checked
+        ));
         json.push_str("    },\n");
-        
+
         json.push_str("    \"violations\": [\n");
         for (i, violation) in self.violations.iter().enumerate() {
             json.push_str("      {\n");
-            json.push_str(&format!("        \"invariant_id\": \"{}\",\n", violation.invariant_id));
-            json.push_str(&format!("        \"invariant_name\": \"{}\",\n", violation.invariant_name));
-            json.push_str(&format!("        \"severity\": \"{:?}\",\n", violation.severity));
-            json.push_str(&format!("        \"description\": \"{}\",\n", 
-                escape_json_string(&violation.description)));
-            json.push_str(&format!("        \"trigger_operation\": \"{}\",\n", violation.trigger_operation));
-            json.push_str(&format!("        \"evidence\": \"{}\",\n", 
-                escape_json_string(&violation.evidence)));
+            json.push_str(&format!(
+                "        \"invariant_id\": \"{}\",\n",
+                violation.invariant_id
+            ));
+            json.push_str(&format!(
+                "        \"invariant_name\": \"{}\",\n",
+                violation.invariant_name
+            ));
+            json.push_str(&format!(
+                "        \"severity\": \"{:?}\",\n",
+                violation.severity
+            ));
+            json.push_str(&format!(
+                "        \"description\": \"{}\",\n",
+                escape_json_string(&violation.description)
+            ));
+            json.push_str(&format!(
+                "        \"trigger_operation\": \"{}\",\n",
+                violation.trigger_operation
+            ));
+            json.push_str(&format!(
+                "        \"evidence\": \"{}\",\n",
+                escape_json_string(&violation.evidence)
+            ));
             json.push_str("        \"state_path\": [\n");
             for (j, state) in violation.state_path.iter().enumerate() {
                 json.push_str(&format!("          \"{}\"", state));
@@ -166,7 +199,7 @@ impl FormalVerificationContext {
     pub fn new(match_id: u64) -> Self {
         let mut visited = HashSet::new();
         visited.insert("Pending".to_string());
-        
+
         Self {
             current_state: MatchState::Pending,
             visited_states: visited,
@@ -202,7 +235,7 @@ impl FormalVerificationContext {
             MatchState::Cancelled => "Cancelled",
             MatchState::Paused => "Paused",
         };
-        
+
         self.visited_states.insert(state_name.to_string());
         self.transitions.push(StateTransitionTrace {
             from_state: self.current_state.clone(),
@@ -236,7 +269,7 @@ impl InvariantValidator {
 
     /// INV-2: No Fund Loss - escrowed tokens <= contract balance
     pub fn check_no_fund_loss(
-        context: &FormalVerificationContext,
+        _context: &FormalVerificationContext,
         total_escrowed: i128,
         contract_balance: i128,
     ) -> bool {
@@ -245,8 +278,15 @@ impl InvariantValidator {
 
     /// INV-3: No Unreachable-But-Fundable States
     pub fn check_no_unreachable_states(context: &FormalVerificationContext) -> bool {
-        let escrow_balance = if context.player1_deposited { context.stake_amount } else { 0 }
-            + if context.player2_deposited { context.stake_amount } else { 0 };
+        let escrow_balance = if context.player1_deposited {
+            context.stake_amount
+        } else {
+            0
+        } + if context.player2_deposited {
+            context.stake_amount
+        } else {
+            0
+        };
 
         if escrow_balance > 0 {
             // Must be in a state with valid onward transition
@@ -260,10 +300,7 @@ impl InvariantValidator {
     }
 
     /// INV-4: Monotonic State Progression
-    pub fn check_monotonic_progression(
-        from_state: &MatchState,
-        to_state: &MatchState,
-    ) -> bool {
+    pub fn check_monotonic_progression(from_state: &MatchState, to_state: &MatchState) -> bool {
         use MatchState::*;
         match (from_state, to_state) {
             // Valid forward transitions
@@ -283,18 +320,12 @@ impl InvariantValidator {
     }
 
     /// INV-5: Deposit Idempotency
-    pub fn check_deposit_idempotency(
-        player_num: u32,
-        already_deposited: bool,
-    ) -> bool {
+    pub fn check_deposit_idempotency(_player_num: u32, already_deposited: bool) -> bool {
         !already_deposited
     }
 
     /// INV-6: Authorization Boundaries
-    pub fn check_authorization(
-        caller: &str,
-        required_caller: &str,
-    ) -> bool {
+    pub fn check_authorization(caller: &str, required_caller: &str) -> bool {
         caller == required_caller
     }
 
@@ -304,10 +335,7 @@ impl InvariantValidator {
     }
 
     /// INV-8: Escrow Balance Conservation
-    pub fn check_escrow_conservation(
-        stake_amount: i128,
-        payout_amount: i128,
-    ) -> bool {
+    pub fn check_escrow_conservation(stake_amount: i128, payout_amount: i128) -> bool {
         payout_amount == stake_amount * 2
     }
 
@@ -317,10 +345,7 @@ impl InvariantValidator {
     }
 
     /// INV-10: Dispute Period Enforcement
-    pub fn check_dispute_period(
-        current_ledger: u32,
-        deadline: u32,
-    ) -> bool {
+    pub fn check_dispute_period(current_ledger: u32, deadline: u32) -> bool {
         current_ledger >= deadline
     }
 
@@ -331,14 +356,11 @@ impl InvariantValidator {
 
     /// INV-12: Tier-Based Stake Bounds
     pub fn check_tier_stake_bounds(stake: i128, _completed_matches: u32) -> bool {
-        stake > 0 && stake <= i128::MAX
+        stake > 0
     }
 
     /// INV-13: Token Allowlist Enforcement
-    pub fn check_token_allowlist(
-        allowlist_enforced: bool,
-        is_allowed: bool,
-    ) -> bool {
+    pub fn check_token_allowlist(allowlist_enforced: bool, is_allowed: bool) -> bool {
         !allowlist_enforced || is_allowed
     }
 
@@ -371,19 +393,13 @@ impl InvariantValidator {
     pub fn check_timeout_bounds(timeout: u32) -> bool {
         const MIN: u32 = 17_280;
         const MAX: u32 = 1_555_200;
-        timeout >= MIN && timeout <= MAX
+        (MIN..=MAX).contains(&timeout)
     }
 
     /// INV-20: Contract Pause Blocks Mutations
-    pub fn check_pause_blocks_mutations(
-        is_paused: bool,
-        operation: &str,
-    ) -> bool {
+    pub fn check_pause_blocks_mutations(is_paused: bool, operation: &str) -> bool {
         if is_paused {
-            !matches!(
-                operation,
-                "create_match" | "deposit" | "submit_result"
-            )
+            !matches!(operation, "create_match" | "deposit" | "submit_result")
         } else {
             true
         }
@@ -413,7 +429,8 @@ impl VulnerabilityProbe {
                         .iter()
                         .map(|t| format!("{:?}", t.from_state))
                         .collect(),
-                    trigger_operation: "submit_result -> finalize_match (double payout)".to_string(),
+                    trigger_operation: "submit_result -> finalize_match (double payout)"
+                        .to_string(),
                     evidence: "Match in Completed state with winner already set".to_string(),
                 });
             }
@@ -428,8 +445,15 @@ impl VulnerabilityProbe {
 
         if context.current_state == MatchState::Cancelled {
             // Check escrow was cleared
-            let escrow_balance = if context.player1_deposited { context.stake_amount } else { 0 }
-                + if context.player2_deposited { context.stake_amount } else { 0 };
+            let escrow_balance = if context.player1_deposited {
+                context.stake_amount
+            } else {
+                0
+            } + if context.player2_deposited {
+                context.stake_amount
+            } else {
+                0
+            };
 
             if escrow_balance > 0 {
                 violations.push(Violation {
@@ -455,8 +479,15 @@ impl VulnerabilityProbe {
     pub fn probe_unreachable_funds(context: &FormalVerificationContext) -> Vec<Violation> {
         let mut violations = Vec::new();
 
-        let escrow_balance = if context.player1_deposited { context.stake_amount } else { 0 }
-            + if context.player2_deposited { context.stake_amount } else { 0 };
+        let escrow_balance = if context.player1_deposited {
+            context.stake_amount
+        } else {
+            0
+        } + if context.player2_deposited {
+            context.stake_amount
+        } else {
+            0
+        };
 
         if escrow_balance > 0 {
             // Check if state has a valid exit
@@ -517,6 +548,13 @@ pub struct StateSpaceExplorer {
     pub explored_states: HashSet<String>,
     pub valid_transitions: Vec<(String, String)>,
     pub invalid_transitions: Vec<(String, String, String)>,
+}
+
+#[cfg(test)]
+impl Default for StateSpaceExplorer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -597,7 +635,7 @@ impl StateSpaceExplorer {
         report.transitions_tested = self.valid_transitions.len() + self.invalid_transitions.len();
 
         let mut match_ids: HashSet<u64> = HashSet::new();
-        let mut game_ids: HashSet<u64> = HashSet::new();
+        let _game_ids: HashSet<u64> = HashSet::new();
         let mut payout_count: HashMap<u64, u32> = HashMap::new();
 
         for context in contexts {

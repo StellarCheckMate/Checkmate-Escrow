@@ -23,13 +23,6 @@ pub enum Error {
     Overflow = 8,
     ContractPaused = 9,
     InvalidAmount = 10,
-    /// `dispute_and_rollback_match` was called after the 24h heartbeat window
-    /// had elapsed — outside the timeframe within which a player may dispute
-    /// a connection-loss result against an active match.
-    RollbackWindowExpired = 11,
-    /// `dispute_and_rollback_match` was called with an empty `reason` or a
-    /// `reason` longer than `MAX_REASON_LEN`.
-    ReasonTooLong = 12,
     DuplicateGameId = 13,
     MatchNotExpired = 14,
     InvalidGameId = 15,
@@ -55,13 +48,11 @@ pub enum Error {
     TierStakeNotAllowed = 35,
     NotInitialized = 36,
     InvalidPauseState = 37,
-    InvalidConversionRate = 38,
     ConversionRateOutOfBounds = 39,
     ConversionRateStalePriceSource = 40,
     InsufficientBond = 41,
     QuorumNotMet = 42,
     InsufficientHoldingDuration = 43,
-    OracleSlashFailed = 44,
     TooManyActiveMatches = 45,
     /// Token is not issued by a registered stablecoin issuer and stablecoin-only mode is enabled.
     NotStablecoin = 46,
@@ -73,8 +64,8 @@ pub enum Error {
     OracleAlreadyConfirmed = 51,
     /// Oracle submitted a result that conflicts with a previously recorded majority result.
     ConflictingResult = 52,
-    /// The required number of oracle confirmations has not been reached yet.
-    NotEnoughConfirmations = 53,
     /// The caller is not a registered oracle.
     NotAnOracle = 54,
+    /// A deposit for this match is already in progress (reentrancy guard).
+    DepositInProgress = 55,
 }

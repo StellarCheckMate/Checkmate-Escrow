@@ -1,9 +1,5 @@
 use super::*;
-use soroban_sdk::testutils::{
-    storage::{Instance as _, Persistent as _},
-    Address as _, Ledger as _,
-};
-use crate::tests::helpers::*;
+use soroban_sdk::testutils::Ledger as _;
 
 #[test]
 fn test_is_initialized_false_before_initialize_and_true_after() {
@@ -710,10 +706,15 @@ fn test_submit_result_fails_when_contract_token_balance_is_zero() {
 
     assert_eq!(token_client.balance(&contract_id), 0);
 
-    let result = client.try_submit_result(&id, &Winner::Player1);
+    // submit_result only transitions match state; the actual transfer happens
+    // later when the winner calls claim_vested_payout, so that's where a zero
+    // contract balance surfaces.
+    client.submit_result(&id, &Winner::Player1);
+
+    let result = client.try_claim_vested_payout(&id, &player1);
     assert!(
         result.is_err(),
-        "submit_result should fail when contract has zero token balance"
+        "claim_vested_payout should fail when contract has zero token balance"
     );
 }
 
@@ -903,6 +904,17 @@ fn test_concurrent_matches_remain_isolated() {
     let contract_id = env.register_contract(None, EscrowContract);
     let client = EscrowContractClient::new(&env, &contract_id);
     client.initialize(&oracle, &admin);
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 0,
+        treasury: admin.clone(),
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
+    });
 
     let match_one = client.create_match(
         &player1,
@@ -941,6 +953,9 @@ fn test_concurrent_matches_remain_isolated() {
 
     client.submit_result(&match_one, &Winner::Player1);
     client.submit_result(&match_two, &Winner::Draw);
+    client.claim_vested_payout(&match_one, &player1);
+    client.claim_vested_payout(&match_two, &player3);
+    client.claim_vested_payout(&match_two, &player4);
 
     assert_eq!(client.get_match(&match_one).state, MatchState::Completed);
     assert_eq!(client.get_match(&match_two).state, MatchState::Completed);
@@ -1071,7 +1086,10 @@ fn test_create_match_accepts_stake_at_maximum() {
         &String::from_str(&env, "b7c47713"),
         &Platform::Lichess,
     );
-    assert!(result.is_ok(), "stake equal to maximum_stake must be accepted");
+    assert!(
+        result.is_ok(),
+        "stake equal to maximum_stake must be accepted"
+    );
 }
 
 #[test]
@@ -1096,7 +1114,7 @@ fn test_match_count_increments_sequentially() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let game_ids = ["seq0", "seq1", "seq2", "seq3", "seq4"];
+    let game_ids = ["seq00000", "seq00001", "seq00002", "seq00003", "seq00004"];
     for (expected_id, game_id_str) in game_ids.iter().enumerate() {
         let id = client.create_match(
             &player1,
@@ -1362,6 +1380,7 @@ fn test_deposit_fails_on_paused_match() {
     );
 
     client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
     client.pause_match(&id, &player1);
 
     // Cannot deposit on paused match
@@ -1389,18 +1408,24 @@ fn test_multiple_pause_resume_cycles() {
     // Cycle 1
     client.pause_match(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Paused);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 10);
     client.resume_match(&id, &player2);
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
     // Cycle 2
     client.pause_match(&id, &player2);
     assert_eq!(client.get_match(&id).state, MatchState::Paused);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 10);
     client.resume_match(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
     // Cycle 3
     client.pause_match(&id, &player1);
     assert_eq!(client.get_match(&id).state, MatchState::Paused);
+    env.ledger()
+        .set_sequence_number(env.ledger().sequence() + 10);
     client.resume_match(&id, &player2);
     assert_eq!(client.get_match(&id).state, MatchState::Active);
 
@@ -1516,15 +1541,6 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    env.as_contract(&contract_id, || {
-        if env.storage().persistent().has(&DataKey::ActiveMatches) {
-            env.storage().persistent().extend_ttl(
-                &DataKey::ActiveMatches,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-        }
-    });
 
     env.ledger().set_sequence_number(100 + 17_280);
 
@@ -1542,15 +1558,6 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    env.as_contract(&contract_id, || {
-        if env.storage().persistent().has(&DataKey::ActiveMatches) {
-            env.storage().persistent().extend_ttl(
-                &DataKey::ActiveMatches,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-        }
-    });
 
     client.expire_match(&id);
 
@@ -1852,15 +1859,6 @@ fn test_get_match_returns_cancelled_after_expire_match() {
         env.deployer()
             .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
-    env.as_contract(&contract_id, || {
-        if env.storage().persistent().has(&DataKey::ActiveMatches) {
-            env.storage().persistent().extend_ttl(
-                &DataKey::ActiveMatches,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-        }
-    });
 
     env.ledger().set_sequence_number(100 + 17_280);
 
@@ -1873,15 +1871,6 @@ fn test_get_match_returns_cancelled_after_expire_match() {
         env.deployer()
             .extend_ttl_for_code(addr.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
-    env.as_contract(&contract_id, || {
-        if env.storage().persistent().has(&DataKey::ActiveMatches) {
-            env.storage().persistent().extend_ttl(
-                &DataKey::ActiveMatches,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-        }
-    });
 
     client.expire_match(&id);
 
@@ -2088,13 +2077,6 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    env.as_contract(&contract_id, || {
-        env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
-    });
 
     env.ledger().set_sequence_number(100 + 17_280);
 
@@ -2112,13 +2094,6 @@ fn test_expire_match_refunds_both_players_when_both_deposited_but_still_pending(
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    env.as_contract(&contract_id, || {
-        env.storage().persistent().extend_ttl(
-            &DataKey::ActiveMatches,
-            MATCH_TTL_LEDGERS,
-            MATCH_TTL_LEDGERS,
-        );
-    });
 
     client.expire_match(&id);
 
@@ -2318,8 +2293,7 @@ fn test_vesting_enforced() {
     env.ledger().with_mut(|info| {
         info.timestamp = info.timestamp.saturating_add(1);
     });
-    let claim_res = client.claim_vested_payout(&id, &player1);
-    assert_eq!(claim_res, ());
+    client.claim_vested_payout(&id, &player1);
 
     assert_eq!(token_client.balance(&player1), 1100);
 }
@@ -2416,8 +2390,8 @@ fn test_expire_match_before_and_after_timeout() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = token::Client::new(&env, &token);
 
-    // Use a short timeout so the test does not have to jump 518_400 ledgers.
-    client.set_match_timeout(&17_280);
+    // Use the minimum allowed timeout so the test does not have to jump 518_400 ledgers.
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
     env.ledger().set_sequence_number(100);
 
     let id = client.create_match(
@@ -2467,15 +2441,6 @@ fn test_expire_match_before_and_after_timeout() {
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    env.as_contract(&contract_id, || {
-        if env.storage().persistent().has(&DataKey::ActiveMatches) {
-            env.storage().persistent().extend_ttl(
-                &DataKey::ActiveMatches,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-        }
-    });
 
     // Jump to exactly the timeout boundary (created_ledger=100, timeout=17_280).
     env.ledger().set_sequence_number(100 + 17_280);
@@ -2494,15 +2459,6 @@ fn test_expire_match_before_and_after_timeout() {
     );
     env.deployer()
         .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
-    env.as_contract(&contract_id, || {
-        if env.storage().persistent().has(&DataKey::ActiveMatches) {
-            env.storage().persistent().extend_ttl(
-                &DataKey::ActiveMatches,
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-        }
-    });
 
     // ── Step 4: expire after timeout must succeed ─────────────────────────────
     client.expire_match(&id);
@@ -2551,7 +2507,7 @@ fn test_cancel_match_rejects_when_active() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "active_cancel_guard"),
+        &String::from_str(&env, "d09c3033"),
         &Platform::Lichess,
     );
 
@@ -2585,7 +2541,7 @@ fn test_draw_refund_correct_amounts() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = TokenClient::new(&env, &token);
 
-    let stake_amount: i128 = 250;
+    let stake_amount: i128 = 100;
 
     // Record balances before the match so the assertions are stake-amount
     // independent (setup mints 1000 to each player).
@@ -2597,7 +2553,7 @@ fn test_draw_refund_correct_amounts() {
         &player2,
         &stake_amount,
         &token,
-        &String::from_str(&env, "draw_refund_amounts"),
+        &String::from_str(&env, "ea2f1e3d"),
         &Platform::Lichess,
     );
 

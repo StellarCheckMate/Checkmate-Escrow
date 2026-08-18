@@ -20,7 +20,7 @@ fn test_cancellation_fee_calculation_correct() {
     let match_id = client.create_match(
         &player1,
         &player2,
-        &1000,
+        &100,
         &token,
         &String::from_str(&env, "c178ad12"),
         &Platform::Lichess,
@@ -109,7 +109,7 @@ fn test_fee_applied_to_deposited_amount() {
         minimum_stake: DEFAULT_MINIMUM_STAKE,
     });
 
-    let stake = 1000i128;
+    let stake = 100i128;
     let match_id = client.create_match(
         &player1,
         &player2,
@@ -123,12 +123,15 @@ fn test_fee_applied_to_deposited_amount() {
     client.cancel_match(&match_id, &player1);
 
     let escrow_balance = client.get_escrow_balance(&match_id);
-    assert_eq!(escrow_balance, 0, "escrow must be cleared after cancellation");
+    assert_eq!(
+        escrow_balance, 0,
+        "escrow must be cleared after cancellation"
+    );
 }
 
 #[test]
 fn test_token_swap_fee_considerations() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let token2 = env.register_stellar_asset_contract_v2(admin.clone());

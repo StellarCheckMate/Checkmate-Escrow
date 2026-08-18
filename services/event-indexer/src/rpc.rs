@@ -60,12 +60,7 @@ impl SorobanRpcClient {
             "params": params,
         });
 
-        let response = self
-            .client
-            .post(&self.rpc_url)
-            .json(&body)
-            .send()
-            .await?;
+        let response = self.client.post(&self.rpc_url).json(&body).send().await?;
 
         if !response.status().is_success() {
             return Err(anyhow!(
@@ -149,7 +144,11 @@ pub async fn event_poller(
         }
 
         // ── Poll ──────────────────────────────────────────────────────────
-        let last_ledger = db.get_latest_polled_ledger(contract_id).await.ok().flatten();
+        let last_ledger = db
+            .get_latest_polled_ledger(contract_id)
+            .await
+            .ok()
+            .flatten();
         let span = info_span!("poll_iteration", contract_id, last_polled_ledger = ?last_ledger);
         match poll_events(&rpc, &db, &cache, &api_cache, contract_id, last_ledger)
             .instrument(span)
@@ -163,7 +162,13 @@ pub async fn event_poller(
             }
             Err(e) => {
                 error!("Error polling events: {}", e);
-                let _ = db.update_ingestion_state(contract_id, last_ledger.unwrap_or(0), Some(&e.to_string())).await;
+                let _ = db
+                    .update_ingestion_state(
+                        contract_id,
+                        last_ledger.unwrap_or(0),
+                        Some(&e.to_string()),
+                    )
+                    .await;
             }
         }
 
@@ -185,11 +190,12 @@ async fn poll_events(
     let last_polled = db.get_latest_polled_ledger(contract_id).await?;
     let poll_start = last_polled.map(|l| l + 1); // Exclusive-start: next ledger after last polled
 
-    debug!("Poll starting from ledger: {:?} (last_polled: {:?})", poll_start, last_polled);
+    debug!(
+        "Poll starting from ledger: {:?} (last_polled: {:?})",
+        poll_start, last_polled
+    );
 
-    let events = rpc
-        .get_events(contract_id, poll_start, Some(100))
-        .await?;
+    let events = rpc.get_events(contract_id, poll_start, Some(100)).await?;
 
     if events.is_empty() {
         debug!("RPC returned no new events for contract {}", contract_id);
@@ -200,8 +206,11 @@ async fn poll_events(
     let mut event_index = 0u16;
 
     for event_value in events {
-        if let Ok(mut indexed_event) = parse_event(&event_value, event_index) {
-            debug!("Parsed event: {:?} at ledger {}", indexed_event.event_type, indexed_event.ledger_sequence);
+        if let Ok(indexed_event) = parse_event(&event_value, event_index) {
+            debug!(
+                "Parsed event: {:?} at ledger {}",
+                indexed_event.event_type, indexed_event.ledger_sequence
+            );
 
             // Detect reorg: if this event's ledger is <= last_polled, something is wrong
             if let Some(last) = last_polled {
@@ -214,7 +223,10 @@ async fn poll_events(
                     let _invalidated = db
                         .mark_events_as_invalid(contract_id, reorg_ledger, last, "ledger_backtrack")
                         .await?;
-                    info!("Marked {} events as invalid due to reorg at ledger {}", _invalidated, reorg_ledger);
+                    info!(
+                        "Marked {} events as invalid due to reorg at ledger {}",
+                        _invalidated, reorg_ledger
+                    );
                     // A reorg can change any match, so drop every aggregate
                     // response rather than trying to work out which matches the
                     // invalidated ledger range touched.

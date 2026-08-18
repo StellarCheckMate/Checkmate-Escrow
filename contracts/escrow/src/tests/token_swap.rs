@@ -123,7 +123,7 @@ fn setup_swap_match(
 #[test]
 fn test_set_and_get_preferred_payout_token() {
     let (env, escrow_id, player1, _player2, _token_a, _token_b, _oracle, _match_id) =
-        setup_swap_match("swap_set_get", Winner::Player1, 10_000_000, 10_000_000);
+        setup_swap_match("54cd1eff", Winner::Player1, 10_000_000, 10_000_000);
 
     let client = EscrowContractClient::new(&env, &escrow_id);
     let preferred = Address::generate(&env);
@@ -141,7 +141,7 @@ fn test_set_and_get_preferred_payout_token() {
 #[test]
 fn test_clear_preferred_payout_token() {
     let (env, escrow_id, player1, _player2, _token_a, _token_b, _oracle, _match_id) =
-        setup_swap_match("swap_clear", Winner::Player1, 10_000_000, 10_000_000);
+        setup_swap_match("80dc1e86", Winner::Player1, 10_000_000, 10_000_000);
 
     let client = EscrowContractClient::new(&env, &escrow_id);
     let preferred = Address::generate(&env);
@@ -161,7 +161,7 @@ fn test_clear_preferred_payout_token() {
 #[test]
 fn test_get_preferred_payout_token_defaults_to_none() {
     let (env, escrow_id, player1, _player2, _token_a, _token_b, _oracle, _match_id) =
-        setup_swap_match("swap_default_none", Winner::Player1, 10_000_000, 10_000_000);
+        setup_swap_match("c2f2a21b", Winner::Player1, 10_000_000, 10_000_000);
 
     let client = EscrowContractClient::new(&env, &escrow_id);
 
@@ -182,7 +182,7 @@ fn test_get_preferred_payout_token_defaults_to_none() {
 #[test]
 fn test_winner_receives_preferred_token_on_swap() {
     let (env, escrow_id, player1, _player2, _token_a, token_b, _oracle, match_id) =
-        setup_swap_match("swap_winner_pref", Winner::Player1, 10_000_000, 10_000_000);
+        setup_swap_match("0ca4916b", Winner::Player1, 10_000_000, 10_000_000);
 
     let client = EscrowContractClient::new(&env, &escrow_id);
     let tok_b = token_client(&env, &token_b);
@@ -207,7 +207,7 @@ fn test_winner_receives_preferred_token_on_swap() {
 fn test_swap_rate_calculation() {
     // oracle_rate and match_rate both at 20_000_000 (within 5% of each other)
     let (env, escrow_id, player1, _player2, _token_a, token_b, _oracle, match_id) =
-        setup_swap_match("swap_rate_calc", Winner::Player1, 20_000_000, 20_000_000);
+        setup_swap_match("6896921b", Winner::Player1, 20_000_000, 20_000_000);
 
     let client = EscrowContractClient::new(&env, &escrow_id);
     let tok_b = token_client(&env, &token_b);
@@ -229,7 +229,7 @@ fn test_swap_rate_calculation() {
 #[test]
 fn test_no_preference_uses_stake_token() {
     let (env, escrow_id, player1, _player2, token_a, token_b, _oracle, match_id) =
-        setup_swap_match("swap_no_pref", Winner::Player1, 10_000_000, 10_000_000);
+        setup_swap_match("98fd1a03", Winner::Player1, 10_000_000, 10_000_000);
 
     let client = EscrowContractClient::new(&env, &escrow_id);
     let tok_a = token_client(&env, &token_a);
@@ -257,7 +257,7 @@ fn test_no_preference_uses_stake_token() {
 #[test]
 fn test_preference_equals_stake_token_no_swap() {
     let (env, escrow_id, player1, _player2, token_a, _token_b, _oracle, match_id) =
-        setup_swap_match("swap_same_token", Winner::Player1, 10_000_000, 10_000_000);
+        setup_swap_match("3bf379af", Winner::Player1, 10_000_000, 10_000_000);
 
     let client = EscrowContractClient::new(&env, &escrow_id);
     let tok_a = token_client(&env, &token_a);
@@ -280,7 +280,7 @@ fn test_preference_equals_stake_token_no_swap() {
 #[test]
 fn test_preference_unrelated_token_falls_back_to_stake() {
     let (env, escrow_id, player1, _player2, token_a, _token_b, _oracle, match_id) =
-        setup_swap_match("swap_unrelated", Winner::Player1, 10_000_000, 10_000_000);
+        setup_swap_match("26e5e572", Winner::Player1, 10_000_000, 10_000_000);
 
     let client = EscrowContractClient::new(&env, &escrow_id);
     let tok_a = token_client(&env, &token_a);
@@ -304,7 +304,7 @@ fn test_preference_unrelated_token_falls_back_to_stake() {
 #[test]
 fn test_draw_ignores_preferred_payout_token() {
     let (env, escrow_id, player1, player2, token_a, token_b, _oracle, match_id) =
-        setup_swap_match("swap_draw", Winner::Draw, 10_000_000, 10_000_000);
+        setup_swap_match("1b246961", Winner::Draw, 10_000_000, 10_000_000);
 
     let client = EscrowContractClient::new(&env, &escrow_id);
     let tok_a = token_client(&env, &token_a);
@@ -343,7 +343,7 @@ fn test_draw_ignores_preferred_payout_token() {
 #[test]
 fn test_player2_winner_swap() {
     let (env, escrow_id, _player1, player2, _token_a, token_b, _oracle, match_id) =
-        setup_swap_match("swap_p2_win", Winner::Player2, 10_000_000, 10_000_000);
+        setup_swap_match("4ac21e17", Winner::Player2, 10_000_000, 10_000_000);
 
     let client = EscrowContractClient::new(&env, &escrow_id);
     let tok_b = token_client(&env, &token_b);

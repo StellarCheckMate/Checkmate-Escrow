@@ -10,10 +10,7 @@
 ///
 /// Run with:
 ///   cargo test -p oracle-service --test load_tests -- --nocapture
-use std::sync::{
-    atomic::AtomicUsize,
-    Arc,
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 use std::time::{Duration, Instant};
 
 use oracle_service::oracle::{
@@ -81,7 +78,7 @@ async fn chess_com_500_concurrent_tasks_all_succeed() {
         api_base: server.uri(),
         request_timeout: Duration::from_secs(5),
         rate_limiter: RateLimiterConfig {
-            capacity: 100,      // large burst so 500 tasks aren't held up
+            capacity: 100,       // large burst so 500 tasks aren't held up
             refill_rate: 1000.0, // effectively unlimited for test purposes
         },
         max_concurrent: 50,
@@ -138,8 +135,8 @@ async fn rate_limiter_throttles_throughput() {
         api_base: server.uri(),
         request_timeout: Duration::from_secs(5),
         rate_limiter: RateLimiterConfig {
-            capacity: 5,       // 5 burst tokens
-            refill_rate: 5.0,  // 5 tokens/s
+            capacity: 5,      // 5 burst tokens
+            refill_rate: 5.0, // 5 tokens/s
         },
         max_concurrent: 20,
     })
@@ -419,5 +416,8 @@ async fn registry_returns_rate_limited_error_when_every_provider_is_backed_off()
     let reg = ProviderRegistry::new(vec![primary_client, secondary_client]);
     let err = reg.fetch_result("123456789").await.unwrap_err();
 
-    assert!(matches!(err, ProviderError::AllProvidersFailed { count: 2, .. }));
+    assert!(matches!(
+        err,
+        ProviderError::AllProvidersFailed { count: 2, .. }
+    ));
 }

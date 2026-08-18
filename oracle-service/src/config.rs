@@ -159,7 +159,10 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
             other => {
                 return Err(ConfigError::InvalidValue {
                     var: "STELLAR_NETWORK",
-                    reason: format!("unknown network '{}'; set STELLAR_NETWORK_PASSPHRASE directly", other),
+                    reason: format!(
+                        "unknown network '{}'; set STELLAR_NETWORK_PASSPHRASE directly",
+                        other
+                    ),
                 });
             }
         }
@@ -180,13 +183,18 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
     // raw key bytes at runtime.
     let oracle_address = stellar_address_from_seed(&seed)?;
 
-    let lichess_api_token = std::env::var("LICHESS_API_TOKEN").ok().filter(|s| !s.is_empty());
-    let chessdotcom_api_key = std::env::var("CHESSDOTCOM_API_KEY").ok().filter(|s| !s.is_empty());
+    let lichess_api_token = std::env::var("LICHESS_API_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let chessdotcom_api_key = std::env::var("CHESSDOTCOM_API_KEY")
+        .ok()
+        .filter(|s| !s.is_empty());
 
     let poll_interval_secs = parse_u64_env("ORACLE_POLL_INTERVAL_SECS", 30)?;
     let max_retries = parse_u32_env("ORACLE_MAX_RETRIES", 5)?;
     let retry_base_delay_secs = parse_u64_env("ORACLE_RETRY_BASE_DELAY_SECS", 10)?;
-    let queue_dir = std::env::var("ORACLE_QUEUE_DIR").unwrap_or_else(|_| "./oracle-queue".to_string());
+    let queue_dir =
+        std::env::var("ORACLE_QUEUE_DIR").unwrap_or_else(|_| "./oracle-queue".to_string());
 
     Ok(OracleConfig {
         rpc_url,
@@ -239,7 +247,10 @@ fn decode_key_hex(hex_str: &str) -> Result<[u8; 32], ConfigError> {
     if bytes.len() != 32 {
         return Err(ConfigError::InvalidValue {
             var: "ORACLE_SIGNING_KEY",
-            reason: format!("expected 32 bytes (64 hex chars), got {} bytes", bytes.len()),
+            reason: format!(
+                "expected 32 bytes (64 hex chars), got {} bytes",
+                bytes.len()
+            ),
         });
     }
     let mut arr = [0u8; 32];
