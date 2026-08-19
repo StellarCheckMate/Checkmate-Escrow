@@ -951,3 +951,149 @@ fn test_get_governance_parameters() {
     assert_eq!(client.get_minimum_hold_duration(), 50);
     assert_eq!(client.get_quorum_basis_points(), 3000);
 }
+
+// ── mark_dispute_for_oracle_slash ───────────────────────────────────────────
+
+/// Runs a dispute through to `ResolvedOverturned` (same flow as
+/// `test_resolve_dispute_overturns_oracle_result`) and returns the dispute id
+/// plus its bond amount, ready for `mark_dispute_for_oracle_slash`.
+///
+/// Returns `(env, contract_id, oracle, player1, player2, token, admin, dispute_id, bond)`.
+#[allow(clippy::type_complexity)]
+fn overturned_dispute(
+    period: u32,
+) -> (
+    Env,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    u64,
+    i128,
+) {
+    let (env, contract_id, oracle, player1, player2, token, admin) =
+        setup_with_dispute_period(period);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    // 10% bond gives headroom for over/under-amount slash tests below.
+    client.set_dispute_bond_basis_points(&1000);
+
+    let match_id =
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "slash001");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "ab12cd34"));
+    client.vote_on_dispute(&dispute_id, &player2, &true);
+
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+    client.resolve_dispute_by_vote(&dispute_id);
+
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.state, DisputeState::ResolvedOverturned);
+    let bond = dispute.dispute_bond;
+
+    (
+        env,
+        contract_id,
+        oracle,
+        player1,
+        player2,
+        token,
+        admin,
+        dispute_id,
+        bond,
+    )
+}
+
+#[test]
+fn test_mark_dispute_for_oracle_slash_emits_signal_event() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin, dispute_id, bond) =
+        overturned_dispute(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.mark_dispute_for_oracle_slash(&dispute_id, &bond);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "dispute").into_val(&env),
+        Symbol::new(&env, "oracle_slash_signal").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(
+        matched.is_some(),
+        "oracle_slash_signal event must be emitted"
+    );
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_dispute_id, ev_oracle, ev_amount): (u64, Address, i128) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_dispute_id, dispute_id);
+    assert_eq!(ev_oracle, oracle);
+    assert_eq!(ev_amount, bond);
+}
+
+#[test]
+fn test_mark_dispute_for_oracle_slash_requires_resolved_overturned_state() {
+    // Dispute still Active (voting not yet resolved) must be rejected.
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let match_id =
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "slash002");
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "cd34ab12"));
+
+    let result = client.try_mark_dispute_for_oracle_slash(&dispute_id, &1);
+    assert_eq!(result, Err(Ok(Error::InvalidState)));
+}
+
+#[test]
+fn test_mark_dispute_for_oracle_slash_rejects_zero_amount() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, dispute_id, _bond) =
+        overturned_dispute(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_mark_dispute_for_oracle_slash(&dispute_id, &0);
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_mark_dispute_for_oracle_slash_rejects_amount_over_bond() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, dispute_id, bond) =
+        overturned_dispute(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_mark_dispute_for_oracle_slash(&dispute_id, &(bond + 1));
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_mark_dispute_for_oracle_slash_unknown_dispute_not_found() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_mark_dispute_for_oracle_slash(&9999u64, &1);
+    assert_eq!(result, Err(Ok(Error::DisputeNotFound)));
+}
+
+#[test]
+fn test_mark_dispute_for_oracle_slash_requires_admin_auth() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, dispute_id, bond) =
+        overturned_dispute(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    env.set_auths(&[]);
+    let result = client.try_mark_dispute_for_oracle_slash(&dispute_id, &bond);
+    assert!(result.is_err(), "non-admin caller must be rejected");
+}
