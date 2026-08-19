@@ -803,17 +803,14 @@ dependencies = [
  "deadpool-postgres",
  "futures",
  "indexmap 2.14.0",
- "postgres-types",
  "redis",
  "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "thiserror 1.0.69",
  "tokio",
  "tokio-postgres",
  "tower 0.4.13",
- "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -1077,12 +1074,6 @@ dependencies = [
  "stable_deref_trait",
  "zeroize",
 ]
-
-[[package]]
-name = "heck"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermit-abi"
@@ -1757,15 +1748,12 @@ dependencies = [
 name = "oracle-service"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "axum",
- "base64 0.22.1",
  "chrono",
  "ed25519-dalek",
  "hex",
  "oracle",
- "rand 0.8.7",
  "reqwest",
  "serde",
  "serde_json",
@@ -1890,18 +1878,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
-name = "postgres-derive"
-version = "0.4.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d9d9089bb0ce62f4b5d52a0be0f4acfb35738b979380670d3dea85fe38d6ddd"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "postgres-protocol"
 version = "0.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1928,7 +1904,6 @@ dependencies = [
  "bytes",
  "chrono",
  "fallible-iterator",
- "postgres-derive",
  "postgres-protocol",
  "uuid",
 ]
@@ -2249,7 +2224,7 @@ dependencies = [
  "tokio-native-tls",
  "tokio-rustls",
  "tower 0.5.3",
- "tower-http 0.6.11",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -3231,23 +3206,6 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper",
  "tokio",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "tower-http"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e9cd434a998747dd2c4276bc96ee2e0c7a2eadf3cae88e52be55a05fa9053f5"
-dependencies = [
- "bitflags",
- "bytes",
- "http",
- "http-body",
- "http-body-util",
- "pin-project-lite",
  "tower-layer",
  "tower-service",
  "tracing",

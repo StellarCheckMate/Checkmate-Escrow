@@ -14,7 +14,6 @@ name = "oracle-replay"
 path = "src/bin/replay.rs"
 
 [dependencies]
-anyhow = "1"
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -35,10 +34,6 @@ hex = "0.4"
 stellar-xdr = { version = "27.0.0", features = ["std", "base64"] }
 # Stellar strkey for G-address / C-address encoding
 stellar-strkey = "0.0.18"
-# Random number generator for sequence numbers / nonces
-rand = "0.8"
-# Base64 for XDR encoding over the wire
-base64 = "0.22"
 # SHA-256 hashing for Stellar transaction signing
 sha2 = "0.10"
 
