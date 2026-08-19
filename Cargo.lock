@@ -1761,7 +1761,7 @@ dependencies = [
  "stellar-strkey 0.0.18",
  "stellar-xdr 27.0.0",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.19",
  "tokio",
  "tracing",
  "tracing-subscriber",
