@@ -43,30 +43,38 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Run coverage
+        id: coverage
         run: |
           cd contracts/escrow
+          set +e
           cargo tarpaulin \
             --lib \
             --out Html \
+            --out Stdout \
             --output-dir coverage \
             --timeout 300 \
             --exclude-files tests/* \
             --exclude-files helpers.rs \
-            -- --test-threads 1
+            --exclude-files 'contracts/oracle/*' \
+            --exclude-files 'services/event-indexer/*' \
+            --fail-under 90 \
+            -- --test-threads 1 | tee coverage-output.log
+          TARPAULIN_EXIT=${PIPESTATUS[0]}
+          set -e
 
-      - name: Check coverage thresholds
-        run: |
-          cd contracts/escrow
-          # Extract coverage percentage from index.html
-          COVERAGE_LINE=$(grep -oP 'overall.*?>\K[0-9.]+' coverage/index.html | head -1)
+          # tarpaulin's Html report has no extractable aggregate score in this
+          # version (0.37.2) -- the real number only appears on its Stdout,
+          # e.g. "76.26% coverage, 1754/2300 lines covered".
+          COVERAGE_LINE=$(grep -oP '[0-9.]+(?=% coverage)' coverage-output.log | tail -1)
+          echo "coverage_percent=${COVERAGE_LINE}" >> "$GITHUB_OUTPUT"
           echo "Line Coverage: ${COVERAGE_LINE}%"
 
-          # Enforce minimum 95% line coverage for contracts
-          if (( $(echo "$COVERAGE_LINE < 90.0" | bc -l) )); then
+          if [[ "$TARPAULIN_EXIT" -ne 0 ]]; then
             echo "❌ Line coverage ${COVERAGE_LINE}% is below minimum threshold of 90%"
-            exit 1
+            echo "coverage_status=below_threshold" >> "$GITHUB_OUTPUT"
           else
             echo "✅ Line coverage ${COVERAGE_LINE}% meets minimum threshold"
+            echo "coverage_status=ok" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload coverage as artifact
@@ -74,7 +82,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: contracts/escrow/coverage/
+          # cargo-tarpaulin resolves --output-dir relative to the workspace
+          # root (repo root), not the `cd contracts/escrow` cwd above.
+          path: coverage/
           retention-days: 30
 
       - name: Comment coverage on PR
@@ -82,28 +92,17 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const path = require('path');
+            const coverage = '${{ steps.coverage.outputs.coverage_percent }}' || 'Unknown';
 
-            // Try to extract coverage from HTML report
-            try {
-              const htmlPath = path.join(process.env.GITHUB_WORKSPACE, 'contracts/escrow/coverage/index.html');
-              const html = fs.readFileSync(htmlPath, 'utf8');
-
-              // Extract coverage percentage
-              const match = html.match(/overall.*?>([0-9.]+)%/);
-              const coverage = match ? match[1] : 'Unknown';
-
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: `📊 **Code Coverage Report**\n\nLine Coverage: **${coverage}%**\n\nMinimum Required: **90%**\n\n[View detailed coverage report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`
-              });
-            } catch (err) {
-              console.error('Failed to post coverage comment:', err);
-            }
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `📊 **Code Coverage Report**\n\nLine Coverage: **${coverage}%**\n\nMinimum Required: **90%**\n\n[View detailed coverage report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+            });
 
       - name: Fail if coverage below threshold
-        if: failure()
-        run: exit 1
+        if: steps.coverage.outputs.coverage_status == 'below_threshold'
+        run: |
+          echo "::error::Line coverage ${{ steps.coverage.outputs.coverage_percent }}% is below the required 90% threshold."
+          exit 1

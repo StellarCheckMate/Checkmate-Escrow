@@ -4,11 +4,15 @@
 [coverage]
 # Minimum coverage thresholds
 min-coverage = 90
-timeout = 300
+timeout = "300s"
 exact = false
 
-# Exclude test helpers and test utilities
-exclude-files = ["tests/*", "helpers.rs"]
+# Exclude test helpers/utilities and other workspace crates whose code gets
+# incidentally exercised by escrow's own integration-style unit tests (e.g.
+# tests that register the oracle contract in the same Env). Without these,
+# cargo-tarpaulin reports on the whole workspace's source tree, not just
+# this crate, and the "overall" percentage becomes meaningless.
+exclude-files = ["tests/*", "helpers.rs", "contracts/oracle/*", "services/event-indexer/*"]
 
 # Output format
 out = ["Html"]

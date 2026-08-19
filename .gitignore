@@ -1,5 +1,6 @@
 # Build artifacts
 target/
+/coverage/
 
 # Python bytecode (scripts/doc_conformance)
 __pycache__/
