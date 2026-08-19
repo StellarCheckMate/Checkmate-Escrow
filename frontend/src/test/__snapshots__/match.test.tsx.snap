@@ -1,0 +1,210 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CreateMatchForm > snapshot: empty form 1`] = `
+<div>
+  <form
+    novalidate=""
+  >
+    <div>
+      <label
+        for="player2"
+      >
+        Player 2 Address
+      </label>
+      <input
+        id="player2"
+        value=""
+      />
+    </div>
+    <div>
+      <label
+        for="stakeAmount"
+      >
+        Stake Amount
+      </label>
+      <div
+        style="position: relative; display: inline-block; width: 100%;"
+      >
+        <input
+          id="stakeAmount"
+          inputmode="decimal"
+          min="0"
+          style="width: 100%; padding-right: 7ch; box-sizing: border-box;"
+          type="text"
+          value=""
+        />
+        <span
+          aria-hidden="true"
+          style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; color: rgb(85, 85, 85); font-weight: bold;"
+        >
+          TOKEN
+        </span>
+      </div>
+    </div>
+    <div>
+      <label
+        for="token"
+      >
+        Token Address
+      </label>
+      <input
+        id="token"
+        value=""
+      />
+    </div>
+    <div>
+      <label
+        for="gameId"
+      >
+        Game ID
+      </label>
+      <input
+        id="gameId"
+        value=""
+      />
+    </div>
+    <div>
+      <label
+        for="platform"
+      >
+        Platform
+      </label>
+      <select
+        id="platform"
+      >
+        <option
+          value="lichess"
+        >
+          Lichess
+        </option>
+        <option
+          value="chessdotcom"
+        >
+          Chess.com
+        </option>
+      </select>
+    </div>
+    <button
+      type="submit"
+    >
+      Create Match
+    </button>
+  </form>
+</div>
+`;
+
+exports[`DepositButton > snapshot: disabled 1`] = `
+<div>
+  <div>
+    <button
+      aria-busy="false"
+      disabled=""
+    >
+      Deposit
+    </button>
+  </div>
+</div>
+`;
+
+exports[`DepositButton > snapshot: idle 1`] = `
+<div>
+  <div>
+    <button
+      aria-busy="false"
+    >
+      Deposit
+    </button>
+  </div>
+</div>
+`;
+
+exports[`MatchCard > snapshot 1`] = `
+<div>
+  <div>
+    <div>
+      <span>
+        Match #
+        42
+      </span>
+      <span
+        aria-label="active"
+        style="color: rgb(255, 255, 255); border-radius: 9999px; padding: 2px 10px; font-size: 0.75rem; font-weight: 600; display: inline-block; background-color: rgb(37, 99, 235);"
+      >
+        Active
+      </span>
+    </div>
+    <dl>
+      <dt>
+        Player 1
+      </dt>
+      <dd>
+        GAAA
+      </dd>
+      <dt>
+        Player 2
+      </dt>
+      <dd>
+        GBBB
+      </dd>
+      <dt>
+        Stake
+      </dt>
+      <dd>
+        50
+         
+        USDC
+      </dd>
+      <dt>
+        Platform
+      </dt>
+      <dd>
+        Lichess
+      </dd>
+    </dl>
+  </div>
+</div>
+`;
+
+exports[`MatchStatusBadge > snapshot: active 1`] = `
+<div>
+  <span
+    aria-label="active"
+    style="color: rgb(255, 255, 255); border-radius: 9999px; padding: 2px 10px; font-size: 0.75rem; font-weight: 600; display: inline-block; background-color: rgb(37, 99, 235);"
+  >
+    Active
+  </span>
+</div>
+`;
+
+exports[`MatchStatusBadge > snapshot: cancelled 1`] = `
+<div>
+  <span
+    aria-label="cancelled"
+    style="color: rgb(255, 255, 255); border-radius: 9999px; padding: 2px 10px; font-size: 0.75rem; font-weight: 600; display: inline-block; background-color: rgb(107, 114, 128);"
+  >
+    Cancelled
+  </span>
+</div>
+`;
+
+exports[`MatchStatusBadge > snapshot: completed 1`] = `
+<div>
+  <span
+    aria-label="completed"
+    style="color: rgb(255, 255, 255); border-radius: 9999px; padding: 2px 10px; font-size: 0.75rem; font-weight: 600; display: inline-block; background-color: rgb(22, 163, 74);"
+  >
+    Completed
+  </span>
+</div>
+`;
+
+exports[`MatchStatusBadge > snapshot: pending 1`] = `
+<div>
+  <span
+    aria-label="pending"
+    style="color: rgb(255, 255, 255); border-radius: 9999px; padding: 2px 10px; font-size: 0.75rem; font-weight: 600; display: inline-block; background-color: rgb(202, 138, 4);"
+  >
+    Pending
+  </span>
+</div>
+`;

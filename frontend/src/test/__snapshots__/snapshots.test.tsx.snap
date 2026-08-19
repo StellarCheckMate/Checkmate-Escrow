@@ -1,0 +1,112 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Snapshots > BalanceDisplay 1`] = `
+<div>
+  <div
+    aria-label="XLM balance"
+    aria-live="polite"
+    role="status"
+  >
+    <span>
+      100.0000000
+       XLM
+    </span>
+  </div>
+</div>
+`;
+
+exports[`Snapshots > TransactionSigner idle 1`] = `
+<div>
+  <div>
+    <button
+      type="button"
+    >
+      Sign Transaction
+    </button>
+  </div>
+</div>
+`;
+
+exports[`Snapshots > TransactionSigner no wallet 1`] = `
+<div>
+  <div>
+    <button
+      disabled=""
+      type="button"
+    >
+      Sign Transaction
+    </button>
+  </div>
+</div>
+`;
+
+exports[`Snapshots > WalletConnector connected 1`] = `
+<div>
+  <div
+    aria-label="Wallet"
+    role="region"
+  >
+    <span
+      title="GABCDE1234567890ABCDE1234567890ABCDE1234567890ABCDE1234567"
+    >
+      GABCDE
+      …
+      4567
+    </span>
+    <button
+      type="button"
+    >
+      Disconnect
+    </button>
+  </div>
+</div>
+`;
+
+exports[`Snapshots > WalletConnector disconnected 1`] = `
+<div>
+  <div
+    aria-label="Connect wallet"
+    role="region"
+  >
+    <button
+      aria-label="Connect with Freighter"
+      type="button"
+    >
+      Connect Freighter
+    </button>
+    <button
+      aria-label="Connect with Albedo"
+      type="button"
+    >
+      Connect Albedo
+    </button>
+  </div>
+</div>
+`;
+
+exports[`Snapshots > WalletConnector with error 1`] = `
+<div>
+  <div
+    aria-label="Connect wallet"
+    role="region"
+  >
+    <button
+      aria-label="Connect with Freighter"
+      type="button"
+    >
+      Connect Freighter
+    </button>
+    <button
+      aria-label="Connect with Albedo"
+      type="button"
+    >
+      Connect Albedo
+    </button>
+    <p
+      role="alert"
+    >
+      Freighter extension not detected.
+    </p>
+  </div>
+</div>
+`;

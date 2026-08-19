@@ -1,0 +1,56 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`MatchList > snapshot: populated list 1`] = `
+<div>
+  <ul
+    aria-label="Match list"
+  >
+    <li
+      tabindex="0"
+    >
+      <div>
+        <div>
+          <span>
+            Match #
+            1
+          </span>
+          <span
+            aria-label="active"
+            style="color: rgb(255, 255, 255); border-radius: 9999px; padding: 2px 10px; font-size: 0.75rem; font-weight: 600; display: inline-block; background-color: rgb(37, 99, 235);"
+          >
+            Active
+          </span>
+        </div>
+        <dl>
+          <dt>
+            Player 1
+          </dt>
+          <dd>
+            GAAA
+          </dd>
+          <dt>
+            Player 2
+          </dt>
+          <dd>
+            GBBB
+          </dd>
+          <dt>
+            Stake
+          </dt>
+          <dd>
+            50
+             
+            USDC
+          </dd>
+          <dt>
+            Platform
+          </dt>
+          <dd>
+            Lichess
+          </dd>
+        </dl>
+      </div>
+    </li>
+  </ul>
+</div>
+`;
