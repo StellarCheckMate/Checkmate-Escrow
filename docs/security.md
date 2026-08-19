@@ -260,14 +260,14 @@ Key properties:
 
 ## Known Limitations
 
-<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=41 sha256=0c23a067e8485bb2d30c198995a18b78f9591bc66506f988f1e1399cab01f590 -->
-<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=44 sha256=bbaa55f15d653c0614ce3d2f144a8394ca8a5b59215f0a4d279ed2e9d99e7a15 -->
-<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=47 sha256=fb036554951d87299457f6fd6dd78dd8c6e3b884d5b7785c2f8fc7834225f9a5 -->
+<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=76 sha256=a53a22fce1721f98852569ab296136700baf0f930d585a36272ab4a1feec5771 -->
+<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=79 sha256=1572038928a413dc2a9ebef591e136dfd9ed9fc3d75549c41a53451fd4f33c54 -->
+<!-- doc-conformance: verified path=contracts/escrow/src/lib.rs line=82 sha256=7f65c4fb2fd2bdbf73be63e7e9d896cd7c3596ccfe3806513966026eea57cce1 -->
 
 ### Smart Contract Limitations
 
 1. **Token Support Is Allowlist-Gated, Not "Native"**: The contract accepts any Stellar Asset Contract (SAC) token — including XLM's wrapped SAC and Soroban-native token contracts such as USDC — subject to an optional admin-managed allowlist (`add_allowed_token` / `is_token_allowed`). There is no separate "native XLM" fast-path distinct from the generic token interface; every token, including XLM, is moved via the standard `token::Client` transfer interface. A `create_match_with_conversion` path additionally supports two-token ("multi-token") matches where each player stakes a different token at an oracle-validated conversion rate — see [Roadmap v1.0.1](roadmap.md#v101--multi-token-conversion-rate-hardening-complete) for the settlement-correctness history of that feature.
-2. **Configurable Timeout, Not Fixed**: Match expiration is **not** hardcoded. `set_match_timeout` (admin-only) accepts any value in `[MIN_MATCH_TIMEOUT_LEDGERS, MAX_MATCH_TIMEOUT_LEDGERS]` = `[17,280, 1,555,200]` ledgers (approximately 1 day to 90 days at 5s/ledger). If never set, `DEFAULT_MATCH_TIMEOUT_LEDGERS` (518,400 ledgers, ~30 days) applies. See `contracts/escrow/src/lib.rs:41-47` and `set_match_timeout` (`contracts/escrow/src/lib.rs:1329`).
+2. **Configurable Timeout, Not Fixed**: Match expiration is **not** hardcoded. `set_match_timeout` (admin-only) accepts any value in `[MIN_MATCH_TIMEOUT_SECONDS, MAX_MATCH_TIMEOUT_SECONDS]` = `[86,400, 7,776,000]` seconds (1 day to 90 days). If never set, `DEFAULT_MATCH_TIMEOUT_SECONDS` (2,592,000 seconds, 30 days) applies. See `contracts/escrow/src/lib.rs:76-82` and `set_match_timeout` (`contracts/escrow/src/lib.rs:2556`).
 3. **No Partial Withdrawals**: Players cannot withdraw partial stakes
 4. **Single Oracle (EscrowContract)**: `EscrowContract` still trusts exactly one
    configured oracle address as the authoritative trigger for payouts (see

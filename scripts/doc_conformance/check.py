@@ -134,7 +134,7 @@ def check_timeout_bounds(facts: ContractFacts, security_text: str) -> list[Findi
             Finding(
                 "error",
                 "timeout-bounds",
-                f"MIN_MATCH_TIMEOUT_LEDGERS ({fmt(facts.timeout_min)}) is not "
+                f"MIN_MATCH_TIMEOUT_SECONDS ({fmt(facts.timeout_min)}) is not "
                 "mentioned in docs/security.md.",
             )
         )
@@ -143,7 +143,7 @@ def check_timeout_bounds(facts: ContractFacts, security_text: str) -> list[Findi
             Finding(
                 "error",
                 "timeout-bounds",
-                f"MAX_MATCH_TIMEOUT_LEDGERS ({fmt(facts.timeout_max)}) is not "
+                f"MAX_MATCH_TIMEOUT_SECONDS ({fmt(facts.timeout_max)}) is not "
                 "mentioned in docs/security.md.",
             )
         )
@@ -163,7 +163,7 @@ def check_timeout_bounds(facts: ContractFacts, security_text: str) -> list[Findi
                     f"docs/security.md contains a stale fixed/hardcoded-timeout "
                     f"claim matching /{pat}/i. Match timeout is admin-configurable "
                     "via set_match_timeout — see contracts/escrow/src/lib.rs "
-                    "MIN_MATCH_TIMEOUT_LEDGERS/MAX_MATCH_TIMEOUT_LEDGERS.",
+                    "MIN_MATCH_TIMEOUT_SECONDS/MAX_MATCH_TIMEOUT_SECONDS.",
                 )
             )
     return findings

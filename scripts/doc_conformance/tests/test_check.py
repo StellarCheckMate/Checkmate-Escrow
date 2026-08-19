@@ -113,8 +113,8 @@ class TestPositiveControls(unittest.TestCase):
         def mutate(root: Path):
             _replace(
                 root / "contracts/escrow/src/lib.rs",
-                "    pub fn set_match_timeout(env: Env, timeout: u32) -> Result<(), u32> {\n        Ok(())\n    }\n",
-                "    pub fn set_match_timeout(env: Env, timeout: u32) -> Result<(), u32> {\n        Ok(())\n    }\n\n"
+                "    pub fn set_match_timeout(env: Env, seconds: u64) -> Result<(), u32> {\n        Ok(())\n    }\n",
+                "    pub fn set_match_timeout(env: Env, seconds: u64) -> Result<(), u32> {\n        Ok(())\n    }\n\n"
                 "    pub fn undocumented_new_fn(env: Env) -> u32 {\n        0\n    }\n",
             )
 
@@ -135,7 +135,7 @@ class TestPositiveControls(unittest.TestCase):
         def mutate(root: Path):
             _replace(
                 root / "docs/security.md",
-                "Match timeout is configurable in the range 17,280 to 1,555,200 ledgers via `set_match_timeout`.",
+                "Match timeout is configurable in the range 86,400 to 7,776,000 seconds via `set_match_timeout`.",
                 "Match expiration timeout is hardcoded (~24 hours).",
             )
 
@@ -173,8 +173,8 @@ class TestPositiveControls(unittest.TestCase):
             # the doc claim — the annotation's recorded hash goes stale.
             _replace(
                 root / "contracts/escrow/src/lib.rs",
-                "pub const MIN_MATCH_TIMEOUT_LEDGERS: u32 = 17_280;",
-                "pub const MIN_MATCH_TIMEOUT_LEDGERS: u32 = 8_640;",
+                "pub const MIN_MATCH_TIMEOUT_SECONDS: u64 = 86_400;",
+                "pub const MIN_MATCH_TIMEOUT_SECONDS: u64 = 43_200;",
             )
 
         fx = DriftFixture(mutate)

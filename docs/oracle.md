@@ -1144,6 +1144,8 @@ The complete public function surface of `OracleContract` (`contracts/oracle/src/
 | `set_rate` | `(token_a: Address, token_b: Address, rate: i128)` | Admin-only. Stores a fixed-point exchange rate (scaled `1e7`) between `token_a` and `token_b`, used by `swap` for atomic token conversion. |
 | `get_rate` | `(token_a: Address, token_b: Address) -> i128` | Public query. Returns the rate previously stored by `set_rate` for the ordered pair, or `Error::ResultNotFound` if none has been set. |
 | `swap` | `(caller: Address, token_in: Address, token_out: Address, amount_in: i128, min_amount_out: i128, recipient: Address)` | Atomically exchanges `amount_in` of `token_in` (collected from `caller`) for `token_out` (dispensed to `recipient`) using a stored rate. Requires `caller` authorization and enforces slippage protection via `min_amount_out`. See [Swap Function](#swap-function-token-exchange) for complete details. |
+| `get_cached_result` | `(game_id: String, platform: Platform) -> Option<(Winner, u64)>` | Returns `Some((result, expiry_timestamp))` for a non-expired cache entry, or `None` if missing or expired (an expired entry is also removed from storage as a side effect). |
+| `invalidate_cache` | `(game_id: String, platform: Platform)` | Removes any cached result for `(game_id, platform)`, forcing the next lookup to miss. |
 
 ---
 

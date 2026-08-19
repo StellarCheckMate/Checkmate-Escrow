@@ -148,13 +148,13 @@ def extract_pub_fns(src: str, *, impl_only: bool = True) -> dict[str, FnSig]:
     return fns
 
 
-def extract_u32_const(src: str, const_name: str) -> int:
+def extract_int_const(src: str, const_name: str) -> int:
     src = _strip_line_comments(src)
     m = re.search(
-        rf"const\s+{re.escape(const_name)}\s*:\s*u32\s*=\s*([0-9_]+)\s*;", src
+        rf"const\s+{re.escape(const_name)}\s*:\s*u(?:32|64)\s*=\s*([0-9_]+)\s*;", src
     )
     if not m:
-        raise ValueError(f"const {const_name} not found (or not a literal u32)")
+        raise ValueError(f"const {const_name} not found (or not a literal u32/u64)")
     return int(m.group(1).replace("_", ""))
 
 
@@ -174,6 +174,6 @@ def load_contract_facts(repo_root: Path) -> ContractFacts:
     facts.player_tier_variants = extract_enum_variants(escrow_types, "PlayerTier")
     facts.escrow_fns = extract_pub_fns(escrow_lib)
     facts.oracle_fns = extract_pub_fns(oracle_lib)
-    facts.timeout_min = extract_u32_const(escrow_lib, "MIN_MATCH_TIMEOUT_LEDGERS")
-    facts.timeout_max = extract_u32_const(escrow_lib, "MAX_MATCH_TIMEOUT_LEDGERS")
+    facts.timeout_min = extract_int_const(escrow_lib, "MIN_MATCH_TIMEOUT_SECONDS")
+    facts.timeout_max = extract_int_const(escrow_lib, "MAX_MATCH_TIMEOUT_SECONDS")
     return facts

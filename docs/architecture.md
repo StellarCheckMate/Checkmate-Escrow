@@ -185,6 +185,8 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 | `conversion_rate_ledger` | `Option<u32>` | Ledger sequence at which `conversion_rate` was validated against the oracle price. Used to reject stale rates at payout time. |
 | `paused_ledger`    | `Option<u32>`   | Ledger sequence at which `pause_match` was last called; cleared by `resume_match`. `None` when the match is not currently paused. |
 | `total_pause_duration` | `u32`       | Cumulative number of ledgers the match has spent paused across all pause/resume cycles. |
+| `referrer`         | `Option<Address>` | Referrer address set via `create_match_with_referrer`, for referral fee sharing on payout. `None` for matches created via `create_match`. |
+| `last_heartbeat`   | `u64`           | Unix timestamp of the last recorded match activity (set at creation, refreshed by `heartbeat_match` and deposits). Used by `dispute_and_rollback_match` to enforce its 24-hour rollback window. |
 
 > **Internal fields** — `player1_deposited` and `player2_deposited` are internal bookkeeping. Use `is_funded(match_id)` to check whether a match is fully funded.
 
@@ -338,8 +340,12 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_oracle` | `() -> Address` | Returns the stored oracle address. |
 | `set_protocol_config` | `(config: ProtocolConfig)` | Admin-only. Sets vesting duration, cancellation fee, and treasury address (see `ProtocolConfig` below). |
 | `get_protocol_config` | `() -> ProtocolConfig` | Returns the current protocol configuration. |
-| `set_match_timeout` | `(timeout: u32)` | Admin-only. Sets the pending-match expiration timeout, in ledgers. Must be within `[MIN_MATCH_TIMEOUT_LEDGERS, MAX_MATCH_TIMEOUT_LEDGERS]` = `[17,280, 1,555,200]` or returns `Error::InvalidTimeout`. See [Known Limitations](security.md#smart-contract-limitations). |
+| `set_match_timeout` | `(seconds: u64)` | Admin-only. Sets the pending-match expiration timeout, in seconds. Must be within `[MIN_MATCH_TIMEOUT_SECONDS, MAX_MATCH_TIMEOUT_SECONDS]` = `[86,400, 7,776,000]` or returns `Error::InvalidTimeout`. See [Known Limitations](security.md#smart-contract-limitations). |
 | `get_match_timeout` | `() -> u32` | Returns the currently effective match timeout (configured value, or `DEFAULT_MATCH_TIMEOUT_LEDGERS` = 518,400 if never set). |
+| `set_maximum_stake` | `(amount: Option<i128>)` | Admin-only. Sets the maximum stake accepted by `create_match` and friends. `None` removes the cap. |
+| `set_minimum_stake` | `(amount: i128)` | Admin-only. Sets the minimum stake accepted by `create_match` and friends. |
+| `set_oracle` | `(oracle: Address)` | Admin-only. Alias for `update_oracle`. |
+| `get_oracle_address` | `() -> Result<Address, Error>` | View function; returns the currently configured oracle address without requiring authentication (unlike `get_oracle`). |
 
 #### Token Allowlist
 
@@ -357,11 +363,14 @@ This section lists the complete public function surface of `EscrowContract` (`co
 |----------|-----------|-------------|
 | `create_match` | `(player1: Address, player2: Address, stake_amount: i128, token: Address, game_id: String, platform: Platform) -> u64` | Creates a new single-token match and returns its ID. |
 | `create_match_with_conversion` | `(player1: Address, player2: Address, stake_amount: i128, token_a: Address, token_b: Address, rate: i128, game_id: String, platform: Platform) -> u64` | Creates a multi-token match: `player1` stakes `token_a`, `player2` stakes the equivalent in `token_b` at `rate`, validated against the oracle contract's `get_rate` within a ±5% tolerance (see [oracle.md](oracle.md#contract-function-reference) and [Roadmap v1.0.1](roadmap.md#v101--multi-token-conversion-rate-hardening-complete)). |
+| `create_match_with_referrer` | `(player1: Address, player2: Address, stake_amount: i128, token: Address, game_id: String, platform: Platform, referrer: Address) -> Result<u64, Error>` | Identical to `create_match`, additionally storing a `referrer` address on the match. On winner payout, a referral fee is deducted from the winner's proceeds and sent to the referrer (see `set_referral_share_bps`); only applies when `cancellation_fee_basis_points > 0`. |
 | `get_match` | `(match_id: u64) -> Match` | Returns the current state of a match. |
 | `cancel_match` | `(match_id: u64, caller: Address)` | Cancels a `Pending` match and refunds any deposits (minus the configured cancellation fee, if any). |
 | `expire_match` | `(match_id: u64)` | Anyone may call once a `Pending` match's timeout has elapsed since `created_ledger`; cancels and refunds like `cancel_match`. |
 | `pause_match` | `(match_id: u64, caller: Address)` | Either player may pause an `Active` or `PendingResult` match. |
 | `resume_match` | `(match_id: u64, caller: Address)` | Either player may resume a `Paused` match, restoring its prior state and accumulating `total_pause_duration`. |
+| `heartbeat_match` | `(match_id: u64, player: Address) -> Result<(), Error>` | Either player refreshes `Match.last_heartbeat` to the current ledger timestamp on an `Active` match. Pure timestamp update — no token movement — used to keep `dispute_and_rollback_match`'s 24-hour window alive during long games. |
+| `dispute_and_rollback_match` | `(match_id: u64, disputer: Address, reason: String) -> Result<(), Error>` | Either player may roll back an `Active` match to `Cancelled` with a full refund (no cancellation fee) if called within `ROLLBACK_WINDOW_SECONDS` (24h) of `Match.last_heartbeat`. A player-friendly escape hatch for a stalled/disconnected opponent, distinct from the oracle-result dispute flow. |
 
 #### Escrow
 
@@ -379,6 +388,8 @@ This section lists the complete public function surface of `EscrowContract` (`co
 |----------|-----------|-------------|
 | `submit_result` | `(match_id: u64, winner: Winner)` | Oracle submits the verified match result. If `dispute_period == 0`, payout (or draw refund) executes atomically in the same call. If `dispute_period > 0`, the match moves to `PendingResult` and payout is deferred to `finalize_match` or `resolve_dispute_by_vote`. |
 | `submit_result_with_oracle_record` | `(match_id: u64, winner: Winner, game_id: String) -> Result<(), Error>` | Same as `submit_result`, additionally storing `game_id` under `DataKey::OracleRecord(match_id)` as an audit-trail cross-reference to the oracle contract's `ResultEntry`. |
+| `submit_draw` | `(match_id: u64, oracle: Address) -> Result<(), Error>` | Oracle-only convenience wrapper around the same settlement path as `submit_result`, fixed to `Winner::Draw`. |
+| `submit_result_batch` | `(results: Vec<(u64, Winner)>, caller: Address) -> Result<Vec<Option<Error>>, Error>` | Oracle-only. Submits results for multiple matches in one call. Each match is processed independently — a failure on one does not stop the rest. The returned `Vec` has one entry per input, in order (`None` = success, `Some(Error)` = that match's failure). |
 | `finalize_match` | `(match_id: u64)` | Anyone may call once a `PendingResult` match's dispute deadline has elapsed with no active dispute; executes the deferred payout. |
 | `dispute_oracle_result` | `(match_id: u64, disputer: Address, evidence_hash: String) -> u64` | Either player may raise a dispute on a `PendingResult` match before the dispute deadline, opening a voting window. Returns the new dispute ID. |
 | `vote_on_dispute` | `(dispute_id: u64, voter: Address, vote: bool)` | Any address holding a positive balance of the match's stake token may cast one token-balance-weighted vote (`true` = overturn) before `voting_deadline`. |
@@ -387,6 +398,13 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_dispute_period` | `(&Env) -> u32` | Returns the currently configured dispute period. |
 | `get_dispute` | `(dispute_id: u64) -> Dispute` | Returns the stored dispute record. |
 | `get_match_dispute_id` | `(match_id: u64) -> u64` | Returns the dispute ID associated with a match, if one has been raised. |
+| `mark_dispute_for_oracle_slash` | `(dispute_id: u64, slash_amount: i128) -> Result<(), Error>` | Admin-only. For a `ResolvedOverturned` dispute, signals (via event) that the implicated oracle should be slashed by `slash_amount` (up to `dispute.dispute_bond`). Does not itself move funds — the oracle contract's `slash_oracle` must be invoked separately. |
+| `set_dispute_bond_basis_points` | `(basis_points: u32) -> Result<(), Error>` | Admin-only. Sets the dispute bond requirement as basis points of match stake (1–10,000). |
+| `get_dispute_bond_basis_points` | `() -> u32` | Returns the current dispute bond basis points (default `DEFAULT_DISPUTE_BOND_BASIS_POINTS`). |
+| `set_minimum_hold_duration` | `(duration: u32) -> Result<(), Error>` | Admin-only. Sets the minimum token-holding duration (in ledgers) required for a vote on `vote_on_dispute` to count. |
+| `get_minimum_hold_duration` | `() -> u32` | Returns the current minimum holding duration (default `DEFAULT_MINIMUM_HOLD_DURATION`). |
+| `set_quorum_basis_points` | `(basis_points: u32) -> Result<(), Error>` | Admin-only. Sets the quorum threshold as basis points of dispute snapshot weight (1–10,000). |
+| `get_quorum_basis_points` | `() -> u32` | Returns the current quorum threshold (default `DEFAULT_QUORUM_BASIS_POINTS`). |
 
 #### Player Tiers
 
@@ -409,6 +427,9 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_pending_matches_paginated` | `(player: Address, offset: u32, limit: u32) -> Vec<Match>` | Paginated version of `get_pending_matches`. |
 | `get_active_matches_paginated` | `(offset: u32, limit: u32) -> Vec<Match>` | Paginated version of `get_active_matches`. |
 | `get_live_matches_paginated` | `(offset: u32, limit: u32) -> Vec<Match>` | Alias for `get_active_matches_paginated` (see `get_live_matches` note above). |
+| `get_completed_matches` | `() -> Result<Vec<Match>, Error>` | Returns all matches in `Completed` state. Scans every match ever created in linear time — prefer `get_completed_matches_paginated` for contracts with a large match count. |
+| `get_completed_matches_paginated` | `(offset: u32, limit: u32) -> Result<Vec<Match>, Error>` | Paginated version of `get_completed_matches`, ordered by match ID ascending. |
+| `get_match_history` | `(player: Option<Address>, limit: u32, offset: u32) -> Result<Vec<Match>, Error>` | Returns a page of `Completed`/`Cancelled` matches, newest first. Pass `player` to restrict to that address's matches, or `None` for the full protocol-wide history. `offset`/`limit` paginate over the filtered result set. |
 
 #### Balance Snapshot Queries
 
@@ -417,6 +438,74 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_balance_snapshots` | `(caller: Address, match_id: u64) -> Vec<BalanceSnapshot>` | Returns all retained snapshots for a match. Admin sees exact amounts; players see redacted amounts. |
 | `get_latest_snapshot` | `(caller: Address, match_id: u64) -> BalanceSnapshot` | Returns the most recent snapshot for a match. Same access rules as `get_balance_snapshots`. |
 | `get_balance_at_timestamp` | `(player: Address, timestamp: u64) -> i128` | Returns `player`'s aggregate escrow balance as of the most recent `PlayerBalanceSnapshot` at or before `timestamp` (see `PlayerBalanceSnapshot` below), or `0` if none exists. |
+| `get_balance_snaps_paginated` | `(player: Address, start: u64, limit: u64) -> Vec<PlayerBalanceSnapshot>` | Returns a page of `player`'s balance snapshots, oldest-first. `start` offsets from the beginning of the retained history; `limit` caps the page size (max 32, the size of the underlying ring buffer). |
+
+#### Referral & Payout Preferences
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `set_referral_share_bps` | `(basis_points: u32) -> Result<(), Error>` | Admin-only. Sets the referral fee share in basis points: `referral_fee = platform_fee * referral_share_bps / 10_000`, paid to the referrer stored on a match created via `create_match_with_referrer`. Default is 2000 (20%). |
+| `get_referral_share_bps` | `() -> u32` | Returns the current referral fee share in basis points (default 2000). |
+| `set_preferred_payout_token` | `(player: Address, token_address: Option<Address>) -> Result<(), Error>` | Player-only. Sets the caller's preferred payout token; `claim_vested_payout` pays out in this token (via the match's oracle-supplied conversion rate) when it differs from the match's stake token. `None` clears the preference. |
+| `get_preferred_payout_token` | `(player: Address) -> Option<Address>` | Returns `player`'s preferred payout token, or `None` if not set. |
+
+#### Stablecoin Registry & Token Blacklist
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `add_stablecoin_issuer` | `(issuer: Address) -> Result<(), Error>` | Admin-only. Registers `issuer` as a stablecoin issuer; tokens matching a registered issuer pass `is_stablecoin`. Used to enforce `stablecoin_only_mode` in `ProtocolConfig`. |
+| `remove_stablecoin_issuer` | `(issuer: Address) -> Result<(), Error>` | Admin-only. Deregisters a stablecoin issuer. |
+| `is_stablecoin` | `(token: Address) -> bool` | Returns whether `token`'s issuer has been registered via `add_stablecoin_issuer`. |
+| `add_token_to_blacklist` | `(token: Address, reason: String) -> Result<(), Error>` | Admin-only. Permanently rejects `token` in `create_match`, even when the allowlist is not enforced. `reason` (max 256 bytes) is stored on-chain for auditability. |
+| `remove_token_from_blacklist` | `(token: Address) -> Result<(), Error>` | Admin-only. Removes `token` from the blacklist. |
+| `is_token_blacklisted` | `(token: Address) -> bool` | Returns whether `token` is currently blacklisted. |
+| `get_blacklist` | `() -> Vec<Address>` | Returns all blacklisted token addresses. |
+
+#### Dynamic Fee Tiers
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `set_fee_tiers` | `(tiers: Vec<FeeTier>) -> Result<(), Error>` | Admin-only. Sets the dynamic fee tier schedule; `tiers` must be ordered by `max_stake` ascending, with the last entry acting as the open-ended catch-all (`max_stake = i128::MAX`). An empty `Vec` clears the schedule (fees fall back to zero). |
+| `get_fee_tiers` | `() -> Vec<FeeTier>` | Returns the current fee tier schedule. |
+| `calculate_fee_by_tier` | `(stake_amount: i128) -> Result<i128, Error>` | Returns the fee (in token units) for a given `stake_amount` under the tiered schedule; `0` if no tiers are configured. |
+
+#### Oracle Rotation
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `rotate_oracle_temporary` | `(old_oracle: Address, new_oracle: Address, duration_seconds: u64) -> Result<(), Error>` | Admin-only. Temporarily rotates the oracle to `new_oracle`; automatically reverts to `old_oracle` once `duration_seconds` elapses. |
+| `propose_oracle_rotation` | `(old_oracle: Address, new_oracle: Address) -> Result<(), Error>` | Admin-only. Proposes a permanent oracle rotation, to be finalized by a matching `rotate_oracle_permanent` call. |
+| `rotate_oracle_permanent` | `(old_oracle: Address, new_oracle: Address) -> Result<(), Error>` | Admin-only. Finalizes a permanent oracle rotation; requires a prior matching `propose_oracle_rotation` proposal. |
+
+#### Multi-Oracle Consensus
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `add_approved_oracle` | `(oracle: Address) -> Result<(), Error>` | Admin-only. Adds `oracle` to the consensus oracle list, permitting it to call `submit_result_consensus`. |
+| `remove_approved_oracle` | `(oracle: Address) -> Result<(), Error>` | Admin-only. Removes `oracle` from the consensus oracle list. |
+| `get_approved_oracles` | `() -> Vec<Address>` | Returns the list of approved consensus oracles. |
+| `set_required_confirmations` | `(count: u32) -> Result<(), Error>` | Admin-only. Sets the number of oracle confirmations required for consensus (default 2). |
+| `get_required_confirmations` | `() -> u32` | Returns the currently required number of oracle confirmations (default 2). |
+| `submit_result_consensus` | `(match_id: u64, winner: Winner, oracle_address: Address) -> Result<(), Error>` | Any approved oracle votes on a match outcome; each oracle may vote once per match and all votes must agree (a conflicting vote returns `Error::ConflictingResult`). Once the required confirmation threshold is reached, payout executes automatically. |
+| `get_oracle_confirmations` | `(match_id: u64) -> u32` | Returns the current confirmation count for a match. |
+
+#### Platform Statistics
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `get_platform_stats` | `() -> PlatformStats` | Returns cumulative on-chain counters — `total_matches`, `total_volume` (staked, in base token units), and `total_payouts` — maintained without requiring off-chain event indexing. |
+
+#### Upgrade & Migration
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `get_version` | `() -> u32` | Returns the current on-chain contract version, encoded as `major * 1_000_000 + minor * 1_000 + patch`. |
+| `get_contract_version` | `() -> String` | Returns the current contract version as a semver string (e.g. `"0.1.0"`). |
+| `schedule_upgrade` | `(new_wasm_hash: BytesN<32>) -> Result<(), Error>` | Admin-only. Schedules a WASM upgrade to `new_wasm_hash` (already uploaded via `soroban contract upload`), starting the `UPGRADE_REVIEW_PERIOD_LEDGERS` (7-day) review period. Fails with `Error::UpgradeAlreadyScheduled` if one is already pending. |
+| `cancel_upgrade` | `() -> Result<(), Error>` | Admin-only. Cancels a pending upgrade before it executes. Fails with `Error::UpgradeNotScheduled` if none is pending. |
+| `execute_upgrade` | `() -> Result<(), Error>` | Admin-only. Applies the scheduled WASM after the review period has elapsed. Requires the contract to be paused first (`Error::InvalidPauseState` otherwise); does not itself advance the version counter — call `migrate_state` afterward. |
+| `migrate_state` | `(target_version: u32) -> Result<(), Error>` | Admin-only. Advances the on-chain version counter to `target_version` and applies any state-schema migrations for the versions crossed. Idempotent; fails with `Error::InvalidVersion` if `target_version` is not ahead of the current version. |
+| `validate_state` | `() -> Result<(), Error>` | Checks that critical instance-storage keys (`Oracle`, `Admin`, `MatchCount`, `ContractVersion`) are present and internally consistent. Intended to be called immediately before and after an upgrade to confirm storage integrity. |
 
 ## Index Behavior, TTL Caveats, and Pagination
 

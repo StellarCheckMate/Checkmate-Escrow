@@ -5,11 +5,11 @@ pub mod types;
 use types::{Match, MatchState};
 use soroban_sdk::{Address, Env};
 
-/// Minimum match timeout: 1 day (17,280 ledgers at 5s/ledger).
-pub const MIN_MATCH_TIMEOUT_LEDGERS: u32 = 17_280;
+/// Minimum match timeout: 1 day (86,400 seconds).
+pub const MIN_MATCH_TIMEOUT_SECONDS: u64 = 86_400;
 
-/// Maximum match timeout: 90 days (1,555,200 ledgers at 5s/ledger).
-pub const MAX_MATCH_TIMEOUT_LEDGERS: u32 = 1_555_200;
+/// Maximum match timeout: 90 days (7,776,000 seconds).
+pub const MAX_MATCH_TIMEOUT_SECONDS: u64 = 7_776_000;
 
 #[contract]
 pub struct EscrowContract;
@@ -23,7 +23,7 @@ impl EscrowContract {
         unimplemented!()
     }
 
-    pub fn set_match_timeout(env: Env, timeout: u32) -> Result<(), u32> {
+    pub fn set_match_timeout(env: Env, seconds: u64) -> Result<(), u32> {
         Ok(())
     }
 }
