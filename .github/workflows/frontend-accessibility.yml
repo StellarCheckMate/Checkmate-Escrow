@@ -41,7 +41,7 @@ jobs:
 
       # ── 4. Build the frontend ─────────────────────────────────────────────
       # Lighthouse CI needs a static build to audit; `npm run build` produces
-      # the ./dist directory referenced in lighthouserc.js.
+      # the ./dist directory referenced in lighthouserc.cjs.
       - name: Build frontend
         run: npm run build
 
@@ -50,11 +50,11 @@ jobs:
         run: npm install -g @lhci/cli@0.14.x
 
       # ── 6. Run Lighthouse CI ──────────────────────────────────────────────
-      # Uses frontend/lighthouserc.js which asserts categories:accessibility >= 0.90.
+      # Uses frontend/lighthouserc.cjs which asserts categories:accessibility >= 0.90.
       # The step fails (exit code 1) if the score drops below the threshold,
       # blocking the PR from merging.
       - name: Run Lighthouse CI
-        run: lhci autorun --config=./lighthouserc.js
+        run: lhci autorun --config=./lighthouserc.cjs
         env:
           LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
 

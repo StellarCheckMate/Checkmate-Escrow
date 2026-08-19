@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 coverage
+.lighthouseci
+chrome/
 
 # Editor directories and files
 .vscode/*
