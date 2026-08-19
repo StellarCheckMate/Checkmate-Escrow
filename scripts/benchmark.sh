@@ -10,7 +10,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "Running escrow contract benchmarks..."
-cargo test -p escrow --test benchmarks -- --nocapture --test-threads=1
+cargo test -p escrow --test benchmarks -- --ignored --nocapture --test-threads=1
 
 REPORT="$REPO_ROOT/reports/performance/benchmark-results.json"
 if [[ ! -f "$REPORT" ]]; then
