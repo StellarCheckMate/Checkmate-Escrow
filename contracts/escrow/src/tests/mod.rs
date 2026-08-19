@@ -12,6 +12,7 @@ pub mod helpers;
 
 mod admin;
 mod balance_history_edge_cases;
+mod batch_submit;
 mod consensus;
 mod dispute;
 mod events;
@@ -27,11 +28,15 @@ mod multi_token;
 mod oracle_validation;
 mod pagination;
 mod player_balance_history;
+mod referral;
 mod security;
 mod snapshots;
 mod tier;
 mod token_allowlist;
+mod token_blacklist;
+mod token_swap;
 mod ttl;
+mod upgrade;
 mod validation;
 
 // ── Base fixture ─────────────────────────────────────────────────────────────

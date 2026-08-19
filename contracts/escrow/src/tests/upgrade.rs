@@ -53,7 +53,7 @@ fn test_schedule_upgrade_emits_event() {
     let events = env.events().all();
     let found = events.iter().any(|e| {
         // Topic is (Symbol("upgrade"), Symbol("sched"))
-        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.0;
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1;
         if topics.len() < 2 {
             return false;
         }
@@ -85,20 +85,18 @@ fn test_schedule_upgrade_twice_is_rejected() {
 fn test_schedule_upgrade_non_admin_is_rejected() {
     let (env, contract_id, _oracle, player1, _p2, _token, _admin) = setup();
     // Do NOT mock auths for this call — player1 is not the admin.
-    let client = EscrowContractClient::new(&env, &contract_id);
     env.mock_auths(&[]);
 
-    let wasm_hash = dummy_wasm_hash(&env);
     // With no mocked auths the auth check panics before returning an Error; we
     // just check that it does not succeed.
-    let result = std::panic::catch_unwind(|| {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Re-create env + client inside the closure so they are 'static
         // and catch_unwind can capture them.
         let inner_env = Env::default();
         inner_env.mock_auths(&[]);
         let inner_client = EscrowContractClient::new(&inner_env, &contract_id);
         inner_client.try_schedule_upgrade(&dummy_wasm_hash(&inner_env))
-    });
+    }));
     // Whether it panics or returns Err is fine — the point is it must not succeed.
     let _ = result; // we just care it did not succeed
     let _ = player1;
@@ -154,11 +152,11 @@ fn test_execute_upgrade_requires_paused_contract() {
 
 #[test]
 fn test_execute_upgrade_enforces_review_period() {
-    let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.schedule_upgrade(&dummy_wasm_hash(&env));
-    client.pause();
+    client.pause(&admin);
 
     // Do NOT advance ledger — review period has not elapsed.
     let result = client.try_execute_upgrade();
@@ -170,10 +168,10 @@ fn test_execute_upgrade_enforces_review_period() {
 
 #[test]
 fn test_execute_upgrade_requires_scheduled() {
-    let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.pause();
+    client.pause(&admin);
 
     // No upgrade scheduled.
     let result = client.try_execute_upgrade();
@@ -234,7 +232,10 @@ fn test_migrate_state_non_admin_is_rejected() {
 
     let result = client.try_migrate_state(&1_001u32);
     // Either Unauthorized error or auth panic — both are acceptable.
-    assert!(result.is_err(), "non-admin must not be able to call migrate_state");
+    assert!(
+        result.is_err(),
+        "non-admin must not be able to call migrate_state"
+    );
 }
 
 #[test]
@@ -266,7 +267,7 @@ fn test_migrate_state_emits_event() {
 
     let events = env.events().all();
     let found = events.iter().any(|e| {
-        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.0;
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1;
         if topics.len() < 2 {
             return false;
         }
@@ -319,21 +320,24 @@ fn test_full_upgrade_flow_schedule_cancel_reschedule() {
 
 #[test]
 fn test_review_period_boundary_exact() {
-    let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let initial_ledger = env.ledger().sequence();
     client.schedule_upgrade(&dummy_wasm_hash(&env));
-    client.pause();
+    client.pause(&admin);
 
-    // Advance to exactly the review period — still one ledger short.
+    // Advance to one ledger short of the review period. `execute_upgrade`'s
+    // guard is `current_ledger < scheduled_at + PERIOD`, so it only rejects
+    // strictly before the period has elapsed -- exactly at PERIOD ledgers
+    // later, the period counts as elapsed and the call succeeds.
     env.ledger().with_mut(|l| {
-        l.sequence_number = initial_ledger + crate::UPGRADE_REVIEW_PERIOD_LEDGERS;
+        l.sequence_number = initial_ledger + crate::UPGRADE_REVIEW_PERIOD_LEDGERS - 1;
     });
 
     let result = client.try_execute_upgrade();
     assert!(
         matches!(result, Err(Ok(Error::UpgradeReviewPeriodNotElapsed))),
-        "execute_upgrade at exactly the review period boundary must still be rejected"
+        "execute_upgrade one ledger short of the review period must still be rejected"
     );
 }

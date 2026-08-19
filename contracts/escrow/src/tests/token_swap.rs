@@ -18,11 +18,7 @@ extern crate std;
 
 use super::*;
 use oracle::{OracleContract, OracleContractClient};
-use soroban_sdk::{
-    testutils::Address as _,
-    token::StellarAssetClient,
-    Address, Env, String,
-};
+use soroban_sdk::{token::StellarAssetClient, Address, Env, String};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -42,16 +38,16 @@ fn setup_swap_match(
     match_rate: i128,
 ) -> (
     Env,
-    Address,              // escrow contract id
-    Address,              // player1
-    Address,              // player2
-    Address,              // token_a (stake token)
-    Address,              // token_b (preferred payout token)
+    Address, // escrow contract id
+    Address, // player1
+    Address, // player2
+    Address, // token_a (stake token)
+    Address, // token_b (preferred payout token)
     OracleContractClient<'static>,
-    u64,                  // match_id
+    u64, // match_id
 ) {
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     let admin = Address::generate(&env);
     let oracle_admin = Address::generate(&env);
@@ -89,12 +85,14 @@ fn setup_swap_match(
     let asset_b = StellarAssetClient::new(&env, &token_b);
 
     // Mint token_a to players for deposits
-    let stake: i128 = 1_000;
+    let stake: i128 = 100; // within Bronze tier bounds (1..=100) for a fresh player
     asset_a.mint(&player1, &(stake * 10));
     asset_a.mint(&player2, &(stake * 10));
-    // Mint token_b to the escrow contract so it can pay out in token_b
+    // Mint token_b to the oracle contract: `OracleContract::swap` sources
+    // token_out from its own balance (env.current_contract_address()), not
+    // escrow's -- escrow only calls swap(), it never holds token_b itself.
     // worst case: pot * 2 * rate / 10_000_000
-    asset_b.mint(&escrow_id, &(stake * 200));
+    asset_b.mint(&oracle_id, &(stake * 200));
 
     // Set oracle rate and create the match
     oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
@@ -112,9 +110,18 @@ fn setup_swap_match(
 
     escrow_client.deposit(&match_id, &player1);
     escrow_client.deposit(&match_id, &player2);
-    escrow_client.submit_result(&match_id, &winner);
+    escrow_client.submit_result(&match_id, &winner, &oracle_id);
 
-    (env, escrow_id, player1, player2, token_a, token_b, oracle_client, match_id)
+    (
+        env,
+        escrow_id,
+        player1,
+        player2,
+        token_a,
+        token_b,
+        oracle_client,
+        match_id,
+    )
 }
 
 // ── set/get preferred payout token ───────────────────────────────────────────
@@ -177,8 +184,8 @@ fn test_get_preferred_payout_token_defaults_to_none() {
 /// When a player prefers token_b and the match has a conversion rate, the
 /// payout is delivered in token_b at the oracle exchange rate.
 ///
-/// With stake=1_000, pot=2_000, rate=10_000_000 (1:1):
-///   swap_amount = 2_000 * 10_000_000 / 10_000_000 = 2_000 token_b
+/// With stake=100, pot=200, rate=10_000_000 (1:1):
+///   swap_amount = 200 * 10_000_000 / 10_000_000 = 200 token_b
 #[test]
 fn test_winner_receives_preferred_token_on_swap() {
     let (env, escrow_id, player1, _player2, _token_a, token_b, _oracle, match_id) =
@@ -193,7 +200,7 @@ fn test_winner_receives_preferred_token_on_swap() {
     client.set_preferred_payout_token(&player1, &Some(token_b.clone()));
     client.claim_vested_payout(&match_id, &player1);
 
-    let expected_b: i128 = 2_000 * 10_000_000 / 10_000_000; // = 2_000
+    let expected_b: i128 = 200 * 10_000_000 / 10_000_000; // = 200
     assert_eq!(
         tok_b.balance(&player1),
         b_before + expected_b,
@@ -201,8 +208,8 @@ fn test_winner_receives_preferred_token_on_swap() {
     );
 }
 
-/// Swap with a 2:1 rate: 2_000 token_a → 4_000 token_b
-/// rate = 20_000_000 → swap_amount = 2_000 * 20_000_000 / 10_000_000 = 4_000
+/// Swap with a 2:1 rate: 200 token_a → 400 token_b
+/// rate = 20_000_000 → swap_amount = 200 * 20_000_000 / 10_000_000 = 400
 #[test]
 fn test_swap_rate_calculation() {
     // oracle_rate and match_rate both at 20_000_000 (within 5% of each other)
@@ -217,11 +224,11 @@ fn test_swap_rate_calculation() {
     client.set_preferred_payout_token(&player1, &Some(token_b.clone()));
     client.claim_vested_payout(&match_id, &player1);
 
-    let expected_b: i128 = 2_000 * 20_000_000 / 10_000_000; // = 4_000
+    let expected_b: i128 = 200 * 20_000_000 / 10_000_000; // = 400
     assert_eq!(
         tok_b.balance(&player1),
         b_before + expected_b,
-        "2:1 rate should give 4_000 token_b for 2_000 token_a pot"
+        "2:1 rate should give 400 token_b for 200 token_a pot"
     );
 }
 
@@ -243,8 +250,8 @@ fn test_no_preference_uses_stake_token() {
 
     assert_eq!(
         tok_a.balance(&player1),
-        a_before + 2_000,
-        "player1 should receive 2_000 token_a (full pot, no swap)"
+        a_before + 200,
+        "player1 should receive 200 token_a (full pot, no swap)"
     );
     assert_eq!(
         tok_b.balance(&player1),
@@ -270,7 +277,7 @@ fn test_preference_equals_stake_token_no_swap() {
 
     assert_eq!(
         tok_a.balance(&player1),
-        a_before + 2_000,
+        a_before + 200,
         "same-token preference should not change payout"
     );
 }
@@ -294,7 +301,7 @@ fn test_preference_unrelated_token_falls_back_to_stake() {
 
     assert_eq!(
         tok_a.balance(&player1),
-        a_before + 2_000,
+        a_before + 200,
         "unrelated preference should fall back to stake token"
     );
 }
@@ -324,7 +331,7 @@ fn test_draw_ignores_preferred_payout_token() {
     // Draw refunds the stake token regardless of preference (swap only applies to wins)
     assert_eq!(
         tok_a.balance(&player1),
-        p1_a_before + 1_000,
+        p1_a_before + 100,
         "player1 should get stake back in token_a on draw"
     );
     assert_eq!(
@@ -334,7 +341,7 @@ fn test_draw_ignores_preferred_payout_token() {
     );
     assert_eq!(
         tok_a.balance(&player2),
-        p2_a_before + 1_000,
+        p2_a_before + 100,
         "player2 should get stake back in token_a on draw"
     );
 }
@@ -353,7 +360,7 @@ fn test_player2_winner_swap() {
     client.set_preferred_payout_token(&player2, &Some(token_b.clone()));
     client.claim_vested_payout(&match_id, &player2);
 
-    let expected_b: i128 = 2_000 * 10_000_000 / 10_000_000; // = 2_000
+    let expected_b: i128 = 200 * 10_000_000 / 10_000_000; // = 200
     assert_eq!(
         tok_b.balance(&player2),
         b_before + expected_b,

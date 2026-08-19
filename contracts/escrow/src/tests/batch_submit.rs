@@ -30,11 +30,7 @@ fn test_submit_result_batch_all_success() {
     client.deposit(&match_b, &player2);
 
     let oracle = client.get_oracle();
-    let batch = soroban_sdk::vec![
-        &env,
-        (match_a, Winner::Player1),
-        (match_b, Winner::Player2),
-    ];
+    let batch = soroban_sdk::vec![&env, (match_a, Winner::Player1), (match_b, Winner::Player2),];
 
     let outcomes = client.submit_result_batch(&batch, &oracle);
 

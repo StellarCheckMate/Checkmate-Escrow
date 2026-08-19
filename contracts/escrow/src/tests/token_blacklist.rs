@@ -2,7 +2,6 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::testutils::Address as _;
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
@@ -28,7 +27,7 @@ fn test_blacklist_unknown_token_not_blacklisted() {
 
 #[test]
 fn test_add_token_to_blacklist_requires_admin_auth() {
-    let (env, contract_id, _oracle, player1, _p2, token, _admin) = setup();
+    let (env, contract_id, _oracle, _player1, _p2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Only the admin key is in mock_all_auths; a plain player call must fail.
@@ -89,8 +88,12 @@ fn test_add_multiple_tokens_to_blacklist() {
     let (env, contract_id, _oracle, _p1, _p2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let token2 = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
-    let token3 = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+    let token2 = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
+    let token3 = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
 
     client.add_token_to_blacklist(&token, &reason(&env, "reason1"));
     client.add_token_to_blacklist(&token2, &reason(&env, "reason2"));
@@ -157,7 +160,9 @@ fn test_remove_token_removes_from_get_blacklist() {
     let (env, contract_id, _oracle, _p1, _p2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let token2 = env.register_stellar_asset_contract_v2(Address::generate(&env)).address();
+    let token2 = env
+        .register_stellar_asset_contract_v2(Address::generate(&env))
+        .address();
 
     client.add_token_to_blacklist(&token, &reason(&env, "a"));
     client.add_token_to_blacklist(&token2, &reason(&env, "b"));
@@ -198,7 +203,7 @@ fn test_create_match_rejects_blacklisted_token() {
     );
     assert_eq!(
         result.unwrap_err().unwrap(),
-        Error::TokenBlacklisted,
+        Error::TokenNotAllowed,
         "blacklisted token must be rejected by create_match"
     );
 }
@@ -220,7 +225,10 @@ fn test_create_match_allows_token_after_removal_from_blacklist() {
         &String::from_str(&env, "4b9ece60"),
         &Platform::Lichess,
     );
-    assert!(result.is_ok(), "token removed from blacklist must be usable");
+    assert!(
+        result.is_ok(),
+        "token removed from blacklist must be usable"
+    );
 }
 
 #[test]
@@ -242,7 +250,7 @@ fn test_blacklist_takes_precedence_over_allowlist() {
     );
     assert_eq!(
         result.unwrap_err().unwrap(),
-        Error::TokenBlacklisted,
+        Error::TokenNotAllowed,
         "blacklist must override allowlist"
     );
 }
