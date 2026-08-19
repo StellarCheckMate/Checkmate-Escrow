@@ -203,6 +203,7 @@ fn measure<S: FnOnce(), O: FnOnce()>(
 }
 
 #[test]
+#[ignore = "slow (up to 1k-match scale); run explicitly with `cargo test -- --ignored`"]
 fn run_all_benchmarks() {
     let mut results = Vec::new();
 

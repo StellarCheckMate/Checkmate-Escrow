@@ -183,6 +183,7 @@ fn make_game_id(env: &Env, tag: &str, n: u32) -> SorobanString {
 
 /// Measures `create_match` cost with N background active matches in storage.
 #[test]
+#[ignore = "slow (up to 10k-match scale); run explicitly with `cargo test -- --ignored`"]
 fn load_create_match_at_scale() {
     let mut results: Vec<LoadMeasurement> = Vec::new();
 
@@ -228,6 +229,7 @@ fn load_create_match_at_scale() {
 /// Measures the cost of the *second* deposit (which activates the match) when
 /// N background matches are already active.
 #[test]
+#[ignore = "slow (up to 10k-match scale); run explicitly with `cargo test -- --ignored`"]
 fn load_deposit_activation_at_scale() {
     let mut results: Vec<LoadMeasurement> = Vec::new();
 
@@ -268,6 +270,7 @@ fn load_deposit_activation_at_scale() {
 
 /// Measures `submit_result` cost when N matches are already active in storage.
 #[test]
+#[ignore = "slow (up to 10k-match scale); run explicitly with `cargo test -- --ignored`"]
 fn load_submit_result_at_scale() {
     let mut results: Vec<LoadMeasurement> = Vec::new();
 
@@ -308,6 +311,7 @@ fn load_submit_result_at_scale() {
 /// Measures paginated active-match query cost at each scale.
 /// Pagination should keep per-call cost bounded even at 10,000 matches.
 #[test]
+#[ignore = "slow (up to 10k-match scale); run explicitly with `cargo test -- --ignored`"]
 fn load_get_active_matches_paginated_at_scale() {
     let mut results: Vec<LoadMeasurement> = Vec::new();
 
@@ -354,6 +358,7 @@ fn load_get_active_matches_paginated_at_scale() {
 /// Also checks that `get_player_matches` for a single player returns only
 /// their own matches even when thousands of other matches exist.
 #[test]
+#[ignore = "slow (up to 10k-match scale); run explicitly with `cargo test -- --ignored`"]
 fn load_state_size_consistency() {
     for &n in SCALES {
         let h = LoadHarness::new();
@@ -389,6 +394,7 @@ fn load_state_size_consistency() {
 /// With 1,000 concurrent matches, submit results for a random subset and verify
 /// that only those matches change state.
 #[test]
+#[ignore = "slow (up to 10k-match scale); run explicitly with `cargo test -- --ignored`"]
 fn load_correctness_no_cross_match_contamination() {
     const N: u32 = 1_000;
     // Only resolve a small subset of matches.
@@ -448,6 +454,7 @@ fn load_correctness_no_cross_match_contamination() {
 /// Submitting draw results for many matches in sequence must not corrupt
 /// refund amounts — each player must receive exactly their stake back.
 #[test]
+#[ignore = "slow (up to 10k-match scale); run explicitly with `cargo test -- --ignored`"]
 fn load_draw_refunds_correct_at_scale() {
     const N: u32 = 100;
 

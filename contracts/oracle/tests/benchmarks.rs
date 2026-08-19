@@ -136,6 +136,7 @@ fn measure<S: FnOnce(), O: FnOnce()>(
 }
 
 #[test]
+#[ignore = "slow (scales oracle set up to 25 registered oracles); run explicitly with `cargo test -- --ignored`"]
 fn run_all_benchmarks() {
     let mut results = std::vec::Vec::new();
 
