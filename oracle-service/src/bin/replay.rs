@@ -24,6 +24,7 @@ fn queue_dir() -> String {
 
 #[tokio::main]
 async fn main() {
+    // nosemgrep: rust.lang.security.args.args -- used only for --list/--match-id/--all flag parsing, not a security decision.
     let args: Vec<String> = std::env::args().collect();
 
     let dir = queue_dir();

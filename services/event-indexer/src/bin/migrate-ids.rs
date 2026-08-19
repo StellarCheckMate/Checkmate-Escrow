@@ -29,6 +29,7 @@ struct EventRow {
 #[tokio::main]
 async fn main() -> Result<()> {
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    // nosemgrep: rust.lang.security.args.args -- used only for --commit/--dry-run flag parsing, not a security decision.
     let args: Vec<String> = env::args().collect();
     let commit = args.iter().any(|a| a == "--commit");
     let dry_run = args.iter().any(|a| a == "--dry-run") || !commit;
