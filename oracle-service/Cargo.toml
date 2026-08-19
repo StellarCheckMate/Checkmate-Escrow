@@ -31,7 +31,7 @@ ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 # Hex encode/decode for key material
 hex = "0.4"
 # Stellar XDR for transaction construction
-stellar-xdr = { version = "27.0.0", features = ["std", "base64"] }
+stellar-xdr = { version = "28.0.0", features = ["std", "base64"] }
 # Stellar strkey for G-address / C-address encoding
 stellar-strkey = "0.0.18"
 # SHA-256 hashing for Stellar transaction signing
