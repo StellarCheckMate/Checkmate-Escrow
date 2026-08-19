@@ -54,8 +54,14 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --quiet
+
       - name: Run cargo audit
         run: cargo audit
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --quiet
 
       - name: Run cargo deny
         run: cargo deny check
