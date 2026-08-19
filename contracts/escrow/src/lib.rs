@@ -909,6 +909,11 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
+        // Blacklisted tokens are permanently rejected, regardless of allowlist status.
+        if Self::is_token_blacklisted(env.clone(), token.clone()) {
+            return Err(Error::TokenNotAllowed);
+        }
+
         // Check allowlist enforcement
         let allowlist_enforced: bool = env
             .storage()
@@ -1071,6 +1076,13 @@ impl EscrowContract {
             .unwrap_or(false)
         {
             return Err(Error::ContractPaused);
+        }
+
+        // Blacklisted tokens are permanently rejected, regardless of allowlist status.
+        if Self::is_token_blacklisted(env.clone(), token_a.clone())
+            || Self::is_token_blacklisted(env.clone(), token_b.clone())
+        {
+            return Err(Error::TokenNotAllowed);
         }
 
         // Check allowlist enforcement for both tokens
@@ -1273,6 +1285,11 @@ impl EscrowContract {
             .unwrap_or(false)
         {
             return Err(Error::ContractPaused);
+        }
+
+        // Blacklisted tokens are permanently rejected, regardless of allowlist status.
+        if Self::is_token_blacklisted(env.clone(), token.clone()) {
+            return Err(Error::TokenNotAllowed);
         }
 
         let allowlist_enforced: bool = env
@@ -3072,6 +3089,11 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::DisputeOracle(dispute_id), &oracle);
+        env.storage().persistent().extend_ttl(
+            &DataKey::DisputeOracle(dispute_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
 
         let next_id = dispute_id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage()
