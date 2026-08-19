@@ -44,23 +44,6 @@ task1.md
 mutants.out/
 mutants.out.old/
 
-# Task files
-task1.md
-
-# Mutation testing artifacts
-mutants.out/
-mutants.out.old/
-
-# Task files
-task1.md
-
-# Mutation testing artifacts
-mutants.out/
-mutants.out.old/
-
-# Task files
-task1.md
-
-# Mutation testing artifacts
-mutants.out/
-mutants.out.old/
+# CI-generated reports (security-scanning.yml, ci.yml, scripts/benchmark.sh,
+# scripts/security-scan.sh) — uploaded as workflow artifacts, not committed
+reports/
