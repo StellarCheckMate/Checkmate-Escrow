@@ -445,3 +445,134 @@ pub struct PlatformStats {
     /// Total number of successful payouts (winner or draw completed matches).
     pub total_payouts: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::Env;
+
+    /// `temp()` should reassemble a `TempOracleRotation` from the flattened
+    /// fields when all three are present (the only case production code at
+    /// `EscrowContract::effective_oracle` treats as an active rotation).
+    #[test]
+    fn temp_returns_some_when_all_three_fields_are_set() {
+        let env = Env::default();
+        let old = Address::generate(&env);
+        let new = Address::generate(&env);
+        let mut state = OracleRotationState::default();
+        state.set_temp(Some(TempOracleRotation {
+            old_oracle: old.clone(),
+            temp_oracle: new.clone(),
+            expiry: 12345,
+        }));
+
+        let temp = state
+            .temp()
+            .expect("all three fields set, should round-trip");
+        assert_eq!(temp.old_oracle, old);
+        assert_eq!(temp.temp_oracle, new);
+        assert_eq!(temp.expiry, 12345);
+    }
+
+    /// `set_temp(None)` must clear all three flattened fields so a
+    /// subsequent `temp()` observes no active rotation.
+    #[test]
+    fn set_temp_none_clears_all_fields() {
+        let env = Env::default();
+        let old = Address::generate(&env);
+        let new = Address::generate(&env);
+        let mut state = OracleRotationState::default();
+        state.set_temp(Some(TempOracleRotation {
+            old_oracle: old,
+            temp_oracle: new,
+            expiry: 999,
+        }));
+        assert!(state.temp().is_some());
+
+        state.set_temp(None);
+
+        assert!(state.temp().is_none());
+        assert!(state.temp_old_oracle.is_none());
+        assert!(state.temp_new_oracle.is_none());
+        assert!(state.temp_expiry.is_none());
+    }
+
+    /// `pending()` must report `None` both when nothing has ever been set and
+    /// after a previously-set pending rotation is cleared -- not just when
+    /// the fields happen to be partially populated.
+    #[test]
+    fn pending_returns_none_when_unset_and_after_clearing() {
+        let state = OracleRotationState::default();
+        assert!(state.pending().is_none());
+
+        let env = Env::default();
+        let old = Address::generate(&env);
+        let new = Address::generate(&env);
+        let mut state = OracleRotationState::default();
+        state.set_pending(Some(PendingOracleRotation {
+            old_oracle: old,
+            new_oracle: new,
+        }));
+        assert!(state.pending().is_some());
+
+        state.set_pending(None);
+        assert!(state.pending().is_none());
+    }
+
+    /// `set_pending(Some(..))` followed by `set_pending(None)` must fully
+    /// clear both flattened fields (not just make `pending()` return `None`
+    /// by coincidence of one field being unset).
+    #[test]
+    fn set_pending_none_clears_both_fields() {
+        let env = Env::default();
+        let old = Address::generate(&env);
+        let new = Address::generate(&env);
+        let mut state = OracleRotationState::default();
+        state.set_pending(Some(PendingOracleRotation {
+            old_oracle: old,
+            new_oracle: new,
+        }));
+
+        state.set_pending(None);
+
+        assert!(state.pending_old_oracle.is_none());
+        assert!(state.pending_new_oracle.is_none());
+    }
+
+    /// `is_empty()` and round-tripping both temp and pending rotations
+    /// simultaneously (they're independent, flattened onto the same struct).
+    #[test]
+    fn temp_and_pending_are_independent() {
+        let env = Env::default();
+        let a = Address::generate(&env);
+        let b = Address::generate(&env);
+        let c = Address::generate(&env);
+        let d = Address::generate(&env);
+
+        let mut state = OracleRotationState::default();
+        assert!(state.is_empty());
+
+        state.set_temp(Some(TempOracleRotation {
+            old_oracle: a.clone(),
+            temp_oracle: b.clone(),
+            expiry: 1,
+        }));
+        assert!(!state.is_empty());
+        assert!(state.pending().is_none());
+
+        state.set_pending(Some(PendingOracleRotation {
+            old_oracle: c.clone(),
+            new_oracle: d.clone(),
+        }));
+        assert!(state.temp().is_some());
+        assert!(state.pending().is_some());
+
+        state.set_temp(None);
+        assert!(!state.is_empty(), "pending rotation is still set");
+        assert!(state.temp().is_none());
+
+        state.set_pending(None);
+        assert!(state.is_empty());
+    }
+}
