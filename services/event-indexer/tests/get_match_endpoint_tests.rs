@@ -51,7 +51,36 @@ async fn get_match(match_id: u64) -> (StatusCode, String) {
 
 #[tokio::test]
 async fn get_match_invalid_match_id_returns_404() {
-    let (status, body) = get_match(99999).await;
+    // A genuine "not found" is Ok(None) from build_match_info, which
+    // requires a query that actually completes -- the UNREACHABLE_DSN
+    // fixture the other tests in this file use can only ever produce a
+    // connection error (500), never a real empty result. Needs a reachable
+    // (but unseeded) database, same as
+    // integration_tests.rs::api_match_info_not_found_returns_404.
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping get_match_invalid_match_id_returns_404: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
+    db.init_schema().await.expect("schema");
+    let cache = Arc::new(RwLock::new(EventCache::new(16)));
+    let rpc = Arc::new(SorobanRpcClient::new("http://127.0.0.1:1").unwrap());
+    let app = build_router(db, cache, rpc, Arc::new(ApiCache::disabled()));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/matches/99999")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8(body_bytes.to_vec()).unwrap();
 
     // Parse the response to ensure it's proper JSON
     let response: ApiResponse<Option<MatchInfo>> =

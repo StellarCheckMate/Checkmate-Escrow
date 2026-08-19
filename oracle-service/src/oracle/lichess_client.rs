@@ -147,6 +147,16 @@ impl LichessClient {
         if status == reqwest::StatusCode::NOT_FOUND {
             return Err(LichessError::GameNotFound);
         }
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = resp
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs)
+                .unwrap_or(Duration::from_secs(60));
+            return Err(LichessError::RateLimited { retry_after });
+        }
         if !status.is_success() {
             return Err(LichessError::HttpStatus { status });
         }

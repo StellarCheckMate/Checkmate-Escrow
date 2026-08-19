@@ -27,7 +27,8 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 use zeroize::Zeroizing;
 
 const MATCH_ID: u64 = 4242;
-const GAME_ID: &str = "e2e_lichess_game";
+// Lichess game IDs must be exactly 8 alphanumeric characters.
+const GAME_ID: &str = "e2eGame1";
 
 /// Build a minimal OracleConfig pointing at the mock Soroban RPC.
 fn make_config(soroban_rpc_url: &str, queue_dir: &str) -> OracleConfig {

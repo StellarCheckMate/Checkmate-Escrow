@@ -105,41 +105,83 @@ where
 
 // ── Query param types ─────────────────────────────────────────────────────────
 
+/// `serde_urlencoded` deserializes a present-but-empty query value (`status=`)
+/// as `Some("")` rather than treating it as absent, which then fails to parse
+/// as `MatchStatus`. [`validation::validate_request`] already treats an empty
+/// value as absent when it validates `status`, so the handler-level extractor
+/// needs the same rule or a request that middleware accepted 400s here anyway.
+fn empty_status_as_none<'de, D>(deserializer: D) -> Result<Option<MatchStatus>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<String> = Option::deserialize(deserializer)?;
+    match raw.as_deref() {
+        None | Some("") => Ok(None),
+        Some(s) => MatchStatus::deserialize(serde::de::value::StrDeserializer::new(s)).map(Some),
+    }
+}
+
+/// Same empty-value-means-absent rule as [`empty_status_as_none`], for the
+/// `limit`/`offset` fields: `limit=` otherwise fails to parse as `i64`.
+fn empty_i64_as_none<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<String> = Option::deserialize(deserializer)?;
+    match raw.as_deref() {
+        None | Some("") => Ok(None),
+        Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct EventQuery {
     pub player_address: Option<String>,
+    #[serde(default, deserialize_with = "empty_status_as_none")]
     pub status: Option<MatchStatus>,
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub limit: Option<i64>,
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub offset: Option<i64>,
 }
 
 #[derive(Deserialize)]
 pub struct MatchQuery {
+    #[serde(default, deserialize_with = "empty_status_as_none")]
     pub status: Option<MatchStatus>,
 }
 
 #[derive(Deserialize)]
 pub struct PaginationQuery {
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub limit: Option<i64>,
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub offset: Option<i64>,
 }
 
 #[derive(Deserialize)]
 pub struct ActiveMatchesQuery {
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub limit: Option<i64>,
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub offset: Option<i64>,
 }
 
 #[derive(Deserialize)]
 pub struct PlayerMatchesQuery {
+    #[serde(default, deserialize_with = "empty_status_as_none")]
     pub status: Option<MatchStatus>,
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub limit: Option<i64>,
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub offset: Option<i64>,
 }
 
 #[derive(Deserialize)]
 pub struct AnalyticsQuery {
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub limit: Option<i64>,
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub offset: Option<i64>,
     pub start_date: Option<chrono::DateTime<chrono::Utc>>,
     pub end_date: Option<chrono::DateTime<chrono::Utc>>,
