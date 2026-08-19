@@ -2,16 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useBalance } from '../hooks/useBalance';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockLoadAccount = vi.fn();
 
 vi.mock('@stellar/stellar-sdk', async (importOriginal) => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const actual = await importOriginal<typeof import('@stellar/stellar-sdk')>();
   return {
     ...actual,
     Horizon: {
       ...actual.Horizon,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       Server: vi.fn().mockImplementation(function (this: any) {
         this.loadAccount = mockLoadAccount;
       }),

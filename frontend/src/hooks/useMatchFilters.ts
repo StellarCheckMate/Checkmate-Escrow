@@ -1,6 +1,8 @@
 import { useState, useMemo, useCallback } from 'react';
-import { useMatches, MatchSummary } from './useMatches';
-import { MatchFilters, DEFAULT_FILTERS } from './filterTypes';
+import { useMatches } from './useMatches';
+import type { MatchSummary } from './useMatches';
+import { DEFAULT_FILTERS } from './filterTypes';
+import type { MatchFilters } from './filterTypes';
 import { applyFilters, extractTokens } from './matchFilterService';
 
 // Preset filters

@@ -1,5 +1,5 @@
-import { MatchSummary } from './useMatches';
-import { MatchFilters } from './filterTypes';
+import type { MatchSummary } from './useMatches';
+import type { MatchFilters } from './filterTypes';
 
 /** Apply all active filters to a list of matches. Pure function — O(n). */
 export function applyFilters(matches: MatchSummary[], filters: MatchFilters): MatchSummary[] {

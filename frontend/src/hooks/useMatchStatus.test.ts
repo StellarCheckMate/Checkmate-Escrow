@@ -1,6 +1,7 @@
-import { renderHook, waitFor } from '@testing-library/react';
-import { act } from 'react-dom/test-utils';
-import { useMatchStatus, Match, MatchState, Platform } from './useMatchStatus';
+import { renderHook, act, waitFor } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { useMatchStatus, MatchState, Platform } from './useMatchStatus';
+import type { Match } from './useMatchStatus';
 
 // Mock match data factory
 const createMockMatch = (overrides?: Partial<Match>): Match => ({
@@ -20,18 +21,18 @@ const createMockMatch = (overrides?: Partial<Match>): Match => ({
 
 describe('useMatchStatus', () => {
   beforeEach(() => {
-    jest.useFakeTimers();
+    vi.useFakeTimers();
   });
 
   afterEach(() => {
-    jest.clearAllTimers();
-    jest.useRealTimers();
+    vi.clearAllTimers();
+    vi.useRealTimers();
   });
 
   describe('initial fetch', () => {
     it('should fetch match data on mount', async () => {
       const mockMatch = createMockMatch();
-      const getMatchFn = jest.fn().mockResolvedValue(mockMatch);
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
 
       const { result } = renderHook(() =>
         useMatchStatus(1, getMatchFn, { interval: 10000 })
@@ -52,7 +53,7 @@ describe('useMatchStatus', () => {
 
     it('should handle fetch errors', async () => {
       const mockError = new Error('Contract call failed');
-      const getMatchFn = jest.fn().mockRejectedValue(mockError);
+      const getMatchFn = vi.fn().mockRejectedValue(mockError);
 
       const { result } = renderHook(() =>
         useMatchStatus(1, getMatchFn)
@@ -67,7 +68,7 @@ describe('useMatchStatus', () => {
     });
 
     it('should handle non-Error rejections', async () => {
-      const getMatchFn = jest.fn().mockRejectedValue('String error');
+      const getMatchFn = vi.fn().mockRejectedValue('String error');
 
       const { result } = renderHook(() =>
         useMatchStatus(1, getMatchFn)
@@ -84,7 +85,7 @@ describe('useMatchStatus', () => {
   describe('polling behavior', () => {
     it('should poll at the configured interval', async () => {
       const mockMatch = createMockMatch({ state: MatchState.Active });
-      const getMatchFn = jest.fn().mockResolvedValue(mockMatch);
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
 
       renderHook(() =>
         useMatchStatus(1, getMatchFn, { interval: 5000 })
@@ -97,7 +98,7 @@ describe('useMatchStatus', () => {
 
       // Advance time by 5 seconds
       act(() => {
-        jest.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(5000);
       });
 
       await waitFor(() => {
@@ -106,7 +107,7 @@ describe('useMatchStatus', () => {
 
       // Advance time by another 5 seconds
       act(() => {
-        jest.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(5000);
       });
 
       await waitFor(() => {
@@ -116,7 +117,7 @@ describe('useMatchStatus', () => {
 
     it('should use default interval of 10 seconds', async () => {
       const mockMatch = createMockMatch({ state: MatchState.Active });
-      const getMatchFn = jest.fn().mockResolvedValue(mockMatch);
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
 
       renderHook(() => useMatchStatus(1, getMatchFn));
 
@@ -126,14 +127,14 @@ describe('useMatchStatus', () => {
 
       // Advance by 9 seconds - should not poll yet
       act(() => {
-        jest.advanceTimersByTime(9000);
+        vi.advanceTimersByTime(9000);
       });
 
       expect(getMatchFn).toHaveBeenCalledTimes(1);
 
       // Advance by 1 more second - should poll
       act(() => {
-        jest.advanceTimersByTime(1000);
+        vi.advanceTimersByTime(1000);
       });
 
       await waitFor(() => {
@@ -145,7 +146,7 @@ describe('useMatchStatus', () => {
       const activeMockMatch = createMockMatch({ state: MatchState.Active });
       const completedMockMatch = createMockMatch({ state: MatchState.Completed });
       
-      const getMatchFn = jest
+      const getMatchFn = vi
         .fn()
         .mockResolvedValueOnce(activeMockMatch)
         .mockResolvedValueOnce(completedMockMatch);
@@ -161,7 +162,7 @@ describe('useMatchStatus', () => {
 
       // Advance time - should poll again
       act(() => {
-        jest.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(5000);
       });
 
       // Wait for the second fetch to complete
@@ -173,7 +174,7 @@ describe('useMatchStatus', () => {
 
       // Advance time - should NOT poll anymore
       act(() => {
-        jest.advanceTimersByTime(10000);
+        vi.advanceTimersByTime(10000);
       });
 
       expect(getMatchFn).toHaveBeenCalledTimes(2);
@@ -183,7 +184,7 @@ describe('useMatchStatus', () => {
       const pendingMockMatch = createMockMatch({ state: MatchState.Pending });
       const cancelledMockMatch = createMockMatch({ state: MatchState.Cancelled });
       
-      const getMatchFn = jest
+      const getMatchFn = vi
         .fn()
         .mockResolvedValueOnce(pendingMockMatch)
         .mockResolvedValueOnce(cancelledMockMatch);
@@ -199,7 +200,7 @@ describe('useMatchStatus', () => {
 
       // Advance time - should poll again
       act(() => {
-        jest.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(5000);
       });
 
       // Wait for the second fetch to complete
@@ -211,7 +212,7 @@ describe('useMatchStatus', () => {
 
       // Advance time - should NOT poll anymore
       act(() => {
-        jest.advanceTimersByTime(10000);
+        vi.advanceTimersByTime(10000);
       });
 
       expect(getMatchFn).toHaveBeenCalledTimes(2);
@@ -219,7 +220,7 @@ describe('useMatchStatus', () => {
 
     it('should continue polling for Pending state', async () => {
       const mockMatch = createMockMatch({ state: MatchState.Pending });
-      const getMatchFn = jest.fn().mockResolvedValue(mockMatch);
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
 
       renderHook(() =>
         useMatchStatus(1, getMatchFn, { interval: 5000 })
@@ -231,7 +232,7 @@ describe('useMatchStatus', () => {
 
       // Should continue polling for Pending state
       act(() => {
-        jest.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(5000);
       });
 
       await waitFor(() => {
@@ -239,7 +240,7 @@ describe('useMatchStatus', () => {
       });
 
       act(() => {
-        jest.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(5000);
       });
 
       await waitFor(() => {
@@ -249,7 +250,7 @@ describe('useMatchStatus', () => {
 
     it('should continue polling for Active state', async () => {
       const mockMatch = createMockMatch({ state: MatchState.Active });
-      const getMatchFn = jest.fn().mockResolvedValue(mockMatch);
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
 
       renderHook(() =>
         useMatchStatus(1, getMatchFn, { interval: 5000 })
@@ -261,7 +262,7 @@ describe('useMatchStatus', () => {
 
       // Should continue polling for Active state
       act(() => {
-        jest.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(5000);
       });
 
       await waitFor(() => {
@@ -273,7 +274,7 @@ describe('useMatchStatus', () => {
   describe('cleanup', () => {
     it('should cleanup interval on unmount', async () => {
       const mockMatch = createMockMatch({ state: MatchState.Active });
-      const getMatchFn = jest.fn().mockResolvedValue(mockMatch);
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
 
       const { unmount } = renderHook(() =>
         useMatchStatus(1, getMatchFn, { interval: 5000 })
@@ -287,7 +288,7 @@ describe('useMatchStatus', () => {
 
       // Advance time after unmount - should not poll
       act(() => {
-        jest.advanceTimersByTime(10000);
+        vi.advanceTimersByTime(10000);
       });
 
       expect(getMatchFn).toHaveBeenCalledTimes(1);
@@ -296,7 +297,7 @@ describe('useMatchStatus', () => {
     it('should not update state after unmount', async () => {
       const mockMatch = createMockMatch();
       let resolveMatch: (value: Match) => void;
-      const getMatchFn = jest.fn(
+      const getMatchFn = vi.fn(
         () =>
           new Promise<Match>((resolve) => {
             resolveMatch = resolve;
@@ -326,7 +327,7 @@ describe('useMatchStatus', () => {
     it('should refetch when matchId changes', async () => {
       const mockMatch1 = createMockMatch({ id: 1 });
       const mockMatch2 = createMockMatch({ id: 2 });
-      const getMatchFn = jest
+      const getMatchFn = vi
         .fn()
         .mockResolvedValueOnce(mockMatch1)
         .mockResolvedValueOnce(mockMatch2);
@@ -355,7 +356,7 @@ describe('useMatchStatus', () => {
     it('should clear old interval when matchId changes', async () => {
       const mockMatch1 = createMockMatch({ id: 1, state: MatchState.Active });
       const mockMatch2 = createMockMatch({ id: 2, state: MatchState.Active });
-      const getMatchFn = jest.fn()
+      const getMatchFn = vi.fn()
         .mockResolvedValue(mockMatch1)
         .mockResolvedValueOnce(mockMatch1)
         .mockResolvedValueOnce(mockMatch2)
@@ -381,19 +382,19 @@ describe('useMatchStatus', () => {
 
       // Advance time - should only poll for new matchId
       act(() => {
-        jest.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(5000);
       });
 
       await waitFor(() => {
         const callsAfterTimer = getMatchFn.mock.calls.filter(
-          (call) => call[0] === 2
+          (call: unknown[]) => call[0] === 2
         ).length;
         expect(callsAfterTimer).toBeGreaterThan(1);
       });
 
       // Should not have called with old matchId after rerender
       const callsForMatch1 = getMatchFn.mock.calls.filter(
-        (call) => call[0] === 1
+        (call: unknown[]) => call[0] === 1
       ).length;
       expect(callsForMatch1).toBe(callsBeforeRerender);
     });
@@ -402,7 +403,7 @@ describe('useMatchStatus', () => {
   describe('enabled option', () => {
     it('should not fetch when enabled is false', async () => {
       const mockMatch = createMockMatch();
-      const getMatchFn = jest.fn().mockResolvedValue(mockMatch);
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
 
       const { result } = renderHook(() =>
         useMatchStatus(1, getMatchFn, { enabled: false })
@@ -414,7 +415,7 @@ describe('useMatchStatus', () => {
 
       // Advance time
       act(() => {
-        jest.advanceTimersByTime(10000);
+        vi.advanceTimersByTime(10000);
       });
 
       expect(getMatchFn).not.toHaveBeenCalled();
@@ -422,7 +423,7 @@ describe('useMatchStatus', () => {
 
     it('should start fetching when enabled changes to true', async () => {
       const mockMatch = createMockMatch();
-      const getMatchFn = jest.fn().mockResolvedValue(mockMatch);
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
 
       const { result, rerender } = renderHook(
         ({ enabled }) => useMatchStatus(1, getMatchFn, { enabled }),
@@ -442,7 +443,7 @@ describe('useMatchStatus', () => {
 
     it('should stop fetching when enabled changes to false', async () => {
       const mockMatch = createMockMatch({ state: MatchState.Active });
-      const getMatchFn = jest.fn().mockResolvedValue(mockMatch);
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
 
       const { rerender } = renderHook(
         ({ enabled }) => useMatchStatus(1, getMatchFn, { enabled }),
@@ -456,7 +457,7 @@ describe('useMatchStatus', () => {
       rerender({ enabled: false });
 
       act(() => {
-        jest.advanceTimersByTime(20000);
+        vi.advanceTimersByTime(20000);
       });
 
       // Should not have polled after being disabled
@@ -467,7 +468,7 @@ describe('useMatchStatus', () => {
   describe('refetch function', () => {
     it('should provide a refetch function', async () => {
       const mockMatch = createMockMatch();
-      const getMatchFn = jest.fn().mockResolvedValue(mockMatch);
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
 
       const { result } = renderHook(() =>
         useMatchStatus(1, getMatchFn)
@@ -484,7 +485,7 @@ describe('useMatchStatus', () => {
     it('should refetch when refetch is called', async () => {
       const mockMatch1 = createMockMatch({ state: MatchState.Pending });
       const mockMatch2 = createMockMatch({ state: MatchState.Active });
-      const getMatchFn = jest
+      const getMatchFn = vi
         .fn()
         .mockResolvedValueOnce(mockMatch1)
         .mockResolvedValueOnce(mockMatch2);
@@ -511,7 +512,7 @@ describe('useMatchStatus', () => {
     it('should set loading to true during refetch', async () => {
       const mockMatch = createMockMatch();
       let resolveMatch: (value: Match) => void;
-      const getMatchFn = jest
+      const getMatchFn = vi
         .fn()
         .mockResolvedValueOnce(mockMatch)
         .mockImplementationOnce(
@@ -554,7 +555,7 @@ describe('useMatchStatus', () => {
     it('should handle errors during polling', async () => {
       const mockMatch = createMockMatch({ state: MatchState.Active });
       const mockError = new Error('Network error');
-      const getMatchFn = jest
+      const getMatchFn = vi
         .fn()
         .mockResolvedValueOnce(mockMatch)
         .mockRejectedValueOnce(mockError);
@@ -570,7 +571,7 @@ describe('useMatchStatus', () => {
 
       // Advance time to trigger poll
       act(() => {
-        jest.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(5000);
       });
 
       await waitFor(() => {
@@ -581,7 +582,7 @@ describe('useMatchStatus', () => {
     it('should clear previous errors on successful fetch', async () => {
       const mockMatch = createMockMatch({ state: MatchState.Active });
       const mockError = new Error('Network error');
-      const getMatchFn = jest
+      const getMatchFn = vi
         .fn()
         .mockRejectedValueOnce(mockError)
         .mockResolvedValueOnce(mockMatch);
@@ -596,7 +597,7 @@ describe('useMatchStatus', () => {
 
       // Advance time to trigger poll
       act(() => {
-        jest.advanceTimersByTime(5000);
+        vi.advanceTimersByTime(5000);
       });
 
       await waitFor(() => {

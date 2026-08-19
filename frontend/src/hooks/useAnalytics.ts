@@ -31,14 +31,19 @@ export function useAnalytics(
 
     const key = cacheKey(userAddress, period, tokenFilter, statusFilter);
     const cached = cache.get(key);
+
+    let computed: AnalyticsResult;
     if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      setResult(cached.result);
-      return;
+      computed = cached.result;
+    } else {
+      computed = computeAnalytics(matches, userAddress, period, tokenFilter, statusFilter);
+      cache.set(key, { result: computed, ts: Date.now() });
     }
 
-    const computed = computeAnalytics(matches, userAddress, period, tokenFilter, statusFilter);
-    cache.set(key, { result: computed, ts: Date.now() });
+    // The cache freshness check above (Date.now()) is inherently
+    // time-impure and has to live in an effect, so the resulting setState
+    // is unavoidably synchronous here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setResult(computed);
 
     // Invalidate cache after TTL so next render recomputes

@@ -8,10 +8,18 @@ export function useBalance(publicKey: string | null) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Reset balance synchronously during render when publicKey becomes null,
+  // instead of from inside an effect (avoids a cascading extra render).
+  const [prevPublicKey, setPrevPublicKey] = useState(publicKey);
+  if (publicKey !== prevPublicKey) {
+    setPrevPublicKey(publicKey);
+    if (!publicKey) {
+      setBalance(null);
+    }
+  }
+
   useEffect(() => {
     if (!publicKey) {
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      setBalance(null);
       return;
     }
 

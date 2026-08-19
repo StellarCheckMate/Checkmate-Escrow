@@ -126,13 +126,26 @@ export function useMatchWebSocket({
 }: UseMatchWebSocketOptions = {}): UseMatchWebSocketReturn {
   const resolvedUrl =
     url ??
-    (typeof import.meta !== 'undefined' && (import.meta as { env?: Record<string, string> }).env?.VITE_WS_SERVER_URL) ??
+    (import.meta.env.VITE_WS_SERVER_URL as string | undefined) ??
     'ws://localhost:8090';
 
-  const [status, setStatus] = useState<ConnectionStatus>('connecting');
+  const [status, setStatus] = useState<ConnectionStatus>(enabled ? 'connecting' : 'closed');
   const [latestEvent, setLatestEvent] = useState<IndexedEvent | null>(null);
   const [events, setEvents] = useState<IndexedEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Adjust status synchronously during render when `enabled` flips to false,
+  // instead of from inside an effect (avoids a cascading extra render).
+  const [prevEnabled, setPrevEnabled] = useState(enabled);
+  if (enabled !== prevEnabled) {
+    setPrevEnabled(enabled);
+    if (!enabled) {
+      setStatus('closed');
+    } else {
+      setStatus('connecting');
+      setError(null);
+    }
+  }
 
   const wsRef = useRef<WebSocket | null>(null);
   const retryCountRef = useRef(0);
@@ -157,6 +170,10 @@ export function useMatchWebSocket({
     }
   }, []);
 
+  /** Ref to the latest `connect`, so the reconnect timer below can call it
+   *  without referencing `connect` from inside its own definition. */
+  const connectRef = useRef<() => void>(() => {});
+
   const connect = useCallback(() => {
     if (!enabledRef.current) return;
 
@@ -166,9 +183,6 @@ export function useMatchWebSocket({
       wsRef.current.close();
       wsRef.current = null;
     }
-
-    setStatus('connecting');
-    setError(null);
 
     let ws: WebSocket;
     try {
@@ -259,7 +273,9 @@ export function useMatchWebSocket({
       retryTimerRef.current = setTimeout(() => {
         if (enabledRef.current || reconnectRequestedRef.current) {
           reconnectRequestedRef.current = false;
-          connect();
+          setStatus('connecting');
+          setError(null);
+          connectRef.current();
         }
       }, backoff + jitter);
     };
@@ -269,6 +285,10 @@ export function useMatchWebSocket({
       setError('WebSocket error');
     };
   }, [resolvedUrl, maxHistory]); // only changes when URL or history cap changes
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   // Re-subscribe when matchIds / playerAddresses change after connection
   useEffect(() => {
@@ -293,10 +313,13 @@ export function useMatchWebSocket({
         wsRef.current.close();
         wsRef.current = null;
       }
-      setStatus('closed');
       return;
     }
 
+    // Establishing the WebSocket connection is the canonical "connect to an
+    // external system" effect; connect() only calls setState synchronously
+    // on the rare path where `new WebSocket(url)` itself throws.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     connect();
 
     return () => {
@@ -315,6 +338,8 @@ export function useMatchWebSocket({
     clearRetryTimer();
     reconnectRequestedRef.current = true;
     retryCountRef.current = 0;
+    setStatus('connecting');
+    setError(null);
     connect();
   }, [connect, clearRetryTimer]);
 

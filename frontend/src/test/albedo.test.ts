@@ -19,7 +19,11 @@ describe('albedo', () => {
   });
 
   it('test_albedo_get_public_key_success', async () => {
-    vi.mocked(albedo.publicKey).mockResolvedValue({ pubkey: FAKE_PUBKEY });
+    vi.mocked(albedo.publicKey).mockResolvedValue({
+      pubkey: FAKE_PUBKEY,
+      signed_message: '',
+      signature: '',
+    });
     const key = await albedoGetPublicKey();
     expect(key).toBe(FAKE_PUBKEY);
     expect(albedo.publicKey).toHaveBeenCalledWith({});

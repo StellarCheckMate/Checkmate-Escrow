@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { WalletErrorBoundary } from '../components/wallet/WalletErrorBoundary';
 
-function Thrower({ message }: { message: string }) {
+function Thrower({ message }: { message: string }): never {
   throw new Error(message);
 }
 

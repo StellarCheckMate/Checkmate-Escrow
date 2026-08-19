@@ -156,7 +156,7 @@ export function exportToCsv(matches: MatchSummary[], filename = 'match-history.c
   const headers = ['match_id', 'status', 'player1', 'player2', 'winner', 'stake_amount', 'token', 'platform', 'timestamp'];
   const rows = matches.map(m =>
     headers.map(h => {
-      const val = (m as Record<string, unknown>)[h] ?? '';
+      const val = (m as unknown as Record<string, unknown>)[h] ?? '';
       const s = String(val);
       return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
     }).join(',')

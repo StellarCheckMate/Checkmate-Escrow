@@ -13,7 +13,7 @@
 
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { useMatchWebSocket } from '../useMatchWebSocket';
+import { useMatchWebSocket } from './useMatchWebSocket';
 
 // ─── Mock WebSocket ────────────────────────────────────────────────────────
 
@@ -38,7 +38,9 @@ class MockWebSocket {
     MockWebSocket.instances.push(this);
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   send(_data: string): void {}
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   close(_code?: number, _reason?: string): void {
     this.readyState = MockWebSocket.CLOSED;
     this.onclose?.({ code: 1000, reason: 'Normal closure' });
@@ -74,12 +76,12 @@ beforeEach(() => {
   MockWebSocket.reset();
   vi.useFakeTimers();
   // Inject mock into global
-  (global as unknown as Record<string, unknown>).WebSocket = MockWebSocket;
+  (globalThis as unknown as Record<string, unknown>).WebSocket = MockWebSocket;
 });
 
 afterEach(() => {
   vi.useRealTimers();
-  delete (global as unknown as Record<string, unknown>).WebSocket;
+  delete (globalThis as unknown as Record<string, unknown>).WebSocket;
 });
 
 // ─── Tests ─────────────────────────────────────────────────────────────────

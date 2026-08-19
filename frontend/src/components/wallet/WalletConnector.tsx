@@ -1,4 +1,4 @@
-import type { WalletState, WalletType } from '../wallets/types';
+import type { WalletState, WalletType } from '../../wallets/types';
 
 interface Props {
   wallet: WalletState & {

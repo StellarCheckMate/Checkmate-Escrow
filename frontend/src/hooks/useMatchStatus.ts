@@ -3,29 +3,32 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 /**
  * Match states from the Soroban contract
  */
-export enum MatchState {
-  Pending = 'Pending',
-  Active = 'Active',
-  Completed = 'Completed',
-  Cancelled = 'Cancelled',
-}
+export const MatchState = {
+  Pending: 'Pending',
+  Active: 'Active',
+  Completed: 'Completed',
+  Cancelled: 'Cancelled',
+} as const;
+export type MatchState = (typeof MatchState)[keyof typeof MatchState];
 
 /**
  * Platform enum from the contract
  */
-export enum Platform {
-  Lichess = 'Lichess',
-  ChessDotCom = 'ChessDotCom',
-}
+export const Platform = {
+  Lichess: 'Lichess',
+  ChessDotCom: 'ChessDotCom',
+} as const;
+export type Platform = (typeof Platform)[keyof typeof Platform];
 
 /**
  * Winner enum from the contract
  */
-export enum Winner {
-  Player1 = 'Player1',
-  Player2 = 'Player2',
-  Draw = 'Draw',
-}
+export const Winner = {
+  Player1: 'Player1',
+  Player2: 'Player2',
+  Draw: 'Draw',
+} as const;
+export type Winner = (typeof Winner)[keyof typeof Winner];
 
 /**
  * Match structure from the Soroban contract
@@ -116,11 +119,21 @@ export function useMatchStatus(
   const { interval = 10000, enabled = true } = options;
 
   const [match, setMatch] = useState<Match | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(enabled);
   const [error, setError] = useState<Error | null>(null);
 
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMountedRef = useRef<boolean>(true);
+
+  // Reset loading synchronously during render when `enabled` flips to false,
+  // instead of from inside an effect (avoids a cascading extra render).
+  const [prevEnabled, setPrevEnabled] = useState(enabled);
+  if (enabled !== prevEnabled) {
+    setPrevEnabled(enabled);
+    if (!enabled) {
+      setLoading(false);
+    }
+  }
 
   /**
    * Determines if polling should stop based on match state
@@ -137,13 +150,13 @@ export function useMatchStatus(
     if (!enabled) return;
 
     try {
-      setError(null);
       const matchData = await getMatchFn(matchId);
-      
+
       // Only update state if component is still mounted
       if (isMountedRef.current) {
         setMatch(matchData);
         setLoading(false);
+        setError(null);
 
         // Stop polling if match has reached a terminal state
         if (shouldStopPolling(matchData.state) && intervalRef.current) {
@@ -170,12 +183,13 @@ export function useMatchStatus(
   // Initial fetch and polling setup
   useEffect(() => {
     if (!enabled) {
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      setLoading(false);
       return;
     }
 
-    // Fetch immediately on mount or when matchId changes
+    // Fetch immediately on mount or when matchId changes. fetchMatch is
+    // async and only sets state after its `await`, i.e. in a microtask, so
+    // this can't actually trigger a synchronous cascading render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchMatch();
 
     // Set up polling interval if match is not in terminal state
@@ -192,7 +206,12 @@ export function useMatchStatus(
         intervalRef.current = null;
       }
     };
-  }, [matchId, interval, enabled, fetchMatch, match?.state, shouldStopPolling]);
+    // match?.state is deliberately excluded: fetchMatch already clears
+    // intervalRef itself once a poll observes a terminal state, so reacting
+    // to match?.state here too would just re-run this whole effect (firing
+    // an extra, redundant fetch) on every state transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchId, interval, enabled, fetchMatch, shouldStopPolling]);
 
   // Cleanup on unmount
   useEffect(() => {

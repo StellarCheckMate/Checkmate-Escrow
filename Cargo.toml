@@ -1,6 +1,8 @@
 [workspace]
 members = ["contracts/escrow", "contracts/oracle", "oracle-service", "services/event-indexer"]
 resolver = "2"
+
+[workspace.package]
 license = "MIT"
 
 [workspace.dependencies]

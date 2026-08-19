@@ -28,12 +28,20 @@ export function useMatch(matchId: number | null) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Reset state synchronously during render when matchId becomes null,
+  // instead of from inside an effect (avoids a cascading extra render).
+  const [prevMatchId, setPrevMatchId] = useState(matchId);
+  if (matchId !== prevMatchId) {
+    setPrevMatchId(matchId);
     if (matchId === null) {
-      // eslint-disable-next-line react-hooks/exhaustive-deps
       setMatch(null);
       setError(null);
       setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (matchId === null) {
       return;
     }
 
