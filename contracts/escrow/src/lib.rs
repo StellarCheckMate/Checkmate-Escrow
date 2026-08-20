@@ -4326,6 +4326,10 @@ impl EscrowContract {
         let mut rotation_state = Self::get_rotation_state(&env);
         rotation_state.set_temp(None);
         Self::save_rotation_state(&env, rotation_state);
+        // A direct update supersedes any outstanding two-step rotation proposal.
+        // Leaving it live would let rotate_oracle_permanent later reinstate the
+        // oracle this call just replaced.
+        env.storage().instance().remove(&DataKey::OracleRotation);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
             (old_oracle, new_oracle),
@@ -4440,6 +4444,20 @@ impl EscrowContract {
             .ok_or(Error::InvalidState)?;
 
         if proposal.old_oracle != old_oracle || proposal.new_oracle != new_oracle {
+            return Err(Error::InvalidState);
+        }
+
+        // The checks above only prove the caller's arguments match the proposal;
+        // they say nothing about the oracle actually in force. If the oracle has
+        // since moved on (update_oracle, or a temporary rotation being made
+        // permanent), the proposal is stale and executing it would silently
+        // revert the oracle to a value the admin already replaced.
+        let current_oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        if current_oracle != proposal.old_oracle {
             return Err(Error::InvalidState);
         }
 

@@ -821,3 +821,27 @@ fn test_transfer_admin_clears_stale_pending_admin() {
          after a direct transfer_admin"
     );
 }
+
+// #1282 — a stale oracle-rotation proposal must not be executable after the
+// oracle has already moved on via a direct update_oracle.
+#[test]
+fn test_stale_oracle_rotation_cannot_revert_oracle() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let proposed_oracle = Address::generate(&env);
+    let replacement_oracle = Address::generate(&env);
+
+    // Admin starts a two-step rotation oracle -> proposed_oracle...
+    client.propose_oracle_rotation(&oracle, &proposed_oracle);
+    // ...then changes course and sets a different oracle directly.
+    client.update_oracle(&replacement_oracle);
+
+    // Executing the abandoned proposal would silently revert the oracle away
+    // from the one the admin just installed.
+    let stale = client.try_rotate_oracle_permanent(&oracle, &proposed_oracle);
+    assert!(
+        stale.is_err(),
+        "a superseded oracle-rotation proposal must not execute after update_oracle"
+    );
+}
