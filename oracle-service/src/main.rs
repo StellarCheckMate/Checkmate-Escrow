@@ -150,14 +150,27 @@ async fn main() {
         health_checker: health_checker.clone(),
     };
 
-    let _rate_limiter_state = RateLimitState::new();
-    let _waf_state = WafState::new();
+    let rate_limiter_state = RateLimitState::new();
+    let waf_state = WafState::new();
 
+    // Both middlewares were constructed and then dropped, so every request
+    // reached its handler unfiltered. Layers run outermost-first, so the WAF is
+    // added last and therefore runs first: cheap structural rejections (burst
+    // rate, oversized body, long or null-byte URI) happen before the rate
+    // limiter does any per-key bookkeeping.
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/api/docs", get(api_docs_ui))
         .route("/api/openapi.yaml", get(api_openapi_yaml))
-        .with_state(app_state);
+        .with_state(app_state)
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limiter_state,
+            oracle_service::middleware::rate_limit::rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            waf_state,
+            oracle_service::middleware::waf::waf_middleware,
+        ));
 
     let listener = match tokio::net::TcpListener::bind("0.0.0.0:8000").await {
         Ok(l) => l,
