@@ -787,3 +787,37 @@ fn test_submit_result_unauthorized() {
     let result = client.try_submit_result(&match_id, &Winner::Player1, &non_oracle);
     assert_eq!(result, Err(Ok(Error::Unauthorized)));
 }
+
+// #1281 — a direct transfer_admin must invalidate any outstanding propose_admin
+// nominee, otherwise the stale nominee can call accept_admin afterwards and
+// seize the role from the admin installed by the transfer.
+#[test]
+fn test_transfer_admin_clears_stale_pending_admin() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let stale_nominee = Address::generate(&env);
+    let real_new_admin = Address::generate(&env);
+
+    // Admin starts a two-step handover to `stale_nominee`...
+    client.propose_admin(&stale_nominee);
+    // ...then changes course and hands the role directly to someone else.
+    client.transfer_admin(&real_new_admin, &admin);
+
+    // The superseded nominee must NOT be able to accept the abandoned proposal.
+    env.mock_auths(&[MockAuth {
+        address: &stale_nominee,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    let hijack = client.try_accept_admin();
+    assert!(
+        hijack.is_err(),
+        "a superseded propose_admin nominee must not be able to seize admin \
+         after a direct transfer_admin"
+    );
+}

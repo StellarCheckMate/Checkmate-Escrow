@@ -4467,6 +4467,11 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        // A direct transfer supersedes any outstanding two-step proposal. Only
+        // accept_admin cleared PendingAdmin, so without this a nominee from an
+        // earlier propose_admin could still call accept_admin afterwards and
+        // seize the role from the admin set here.
+        env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("xfer")),
             (admin, new_admin),
