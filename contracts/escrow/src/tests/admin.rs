@@ -895,3 +895,92 @@ fn test_get_contract_version_returns_semver_string() {
         );
     }
 }
+
+// #1282 — oracle rotation must validate that proposal.old_oracle matches current oracle
+#[test]
+fn test_rotate_oracle_permanent_rejects_stale_proposal() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let next_oracle = Address::generate(&env);
+    let new_oracle_final = Address::generate(&env);
+
+    // Admin proposes rotation: oracle -> next_oracle
+    client.propose_oracle_rotation(&oracle, &next_oracle);
+
+    // Admin calls update_oracle directly, which should clear the pending proposal
+    client.update_oracle(&new_oracle_final);
+
+    // Now try to execute the stale proposal (oracle, next_oracle)
+    // This should fail because proposal.old_oracle (oracle) doesn't match current (new_oracle_final)
+    let result = client.try_rotate_oracle_permanent(&oracle, &next_oracle);
+    assert!(
+        result.is_err(),
+        "rotate_oracle_permanent must reject a proposal where old_oracle no longer matches the current oracle"
+    );
+}
+
+// #1282 — update_oracle clears any outstanding pending rotation proposal
+#[test]
+fn test_update_oracle_clears_pending_rotation() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let next_oracle = Address::generate(&env);
+    let final_oracle = Address::generate(&env);
+
+    // Propose a rotation
+    client.propose_oracle_rotation(&oracle, &next_oracle);
+
+    // Call update_oracle, which should clear the pending proposal
+    client.update_oracle(&final_oracle);
+
+    // Try to execute the cleared proposal — should fail with InvalidState
+    let result = client.try_rotate_oracle_permanent(&oracle, &next_oracle);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "rotate_oracle_permanent must fail with InvalidState when no pending proposal exists"
+    );
+
+    // Confirm the oracle was updated
+    assert_eq!(client.get_oracle(), final_oracle);
+}
+
+// #1282 — legitimate propose + permanent rotation flow still works
+#[test]
+fn test_rotate_oracle_permanent_succeeds_with_matching_current() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_oracle = Address::generate(&env);
+
+    // Propose rotation from current oracle to new_oracle
+    client.propose_oracle_rotation(&oracle, &new_oracle);
+
+    // Execute the rotation immediately (current oracle is still oracle)
+    client.rotate_oracle_permanent(&oracle, &new_oracle);
+
+    // Confirm the oracle was updated
+    assert_eq!(client.get_oracle(), new_oracle);
+}
+
+// #1282 — rotate_oracle_temporary validates current oracle like rotate_oracle_permanent now does
+#[test]
+fn test_rotate_oracle_temporary_validates_current_oracle() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_oracle = Address::generate(&env);
+    let final_oracle = Address::generate(&env);
+
+    // Update oracle to final_oracle
+    client.update_oracle(&final_oracle);
+
+    // Try to rotate from the old oracle — should fail because it's not the current oracle
+    let result = client.try_rotate_oracle_temporary(&oracle, &new_oracle, &3600u64);
+    assert!(
+        matches!(result, Err(Ok(Error::Unauthorized))),
+        "rotate_oracle_temporary must reject when old_oracle doesn't match current oracle"
+    );
+}
