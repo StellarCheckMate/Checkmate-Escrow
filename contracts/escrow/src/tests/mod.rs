@@ -30,6 +30,7 @@ mod pagination;
 mod player_balance_history;
 mod referral;
 mod security;
+mod slash_relay_tests;
 mod snapshots;
 mod tier;
 mod token_allowlist;
