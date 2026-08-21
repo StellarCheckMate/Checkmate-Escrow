@@ -39,11 +39,23 @@ multiple staked oracles before that record is written, rather than trusting a
 single admin-controlled submitter.
 
 The off-chain oracle service today is the trusted operator that:
-1. verifies the platform result for `game_id` using an external chess API,
-2. calls `EscrowContract::submit_result(match_id, winner)` from the escrow-side
+1. discovers matches needing verification via a periodic reconciliation task
+   that pages through `EscrowContract::get_active_matches_paginated` and
+   enqueues any `Active` match for which `OracleContract::has_result` is
+   still `false`,
+2. verifies the platform result for `game_id` using an external chess API,
+3. calls `EscrowContract::submit_result(match_id, winner)` from the escrow-side
    oracle address,
-3. records the same result in `OracleContract` for auditing and optional
+4. records the same result in `OracleContract` for auditing and optional
    verification.
+
+Step 1 is what makes a match's *first* submission attempt happen at all: the
+durable queue's retry/backoff/dead-letter machinery only processes entries
+that are already enqueued, and reconciliation is the only thing that enqueues
+a match for the first time. It re-scans on every cycle
+(`ORACLE_RECONCILIATION_INTERVAL_SECS`, default 60s) rather than only at
+startup, so it also recovers a match that becomes `Active` while the service
+is down and repopulates the queue if its on-disk state is ever lost.
 
 
 The two contracts are separate:

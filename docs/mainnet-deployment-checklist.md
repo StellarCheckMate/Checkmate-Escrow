@@ -91,6 +91,7 @@ All items in this section must be complete before the deployment window opens.
   - Lichess: free tier allows ~200 requests/minute; recommended `ORACLE_POLL_INTERVAL_SECS=30`.
   - Chess.com: verify your tier's rate limit before setting.
 - [ ] HTTP retry logic and exponential back-off are confirmed active in oracle config.
+- [ ] Reconciliation interval (`ORACLE_RECONCILIATION_INTERVAL_SECS`, default 60s) is confirmed active — this is what discovers `Active` matches and enqueues their first verification attempt; without it no new match is ever submitted.
 - [ ] Dead-letter queue is configured and monitored for failed submission retries.
 - [ ] Oracle service health endpoint (`GET /health`) returns `healthy` in production environment.
 - [ ] Oracle Prometheus metrics endpoint (`GET /metrics`) is reachable from the Prometheus scraper.
