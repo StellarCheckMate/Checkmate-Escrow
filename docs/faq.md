@@ -53,7 +53,40 @@ No. Only the configured oracle address can call `submit_result` (or `submit_resu
 
 ### 9. What happens if the oracle goes offline?
 
-If the oracle service is unavailable when a match ends, players are protected by the **match timeout** mechanism. Here's how it works:
+If the oracle service is unavailable when a match ends, players are protected by multiple recovery mechanisms depending on when the oracle fails:
+
+#### Before both players deposit (match in `Pending` state)
+
+- **Anyone can call `expire_match(match_id)`** after the timeout elapses (default: 30 days from match creation).
+- The contract refunds each depositor their stake in full (no penalty).
+- The match transitions to `Cancelled` state.
+
+#### After both players deposit but before result submission (match in `Active` state)
+
+If the oracle fails to submit a result after a match has started (both players deposited), there are **two** recovery paths:
+
+1. **Player-initiated recovery (within 24 hours of last activity)**:
+   - Either player can call `dispute_and_rollback_match(match_id, reason)` within 24 hours of the last heartbeat.
+   - Both players receive full refunds (no cancellation fee).
+   - The match transitions to `Cancelled` state.
+   - Players can extend this 24-hour window by calling `heartbeat_match` to signal the game is still in progress.
+
+2. **Admin-initiated recovery (after 7 days of stall)**:
+   - If more than **7 days** have elapsed since the last heartbeat with no result submitted, the admin can call `admin_resolve_stalled_match(match_id, resolution)`.
+   - The admin specifies the resolution: `Winner::Player1`, `Winner::Player2`, or `Winner::Draw` (for full refunds).
+   - This provides a bounded recovery path so funds are never permanently locked.
+   - The match transitions to `Completed` state.
+   - Emits an auditable `("match", "adm_stall")` event to distinguish this operator-initiated resolution from normal oracle settlement.
+
+**Example timeline for an Active match:**
+```
+Day 0:  Players deposit stakes (match becomes Active)
+Day 1:  Game finishes, but oracle is offline
+Day 2:  Player calls dispute_and_rollback_match → both refunded ✓
+        (or players wait for oracle)
+Day 7:  Oracle still offline, 24h window expired
+Day 8+: Admin calls admin_resolve_stalled_match → stakes distributed per admin decision
+```
 
 #### Short-term outage (oracle comes back online)
 
@@ -61,36 +94,21 @@ If the oracle service is unavailable when a match ends, players are protected by
 - Once the oracle resubmits the result, the payout executes automatically.
 - **No funds are at risk** — the escrow holds both stakes until a verified result is submitted.
 
-#### Prolonged outage or oracle never comes back
-
-If the oracle remains offline past the match creation timeout (default: 30 days), players can recover their funds:
-
-1. **Anyone can call `expire_match(match_id)`** after the timeout elapses.
-2. The contract refunds each depositor their stake in full (no penalty).
-3. The match transitions to `Cancelled` state.
-
-**Example timeline:**
-```
-Day 0:  Players create match and deposit stakes
-Day 1:  Game finishes, but oracle is offline
-Day 2:  Oracle comes back — submits result, payout executes ✓
-        (or oracle remains offline)
-Day 30: Timeout elapses (default)
-Day 31: Any player (or anyone else) calls expire_match → stakes refunded
-```
-
 #### How to check timeout status
 
 ```bash
-# Get the configured timeout (in ledgers; default 17,280 ≈ 30 days)
+# Get the configured timeout (in seconds; default 30 days)
 stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match_timeout
 
-# Get a specific match's creation time
+# Get a specific match's creation time and last heartbeat
 stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match --match_id <ID>
-# Look for created_ledger in the response
+# Look for created_ledger and last_heartbeat in the response
 
-# Calculate if expire_match is eligible:
-# current_ledger - created_ledger >= timeout
+# Check if dispute_and_rollback_match is available (within 24h window):
+# current_timestamp - last_heartbeat < 86400 (24 hours in seconds)
+
+# Check if admin_resolve_stalled_match is available (after 7-day stall):
+# current_timestamp - last_heartbeat > 604800 (7 days in seconds)
 ```
 
 #### For developers running an oracle service
@@ -102,9 +120,13 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match --match_id <ID>
 
 #### For match participants
 
-- **If a match stalls:** Contact the oracle operator through the expected channels (GitHub, email, Discord, etc.) and ask for a status update.
-- **If the oracle is permanently down:** After the timeout, call `expire_match` to recover your stake. You'll get your deposit back even if the match never completes.
-- The timeout is a guaranteed **circuit breaker** — your funds cannot remain locked indefinitely.
+- **If a match stalls before deposits:** Wait for the timeout, then call `expire_match` to recover your stake.
+- **If a match stalls after deposits (Active):** 
+  - Within 24 hours: Call `dispute_and_rollback_match` to get an immediate refund.
+  - After 24 hours but before 7 days: Contact the oracle operator and wait.
+  - After 7 days: Contact the admin to call `admin_resolve_stalled_match`.
+- **If the oracle is permanently down:** The 7-day admin resolution window ensures your funds are never permanently locked.
+- The combination of player rollback (24h) and admin resolution (7d) provides multiple circuit breakers — your funds cannot remain locked indefinitely.
 
 ## Testnet vs. Mainnet
 
