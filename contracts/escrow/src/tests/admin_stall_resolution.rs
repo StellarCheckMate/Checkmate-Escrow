@@ -472,3 +472,41 @@ fn test_admin_resolve_stalled_match_draw_does_not_record_completed_match() {
     // completed match counter without creating multiple matches and checking
     // tier progression, which is tested elsewhere.
 }
+
+#[test]
+fn test_admin_resolve_stalled_match_emits_event_with_correct_resolution() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "x1y2z3a4"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    advance_timestamp(&env, ADMIN_STALL_WINDOW_SECONDS + 1);
+
+    // Test each resolution type emits the correct winner in the event
+    client.admin_resolve_stalled_match(&id, &admin, &Winner::Draw);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.winner, Winner::Draw);
+    assert_eq!(m.state, MatchState::Completed);
+}
+
+#[test]
+fn test_admin_resolve_stalled_match_match_not_found() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    advance_timestamp(&env, ADMIN_STALL_WINDOW_SECONDS + 1);
+
+    // Try to resolve a non-existent match
+    let result = client.try_admin_resolve_stalled_match(&999, &admin, &Winner::Draw);
+    assert_eq!(result, Err(Ok(Error::MatchNotFound)));
+}
