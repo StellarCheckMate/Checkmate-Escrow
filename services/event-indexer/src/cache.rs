@@ -133,7 +133,7 @@ impl EventCache {
 
     fn is_expired(&self, inserted_at: &DateTime<Utc>) -> bool {
         let age = Utc::now().signed_duration_since(*inserted_at);
-        age.num_seconds() as u64 > self.ttl_secs
+        age.num_seconds() as u64 >= self.ttl_secs
     }
 
     fn remove_from_match_index(&mut self, event_id: &str) {
