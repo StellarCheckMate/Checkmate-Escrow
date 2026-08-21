@@ -159,3 +159,65 @@ async fn health_check_response_is_json() {
         "Response should be valid JSON matching HealthResponse schema"
     );
 }
+
+// ── Cache backend reporting tests ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn health_check_reports_cache_backend() {
+    let (_status, health) = get_health().await;
+
+    // Should have cache_backend field
+    assert!(
+        !health.cache_backend.is_empty(),
+        "cache_backend should not be empty"
+    );
+
+    // Should be one of the known backend names
+    assert!(
+        health.cache_backend == "disabled"
+            || health.cache_backend == "memory"
+            || health.cache_backend == "redis",
+        "cache_backend should be 'disabled', 'memory', or 'redis', got: {}",
+        health.cache_backend
+    );
+}
+
+#[tokio::test]
+async fn health_check_reports_cache_shared() {
+    let (_status, health) = get_health().await;
+
+    // cache_shared should be a boolean (true for Redis, false for memory/disabled)
+    // With ApiCache::disabled(), it should be false
+    assert!(
+        !health.cache_shared,
+        "cache_shared should be false with disabled cache"
+    );
+}
+
+#[tokio::test]
+async fn health_check_degraded_when_cache_not_shared() {
+    let (_status, health) = get_health().await;
+
+    // If cache is not shared, status should be degraded (correctness risk)
+    if !health.cache_shared {
+        assert_eq!(
+            health.status, "degraded",
+            "status should be 'degraded' when cache is not shared"
+        );
+    }
+}
+
+#[tokio::test]
+async fn health_check_disabled_cache_not_shared() {
+    // With ApiCache::disabled(), both backend should be "disabled" and shared should be false
+    let (_status, health) = get_health().await;
+
+    assert_eq!(
+        health.cache_backend, "disabled",
+        "disabled cache should report 'disabled' backend"
+    );
+    assert!(
+        !health.cache_shared,
+        "disabled cache should report cache_shared=false"
+    );
+}
