@@ -824,7 +824,7 @@ fn test_two_step_admin_transfer() {
         new_admin,
         "admin must be new_admin after accept"
     );
-    let pending: Option<Address> = env.as_contract(&contract_id, || {
+    let pending: Option<PendingAdminProposal> = env.as_contract(&contract_id, || {
         env.storage().instance().get(&DataKey::PendingAdmin)
     });
     assert!(
@@ -894,4 +894,181 @@ fn test_get_contract_version_returns_semver_string() {
             version_str
         );
     }
+}
+
+// #1281 — transfer_admin clears pending admin, preventing stale nominee hijack
+#[test]
+fn test_stale_nominee_cannot_hijack_after_transfer_admin() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin_a) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let pending_admin_b = Address::generate(&env);
+    let admin_c = Address::generate(&env);
+
+    client.propose_admin(&pending_admin_b);
+    assert_eq!(client.get_admin(), admin_a, "admin must not change after propose");
+
+    client.transfer_admin(&admin_c, &admin_a);
+    assert_eq!(client.get_admin(), admin_c, "admin must be admin_c after transfer");
+
+    env.mock_auths(&[MockAuth {
+        address: &pending_admin_b,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_accept_admin();
+    assert!(
+        result.is_err(),
+        "stale pending_admin_b should not be able to accept after transfer_admin"
+    );
+    assert_eq!(
+        client.get_admin(),
+        admin_c,
+        "admin must remain admin_c after failed accept attempt"
+    );
+}
+
+// #1281 — legitimate two-step transfer still works when no intervening transfer_admin
+#[test]
+fn test_legitimate_propose_accept_flow_still_works() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+    client.propose_admin(&new_admin);
+    assert_eq!(client.get_admin(), admin, "admin must not change after propose");
+
+    env.mock_auths(&[MockAuth {
+        address: &new_admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.accept_admin();
+    assert_eq!(
+        client.get_admin(),
+        new_admin,
+        "admin must be new_admin after accept"
+    );
+}
+
+// #1281 — transfer_admin with no outstanding proposal is a no-op for pending_admin
+#[test]
+fn test_transfer_admin_with_no_pending_proposal() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_admin = Address::generate(&env);
+    client.transfer_admin(&new_admin, &admin);
+    assert_eq!(
+        client.get_admin(),
+        new_admin,
+        "admin must change to new_admin"
+    );
+
+    let pending: Option<PendingAdminProposal> = env.as_contract(&contract_id, || {
+        env.storage().instance().get(&DataKey::PendingAdmin)
+    });
+    assert!(
+        pending.is_none(),
+        "no pending admin should exist when none was proposed"
+    );
+}
+
+// #1281 — accept_admin fails when no proposal is pending
+#[test]
+fn test_accept_admin_fails_when_no_proposal_pending() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let random_address = Address::generate(&env);
+    env.mock_auths(&[MockAuth {
+        address: &random_address,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_accept_admin();
+    assert!(result.is_err(), "accept_admin must fail when no proposal is pending");
+}
+
+// #1281 — accept_admin fails when called by wrong address
+#[test]
+fn test_accept_admin_fails_when_called_by_wrong_address() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let pending_admin = Address::generate(&env);
+    let wrong_address = Address::generate(&env);
+
+    client.propose_admin(&pending_admin);
+
+    env.mock_auths(&[MockAuth {
+        address: &wrong_address,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_accept_admin();
+    assert!(
+        result.is_err(),
+        "accept_admin must fail when called by wrong address"
+    );
+}
+
+// #1281 — accept_admin fails when proposer is no longer the current admin
+#[test]
+fn test_accept_admin_fails_when_proposer_changed() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin_a) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let pending_admin_b = Address::generate(&env);
+    let admin_c = Address::generate(&env);
+
+    client.propose_admin(&pending_admin_b);
+    assert_eq!(client.get_admin(), admin_a, "initial admin should be admin_a");
+
+    let mut proposal: PendingAdminProposal = env.as_contract(&contract_id, || {
+        env.storage().instance().get(&DataKey::PendingAdmin).unwrap()
+    });
+    assert_eq!(
+        proposal.proposer, admin_a,
+        "proposer should be the initial admin"
+    );
+
+    client.transfer_admin(&admin_c, &admin_a);
+    assert_eq!(client.get_admin(), admin_c, "admin should now be admin_c");
+
+    env.mock_auths(&[MockAuth {
+        address: &pending_admin_b,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "accept_admin",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    let result = client.try_accept_admin();
+    assert!(
+        result.is_err(),
+        "accept_admin must fail because proposer (admin_a) is not the current admin (admin_c)"
+    );
 }
