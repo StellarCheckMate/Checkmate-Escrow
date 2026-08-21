@@ -228,8 +228,8 @@ Returned by `get_dispute(dispute_id)`.
 | `evidence_hash` | `String` | Caller-supplied hash referencing off-chain evidence for the dispute. |
 | `uphold_votes` | `u32` | Unused by current voting logic; retained on the struct but not mutated by `vote_on_dispute` (see `yes_votes`/`no_votes`). |
 | `overturn_votes` | `u32` | Unused by current voting logic; retained on the struct but not mutated by `vote_on_dispute` (see `yes_votes`/`no_votes`). |
-| `yes_votes` | `u32` | Token-balance-weighted votes to overturn, accumulated by `vote_on_dispute`. |
-| `no_votes` | `u32` | Token-balance-weighted votes to uphold, accumulated by `vote_on_dispute`. |
+| `yes_votes` | `i128` | Token-balance-weighted votes to overturn, accumulated by `vote_on_dispute`. |
+| `no_votes` | `i128` | Token-balance-weighted votes to uphold, accumulated by `vote_on_dispute`. |
 
 ### `ProtocolConfig` Struct
 
