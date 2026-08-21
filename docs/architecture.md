@@ -336,7 +336,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `propose_admin` | `(new_admin: Address)` | Admin-only. First step of the two-step admin transfer; stores a pending admin. |
 | `accept_admin` | `()` | Called by the pending admin to complete a `propose_admin` transfer. |
 | `transfer_admin` | `(new_admin: Address)` | Admin-only. One-step admin transfer (no accept step), distinct from the `propose_admin`/`accept_admin` pair. |
-| `update_oracle` | `(new_oracle: Address)` | Admin-only. Rotates the trusted oracle address. Emits an `admin`/`oracle_up` event. |
+| `update_oracle` | `(new_oracle: Address)` | Admin-only. Rotates the trusted oracle address immediately and clears any outstanding temporary rotation or pending permanent-rotation proposals. Emits an `admin`/`oracle_up` event. |
 | `get_oracle` | `() -> Address` | Returns the stored oracle address. |
 | `set_protocol_config` | `(config: ProtocolConfig)` | Admin-only. Sets vesting duration, cancellation fee, and treasury address (see `ProtocolConfig` below). |
 | `get_protocol_config` | `() -> ProtocolConfig` | Returns the current protocol configuration. |
@@ -473,9 +473,13 @@ This section lists the complete public function surface of `EscrowContract` (`co
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `rotate_oracle_temporary` | `(old_oracle: Address, new_oracle: Address, duration_seconds: u64) -> Result<(), Error>` | Admin-only. Temporarily rotates the oracle to `new_oracle`; automatically reverts to `old_oracle` once `duration_seconds` elapses. |
-| `propose_oracle_rotation` | `(old_oracle: Address, new_oracle: Address) -> Result<(), Error>` | Admin-only. Proposes a permanent oracle rotation, to be finalized by a matching `rotate_oracle_permanent` call. |
-| `rotate_oracle_permanent` | `(old_oracle: Address, new_oracle: Address) -> Result<(), Error>` | Admin-only. Finalizes a permanent oracle rotation; requires a prior matching `propose_oracle_rotation` proposal. |
+| `rotate_oracle_temporary` | `(old_oracle: Address, new_oracle: Address, duration_seconds: u64) -> Result<(), Error>` | Admin-only. Temporarily rotates the oracle to `new_oracle`; automatically reverts to `old_oracle` once `duration_seconds` elapses. Validates that `old_oracle` matches the current oracle before proceeding. |
+| `propose_oracle_rotation` | `(old_oracle: Address, new_oracle: Address) -> Result<(), Error>` | Admin-only. Proposes a permanent oracle rotation, to be finalized by a matching `rotate_oracle_permanent` call. Validates that `old_oracle` matches the current oracle at proposal time. |
+| `rotate_oracle_permanent` | `(old_oracle: Address, new_oracle: Address) -> Result<(), Error>` | Admin-only. Finalizes a permanent oracle rotation; requires a prior matching `propose_oracle_rotation` proposal. Validates that `proposal.old_oracle` still matches the current oracle (rejects if `update_oracle` was called in the interim). |
+
+**Oracle Rotation Notes:**
+- Both `rotate_oracle_temporary` and `rotate_oracle_permanent` validate that the `old_oracle` parameter matches the live oracle address at execution time. This prevents accidental reversion of oracle updates that occurred between proposal and execution.
+- Calling `update_oracle` clears any outstanding temporary rotation or pending permanent-rotation proposal. This ensures that direct oracle updates take precedence and cannot be undone by stale rotation commands.
 
 #### Multi-Oracle Consensus
 
