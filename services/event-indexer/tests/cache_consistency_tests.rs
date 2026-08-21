@@ -211,4 +211,3 @@ async fn leadership_loss_clears_cache() {
         assert_eq!(cache_lock.size(), 0, "cache size must be 0");
     }
 }
-
