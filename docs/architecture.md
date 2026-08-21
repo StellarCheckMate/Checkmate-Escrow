@@ -333,9 +333,9 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `unpause` | `()` | Admin-only. Reverses `pause`. |
 | `is_paused` | `() -> bool` | Returns the current contract-wide pause state. |
 | `get_admin` | `() -> Address` | Returns the stored admin address. |
-| `propose_admin` | `(new_admin: Address)` | Admin-only. First step of the two-step admin transfer; stores a pending admin. |
-| `accept_admin` | `()` | Called by the pending admin to complete a `propose_admin` transfer. |
-| `transfer_admin` | `(new_admin: Address)` | Admin-only. One-step admin transfer (no accept step), distinct from the `propose_admin`/`accept_admin` pair. |
+| `propose_admin` | `(new_admin: Address)` | Admin-only. First step of the two-step admin transfer; stores a pending admin and records the current admin as the proposer. |
+| `accept_admin` | `()` | Called by the pending admin to complete a `propose_admin` transfer. Verifies the current admin matches the original proposer; rejects with `Unauthorized` if the admin has changed since the proposal was made (e.g., via `transfer_admin`). |
+| `transfer_admin` | `(new_admin: Address)` | Admin-only. One-step admin transfer (no accept step), distinct from the `propose_admin`/`accept_admin` pair. Clears any outstanding admin proposal to prevent stale nominees from hijacking after a path change. |
 | `update_oracle` | `(new_oracle: Address)` | Admin-only. Rotates the trusted oracle address. Emits an `admin`/`oracle_up` event. |
 | `get_oracle` | `() -> Address` | Returns the stored oracle address. |
 | `set_protocol_config` | `(config: ProtocolConfig)` | Admin-only. Sets vesting duration, cancellation fee, and treasury address (see `ProtocolConfig` below). |
