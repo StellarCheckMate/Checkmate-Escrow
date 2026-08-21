@@ -8,29 +8,50 @@
 //! that can be verified in tests without any reliance on hash-map iteration
 //! order.
 //!
+//! ## TTL and staleness bounds
+//! Entries are stamped with insertion time and evicted on read if they exceed
+//! `ttl_secs` age.  This prevents a former leader that lost its lease from
+//! serving indefinitely-stale results: after the TTL window any cached entry
+//! will trigger a DB fallback, ensuring bounded staleness across replicas.
+//!
 //! ## Thread safety
 //! `EventCache` is intentionally **not** `Sync`.  Callers are expected to wrap
 //! it in `Arc<tokio::sync::RwLock<EventCache>>`, which is how `main.rs` and the
 //! API server already use it.
 
 use crate::models::IndexedEvent;
+use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 
+/// Wrapper that pairs an event with its insertion timestamp for TTL checks.
+#[derive(Clone, Debug)]
+struct CachedEntry {
+    event: IndexedEvent,
+    inserted_at: DateTime<Utc>,
+}
+
 pub struct EventCache {
-    /// Ordered map: key = event ID, value = event. Front = LRU, back = MRU.
-    events: IndexMap<String, IndexedEvent>,
+    /// Ordered map: key = event ID, value = cached entry. Front = LRU, back = MRU.
+    events: IndexMap<String, CachedEntry>,
     /// Secondary index: match_id → ordered list of event IDs in this cache.
     match_index: IndexMap<u64, Vec<String>>,
     max_size: usize,
+    /// Time-to-live in seconds. Entries older than this are evicted on read.
+    ttl_secs: u64,
 }
 
 impl EventCache {
     pub fn new(max_size: usize) -> Self {
+        Self::with_ttl(max_size, 300) // Default TTL: 5 minutes
+    }
+
+    pub fn with_ttl(max_size: usize, ttl_secs: u64) -> Self {
         assert!(max_size > 0, "EventCache max_size must be > 0");
         EventCache {
             events: IndexMap::new(),
             match_index: IndexMap::new(),
             max_size,
+            ttl_secs,
         }
     }
 
@@ -42,6 +63,7 @@ impl EventCache {
     pub fn insert(&mut self, event: IndexedEvent) {
         let event_id = event.id.clone();
         let match_id = event.match_id;
+        let now = Utc::now();
 
         // If it already exists, remove first so we can re-insert at the back
         // (most-recently-used position).
@@ -55,27 +77,37 @@ impl EventCache {
             }
         }
 
-        self.events.insert(event_id.clone(), event);
+        let entry = CachedEntry {
+            event,
+            inserted_at: now,
+        };
+        self.events.insert(event_id.clone(), entry);
         self.match_index.entry(match_id).or_default().push(event_id);
     }
 
-    /// Retrieve an event by ID.
+    /// Retrieve an event by ID, evicting if expired.
     ///
     /// Note: this is a read-only lookup and does **not** update LRU order.
     /// Promoting on read would require `&mut self`; for a read-heavy workload
     /// (the common case in `api.rs`) the simpler semantics are preferable and
     /// still give very good hit rates on recently-ingested events.
     pub fn get(&self, event_id: &str) -> Option<IndexedEvent> {
-        self.events.get(event_id).cloned()
+        self.events.get(event_id).and_then(|entry| {
+            if self.is_expired(&entry.inserted_at) {
+                None // TTL exceeded; treat as cache miss
+            } else {
+                Some(entry.event.clone())
+            }
+        })
     }
 
-    /// Return all cached events for a match in insertion order.
+    /// Return all cached events for a match in insertion order, filtering expired entries.
     pub fn get_by_match(&self, match_id: u64) -> Vec<IndexedEvent> {
         self.match_index
             .get(&match_id)
             .map(|ids| {
                 ids.iter()
-                    .filter_map(|id| self.events.get(id).cloned())
+                    .filter_map(|id| self.get(id)) // get() handles TTL filtering
                     .collect()
             })
             .unwrap_or_default()
@@ -98,6 +130,11 @@ impl EventCache {
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────
+
+    fn is_expired(&self, inserted_at: &DateTime<Utc>) -> bool {
+        let age = Utc::now().signed_duration_since(*inserted_at);
+        age.num_seconds() as u64 > self.ttl_secs
+    }
 
     fn remove_from_match_index(&mut self, event_id: &str) {
         // We need to know which match_id this event belonged to, but we've
@@ -293,5 +330,75 @@ mod tests {
             "evt-2 (MRU among old entries) must survive; evt-1 (LRU) must be evicted"
         );
         assert!(cache.get("evt-1").is_none(), "evt-1 (LRU) must be evicted");
+    }
+
+    // ── TTL and staleness bounds ──────────────────────────────────────────
+
+    #[test]
+    fn ttl_causes_cache_miss_after_expiry() {
+        use std::thread;
+        use std::time::Duration as StdDuration;
+
+        let mut cache = EventCache::with_ttl(10, 1); // 1-second TTL
+        cache.insert(make_event("fresh", 1));
+
+        // Immediate read: should hit.
+        assert!(cache.get("fresh").is_some(), "fresh entry must be present");
+
+        // Wait for TTL to expire.
+        thread::sleep(StdDuration::from_millis(1100));
+
+        // Now it should be a miss.
+        assert!(
+            cache.get("fresh").is_none(),
+            "expired entry must be treated as cache miss"
+        );
+    }
+
+    #[test]
+    fn get_by_match_filters_expired_entries() {
+        use std::thread;
+        use std::time::Duration as StdDuration;
+
+        let mut cache = EventCache::with_ttl(10, 1); // 1-second TTL
+        cache.insert(make_event("e1", 42));
+        cache.insert(make_event("e2", 42));
+
+        // Both should be present immediately.
+        assert_eq!(cache.get_by_match(42).len(), 2);
+
+        // Wait for TTL to expire.
+        thread::sleep(StdDuration::from_millis(1100));
+
+        // Now get_by_match should return empty (both expired).
+        assert_eq!(
+            cache.get_by_match(42).len(),
+            0,
+            "expired entries must be filtered out"
+        );
+    }
+
+    #[test]
+    fn reinsertion_refreshes_ttl() {
+        use std::thread;
+        use std::time::Duration as StdDuration;
+
+        let mut cache = EventCache::with_ttl(10, 2); // 2-second TTL
+        cache.insert(make_event("renewable", 1));
+
+        // Wait 1.5 seconds (partway through TTL).
+        thread::sleep(StdDuration::from_millis(1500));
+
+        // Re-insert to refresh.
+        cache.insert(make_event("renewable", 1));
+
+        // Wait another 1 second (would have expired without refresh).
+        thread::sleep(StdDuration::from_millis(1000));
+
+        // Should still be present (refreshed TTL has ~1s remaining).
+        assert!(
+            cache.get("renewable").is_some(),
+            "re-inserted entry must have refreshed TTL"
+        );
     }
 }

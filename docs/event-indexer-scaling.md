@@ -184,9 +184,38 @@ access-time ordering with O(1) eviction:
 The eviction order is **fully deterministic** and verified by the unit test
 `lru_evicts_oldest_inserted_entry` in `cache.rs`.
 
-Each instance maintains an **independent** cache.  This is intentional: it
+### TTL and staleness bounds
+
+Each cached entry is stamped with insertion time and automatically expired on
+read if older than `ttl_secs` (default: 5 minutes). This provides **bounded
+staleness** across replicas:
+
+- A former leader that loses its lease stops receiving new events but retains
+  its cache.
+- Without TTL, cached entries would serve indefinitely-stale results to clients
+  routed to that replica.
+- With TTL, reads older than 5 minutes trigger a cache miss and fall back to
+  the DB (the authoritative source), guaranteeing staleness never exceeds the
+  TTL window.
+
+### Leadership-loss invalidation
+
+When the poller detects leadership loss (via `LeaderElection::try_acquire`
+returning `false` after previously returning `true`), it immediately calls
+`cache.clear()` to prevent serving stale data. This provides **eager
+invalidation** on known leadership changes, complementing the TTL mechanism
+(which handles undetected failures, clock skew, or split-brain scenarios).
+
+### Multi-replica consistency
+
+Each instance maintains an **independent** cache. This is intentional: it
 avoids distributed cache coherency complexity, and the DB (via the read pool)
 serves as the consistent backing store for cache misses.
+
+**Consistency guarantee:** Across multiple replicas behind a load balancer,
+clients may observe different cached snapshots of the same match/event data,
+but staleness is bounded to `max(TTL_SECS, time_since_leadership_loss)` — after
+that window, all replicas converge to the DB-authoritative state.
 
 ---
 
@@ -247,6 +276,25 @@ believe the lease has expired simultaneously.  Mitigations:
    a time regardless of clock state.
 3. **`ON CONFLICT DO NOTHING`** in the ingestion path — even if both believe
    they are leaders temporarily, they write the same events and the DB deduplicates.
+
+### Redis unavailable (ApiCache degradation)
+
+The `ApiCache` (separate from the event LRU cache) caches rendered API responses
+(match lists, analytics) across replicas via Redis. If `REDIS_URL` is unreachable
+at startup or Redis becomes unavailable at runtime:
+
+- **Fallback:** Each instance silently degrades to an in-process memory backend
+  with the same TTL semantics.
+- **Correctness risk:** Multiple replicas behind a load balancer will serve
+  different cached responses for the same request until their independent TTLs
+  expire (bounded staleness, but client requests may see inconsistent results).
+- **Detection:** The `/health` endpoint reports:
+  - `cache_backend: "memory"` (instead of `"redis"`)
+  - `cache_shared: false`
+  - `status: "degraded"`
+- **Mitigation:** External monitoring should alert on `cache_shared: false` and
+  restore Redis connectivity. The service remains available (degraded latency
+  and consistency) during Redis outages.
 
 ### Network partition (instance isolated from PG)
 
