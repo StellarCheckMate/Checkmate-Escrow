@@ -117,6 +117,7 @@ stateDiagram-v2
 | `Pending` | `Cancelled` | `expire_match` | anyone | state == Pending; timeout elapsed since created_ledger | state=Cancelled, completed_ledger set | `InvalidState`, `MatchNotExpired` |
 | `Active` | `PendingResult` | `submit_result` | oracle | state == Active; both deposited; dispute_period > 0 | state=PendingResult, PendingWinner stored, ResultDeadline set | `Unauthorized`, `InvalidState`, `NotFunded` |
 | `Active` | `Completed` | `submit_result` | oracle | state == Active; both deposited; dispute_period == 0 | state=Completed, completed_ledger set, winner set, payout executed | `Unauthorized`, `InvalidState`, `NotFunded` |
+| `Active` | `Completed` | `admin_resolve_stalled_match` | admin | state == Active; both deposited; >7 days since last_heartbeat | state=Completed, completed_ledger set, winner set per admin resolution, payout executed | `Unauthorized`, `InvalidState`, `NotFunded`, `MatchNotExpired` |
 | `Active` | `Paused` | `pause_match` | player1 or player2 | state == Active; ¬paused_ledger | state=Paused, paused_ledger set | `InvalidState`, `Unauthorized` |
 | `Paused` | `Active` | `resume_match` | player1 or player2 | state == Paused | state=Active (restored), total_pause_duration += (current - paused_ledger), paused_ledger cleared | `InvalidState`, `Unauthorized` |
 | `PendingResult` | `Completed` | `finalize_match` | anyone | state == PendingResult; dispute deadline elapsed; no active dispute | state=Completed, payout executed, PendingWinner cleared | `InvalidState`, `DisputePeriodNotElapsed` |
@@ -136,16 +137,17 @@ stateDiagram-v2
 | `Cancelled` | Pending | **Yes** | Cancelled before activation or expired; stakes refunded |
 | `Paused` | Active, PendingResult | No | Match paused by player (vesting/timing paused) |
 
-### Valid State Transitions (8 Total)
+### Valid State Transitions (9 Total)
 
 1. **Pending → Active** via `deposit()` when second player deposits
 2. **Pending → Cancelled** via `cancel_match()` or `expire_match()`
 3. **Active → PendingResult** via `submit_result()` with dispute_period > 0
 4. **Active → Completed** via `submit_result()` with dispute_period = 0
-5. **Active → Paused** via `pause_match()`
-6. **Paused ↔ Active** via `resume_match()` (can pause/resume multiple times)
-7. **PendingResult → Completed** via `finalize_match()` or `resolve_dispute_by_vote()`
-8. **Completed → Completed** (self-loop for atomicity guarantees)
+5. **Active → Completed** via `admin_resolve_stalled_match()` after 7 days of stall
+6. **Active → Paused** via `pause_match()`
+7. **Paused ↔ Active** via `resume_match()` (can pause/resume multiple times)
+8. **PendingResult → Completed** via `finalize_match()` or `resolve_dispute_by_vote()`
+9. **Completed → Completed** (self-loop for atomicity guarantees)
 
 ### Invalid Transitions (Properly Rejected)
 
