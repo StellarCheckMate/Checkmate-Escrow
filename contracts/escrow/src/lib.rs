@@ -1710,6 +1710,46 @@ impl EscrowContract {
         }
     }
 
+    /// Check if a match has become deadlocked (threshold unreachable given the approved oracle set).
+    /// If deadlock is detected, flag the match and emit an event.
+    /// Otherwise returns Ok(()) with no side effects.
+    fn check_oracle_deadlock(
+        env: &Env,
+        match_id: u64,
+        current_confirmations: u32,
+        required: u32,
+    ) -> Result<(), Error> {
+        let oracles: soroban_sdk::Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedOracles)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        let oracle_count = oracles.len() as u32;
+
+        // Calculate how many more confirmations could theoretically be obtained.
+        // We assume all remaining oracles might vote once each.
+        let remaining_possible = oracle_count.saturating_sub(current_confirmations);
+        let max_possible_confirmations = current_confirmations.saturating_add(remaining_possible);
+
+        // If even if all remaining oracles vote, we still can't reach the threshold, deadlock.
+        if max_possible_confirmations < required {
+            env.storage()
+                .persistent()
+                .set(&DataKey::OracleDeadlock(match_id), &true);
+            env.storage()
+                .persistent()
+                .extend_ttl(&DataKey::OracleDeadlock(match_id), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+            env.events().publish(
+                (Symbol::new(env, "match"), symbol_short!("ora_dead")),
+                (match_id, current_confirmations, required),
+            );
+        }
+
+        Ok(())
+    }
+
     /// Submit result with oracle record integration.
     /// This is the canonical path for oracle-initiated payouts.
     /// The oracle contract calls this to atomically store the result and execute payout.
@@ -5146,10 +5186,18 @@ impl EscrowContract {
     /// Once the required number of confirmations is reached for a single outcome,
     /// the payout is automatically executed.
     ///
+    /// Deadlock Detection:
+    /// After any accepted vote that doesn't reach the threshold, the system checks whether
+    /// the threshold is still mathematically reachable given the total number of approved
+    /// oracles. If the threshold becomes impossible to reach (even if all remaining oracles
+    /// vote), the match is flagged as deadlocked. Admin can then resolve it via
+    /// `resolve_oracle_deadlock` (see issue #1278).
+    ///
     /// Rules:
     /// - Caller must be an approved oracle and must require_auth.
-    /// - Each oracle may only vote once per match.
-    /// - All votes must agree on the same winner. A conflicting vote returns `ConflictingResult`.
+    /// - Each oracle may only vote once per match (including rejected votes).
+    /// - All votes must agree on the same winner. A conflicting vote returns `ConflictingResult`,
+    ///   but the rejected vote is still recorded for audit and deadlock detection.
     /// - Once the required threshold is reached, payout is executed and the match completes.
     ///
     /// # Errors
@@ -5233,6 +5281,18 @@ impl EscrowContract {
                 .get(&leading_winner_key)
                 .ok_or(Error::ConflictingResult)?;
             if existing_winner != winner {
+                // Store the rejected vote before returning error, so disagreement is recorded.
+                let rejected_vote_key = DataKey::RejectedOracleVote(match_id, oracle_address.clone());
+                env.storage().persistent().set(&rejected_vote_key, &winner);
+                env.storage().persistent().extend_ttl(
+                    &rejected_vote_key,
+                    MATCH_TTL_LEDGERS,
+                    MATCH_TTL_LEDGERS,
+                );
+                env.events().publish(
+                    (Symbol::new(&env, "match"), symbol_short!("ora_rej")),
+                    (match_id, oracle_address, winner),
+                );
                 return Err(Error::ConflictingResult);
             }
         } else {
@@ -5266,7 +5326,7 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("ora_vote")),
-            (match_id, oracle_address, new_confirmations),
+            (match_id, oracle_address.clone(), new_confirmations),
         );
 
         // Check if required threshold has been reached.
@@ -5279,6 +5339,9 @@ impl EscrowContract {
         if new_confirmations >= required {
             // Threshold reached — execute payout via shared settlement logic.
             Self::settle_result(&env, match_id, winner)?;
+        } else {
+            // Threshold not reached; check if still mathematically possible.
+            Self::check_oracle_deadlock(&env, match_id, new_confirmations, required)?;
         }
 
         Ok(())
@@ -5290,6 +5353,84 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::OracleConfirmations(match_id))
             .unwrap_or(0)
+    }
+
+    /// Return whether a given oracle's rejected vote exists for a match.
+    pub fn get_rejected_oracle_vote(
+        env: Env,
+        match_id: u64,
+        oracle_address: Address,
+    ) -> Option<Winner> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RejectedOracleVote(match_id, oracle_address))
+    }
+
+    /// Return whether a match is deadlocked (threshold unreachable).
+    pub fn is_oracle_deadlocked(env: Env, match_id: u64) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OracleDeadlock(match_id))
+            .unwrap_or(false)
+    }
+
+    /// Resolve a deadlocked match by admin authority, executing payout for a chosen winner.
+    /// Only callable if the match is flagged as deadlocked.
+    pub fn resolve_oracle_deadlock(
+        env: Env,
+        match_id: u64,
+        winner: Winner,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        // Require admin authorization.
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        // Load and validate match state.
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
+        }
+
+        // Require the match to be flagged as deadlocked.
+        if !env
+            .storage()
+            .persistent()
+            .get::<_, bool>(&DataKey::OracleDeadlock(match_id))
+            .unwrap_or(false)
+        {
+            return Err(Error::InvalidState);
+        }
+
+        // Execute payout with the admin-chosen winner.
+        Self::settle_result(&env, match_id, winner)?;
+
+        // Emit event for admin resolution.
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("ora_adm")),
+            (match_id, winner),
+        );
+
+        Ok(())
     }
 }
 

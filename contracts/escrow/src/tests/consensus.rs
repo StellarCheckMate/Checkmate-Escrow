@@ -547,3 +547,156 @@ fn test_active_matches_cleared_after_consensus_payout() {
     let active_after = client.get_active_matches();
     assert!(!active_after.iter().any(|m| m.id == match_id));
 }
+
+// ── Deadlock handling tests ──────────────────────────────────────────────────
+
+#[test]
+fn test_rejected_votes_are_recorded() {
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Oracle 0 votes Player1.
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+
+    // Oracle 1 votes Player2 — conflict, but vote should be recorded.
+    let result =
+        client.try_submit_result_consensus(&match_id, &Winner::Player2, &oracles.get(1).unwrap());
+    assert_eq!(result, Err(Ok(Error::ConflictingResult)));
+
+    // Rejected vote should now be queryable.
+    let rejected = client.get_rejected_oracle_vote(&match_id, &oracles.get(1).unwrap());
+    assert_eq!(rejected, Some(Winner::Player2));
+
+    // Confirmation count should still be 1 (only accepted votes count).
+    assert_eq!(client.get_oracle_confirmations(&match_id), 1);
+}
+
+#[test]
+fn test_deadlock_detected_when_threshold_unreachable() {
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
+        setup_consensus(2, 2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Oracle 0 votes Player1.
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+    assert!(!client.is_oracle_deadlocked(&match_id));
+
+    // Oracle 1 votes for Player2 — conflict, and now threshold (2) is unreachable
+    // because only 2 oracles total, one already voted, and one disagrees.
+    let result =
+        client.try_submit_result_consensus(&match_id, &Winner::Player2, &oracles.get(1).unwrap());
+    assert_eq!(result, Err(Ok(Error::ConflictingResult)));
+
+    // After the conflicting vote, deadlock should be detected.
+    assert!(client.is_oracle_deadlocked(&match_id));
+}
+
+#[test]
+fn test_normal_consensus_path_unaffected() {
+    let (env, contract_id, _admin, player1, player2, token, oracles, match_id) =
+        setup_consensus(2, 2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let tc = soroban_sdk::token::Client::new(&env, &token);
+
+    let p1_before = tc.balance(&player1);
+    let p2_before = tc.balance(&player2);
+
+    // Both oracles vote for Player1 — should proceed normally to payout.
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+    assert!(!client.is_oracle_deadlocked(&match_id));
+
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(1).unwrap());
+    assert!(!client.is_oracle_deadlocked(&match_id));
+
+    // Payout should have happened.
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Completed);
+    assert_eq!(m.winner, Winner::Player1);
+
+    // Player1 should have received stake + winnings.
+    let p1_after = tc.balance(&player1);
+    assert!(p1_after > p1_before);
+    let p2_after = tc.balance(&player2);
+    assert!(p2_after == p2_before);
+}
+
+#[test]
+fn test_admin_can_resolve_deadlocked_match() {
+    let (env, contract_id, admin, player1, player2, token, oracles, match_id) =
+        setup_consensus(2, 2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let tc = soroban_sdk::token::Client::new(&env, &token);
+
+    let p1_before = tc.balance(&player1);
+    let p2_before = tc.balance(&player2);
+
+    // Cause deadlock: Oracle 0 votes Player1, Oracle 1 votes Player2.
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+    let result =
+        client.try_submit_result_consensus(&match_id, &Winner::Player2, &oracles.get(1).unwrap());
+    assert_eq!(result, Err(Ok(Error::ConflictingResult)));
+
+    // Verify deadlock is flagged.
+    assert!(client.is_oracle_deadlocked(&match_id));
+
+    // Admin resolves deadlock by choosing Player1 as the winner.
+    client.resolve_oracle_deadlock(&match_id, &Winner::Player1);
+
+    // Payout should have happened.
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Completed);
+    assert_eq!(m.winner, Winner::Player1);
+
+    // Player1 should have received winnings.
+    let p1_after = tc.balance(&player1);
+    assert!(p1_after > p1_before);
+    let p2_after = tc.balance(&player2);
+    assert!(p2_after == p2_before);
+}
+
+#[test]
+fn test_cannot_resolve_non_deadlocked_match() {
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
+        setup_consensus(2, 2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Match is not deadlocked — cannot resolve it.
+    let result = client.try_resolve_oracle_deadlock(&match_id, &Winner::Player1);
+    assert_eq!(result, Err(Ok(Error::InvalidState)));
+}
+
+#[test]
+fn test_no_deadlock_with_enough_remaining_oracles() {
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
+        setup_consensus(3, 3);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Oracle 0 votes Player1.
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+    assert!(!client.is_oracle_deadlocked(&match_id));
+
+    // Oracle 1 votes Player2 — conflict, but threshold (3) may still be reachable
+    // if Oracle 2 votes (1 agreeing + Oracle 2 = 2, still not enough)
+    // Actually, let's think about this: we have 3 oracles, need 3 confirmations.
+    // Oracle 0 votes Player1. Oracle 1 votes Player2 (conflict).
+    // Oracle 2 has not voted yet. Max possible = 1 (Oracle 0's Player1) + at most 1 more
+    // (Oracle 2, if they agree with Player1) = 2, which is < 3. So deadlock should be detected.
+    let result =
+        client.try_submit_result_consensus(&match_id, &Winner::Player2, &oracles.get(1).unwrap());
+    assert_eq!(result, Err(Ok(Error::ConflictingResult)));
+
+    // With 3 oracles and 3 required, after conflict, deadlock IS detected.
+    assert!(client.is_oracle_deadlocked(&match_id));
+}
+
+#[test]
+fn test_deadlock_not_triggered_with_partial_votes() {
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) =
+        setup_consensus(3, 2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Oracle 0 votes Player1 (count = 1, need 2, possible max = 1 + 2 = 3, no deadlock).
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+    assert!(!client.is_oracle_deadlocked(&match_id));
+}
+}

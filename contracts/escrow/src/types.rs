@@ -287,6 +287,12 @@ pub enum DataKey {
     DepositInProgress(u64),
     /// Combined temp + pending oracle rotation state (see `OracleRotationState`).
     OracleRotation,
+    /// Tracks a rejected/conflicting vote submitted by an oracle for a match.
+    /// Key: (match_id, oracle_address) → Winner (the conflicting result)
+    RejectedOracleVote(u64, Address),
+    /// Flags a match as deadlocked (threshold unreachable given approved oracle set).
+    /// Key: match_id → true
+    OracleDeadlock(u64),
 }
 
 /// The lifecycle event that triggered a balance snapshot.
