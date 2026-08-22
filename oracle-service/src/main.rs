@@ -28,7 +28,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use oracle_service::{
     config,
     health::HealthChecker,
-    middleware::{rate_limit::RateLimitState, waf::WafState},
+    middleware::{
+        rate_limit::{self, RateLimitState},
+        waf::{self, WafState},
+    },
     oracle::{ChessComClient, LichessClient},
     poller::Poller,
     soroban_client::SorobanClient,
@@ -39,6 +42,8 @@ use oracle_service::{
 #[derive(Clone)]
 struct AppState {
     health_checker: Arc<HealthChecker>,
+    rate_limiter: RateLimitState,
+    waf: WafState,
 }
 
 async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -148,16 +153,25 @@ async fn main() {
     // ── HTTP server state ─────────────────────────────────────────────────
     let app_state = AppState {
         health_checker: health_checker.clone(),
+        rate_limiter: RateLimitState::new(),
+        waf: WafState::new(),
     };
 
-    let _rate_limiter_state = RateLimitState::new();
-    let _waf_state = WafState::new();
-
+    // WAF is layered outermost so its burst/body/URI checks reject bad
+    // traffic before the token-bucket rate limiter does any bookkeeping.
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/api/docs", get(api_docs_ui))
         .route("/api/openapi.yaml", get(api_openapi_yaml))
-        .with_state(app_state);
+        .with_state(app_state.clone())
+        .layer(axum::middleware::from_fn_with_state(
+            app_state.rate_limiter.clone(),
+            rate_limit::rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            app_state.waf.clone(),
+            waf::waf_middleware,
+        ));
 
     let listener = match tokio::net::TcpListener::bind("0.0.0.0:8000").await {
         Ok(l) => l,
