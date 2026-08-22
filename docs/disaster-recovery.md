@@ -283,6 +283,15 @@ environment variables or the `.env` file (never committed to version control):
 
 ## Testing the Backup/Restore Cycle
 
+> **Automation status:** as of this writing, the backup/restore cycle has no
+> automated CI coverage — no test in this repository invokes
+> `backup_state.sh` or `restore_state.sh`, and `.github/workflows/backup.yml`
+> only runs on a schedule or manual dispatch against a real deployed
+> contract. The drill below is entirely manual. In particular, the network
+> confirmation prompt, the mainnet type-to-confirm guard, and in-flight match
+> recreation (see the [playbook](#in-flight-match-recovery-playbook)) all
+> require a human operator; none of them execute unattended.
+
 Run a full backup → restore drill on testnet at least once per month:
 
 ```bash
