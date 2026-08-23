@@ -148,7 +148,7 @@ These error codes support advanced features including dispute resolution, stakin
 
 ## Oracle Contract (`contracts/oracle/src/errors.rs`)
 
-All 21 variants are primarily recoverable — the majority represent client-side issues or rate limit exceedances, though a few indicate internal oracle stake/consensus state requiring investigation.
+All 22 variants are primarily recoverable — the majority represent client-side issues or rate limit exceedances, though a few indicate internal oracle stake/consensus state requiring investigation.
 
 | Code | Name | Thrown By | Cause | Recovery | Example |
 |------|------|-----------|-------|----------|---------|
@@ -172,6 +172,7 @@ All 21 variants are primarily recoverable — the majority represent client-side
 | 19 | `InvalidAmount` | Rate/stake functions | A stake or fee amount is invalid (typically zero or negative). | Supply a positive amount. | Calling `register_oracle_with_stake` with `stake_amount = 0` → `#19`. |
 | 20 | `Overflow` | Arithmetic operations (stake accumulation, voting tallies) | An arithmetic guard tripped: a counter or accumulated amount exceeded numeric bounds. | Not typically recoverable client-side. Indicates a contract state issue; contact admin for investigation. | After thousands of slash+re-stake cycles, the oracle's tally counters overflow → `#20` (rare, fatal). |
 | 21 | `SlippageExceeded` | Rate/swap validation | The price changed beyond acceptable slippage bounds between submission and execution. | Resubmit with a wider slippage tolerance or wait for prices to stabilize. | Submitting a swap with 0.5% max slippage when market moved 1% → `#21`. |
+| 22 | `StakeTokenMismatch` | [`register_oracle_with_stake`](../contracts/oracle/src/lib.rs) | The oracle already has a registration, and this call's `token` differs from the token backing the existing registration — stake in two different tokens cannot be summed. | Re-register (top up) using the same token as the original registration, or coordinate with the admin to migrate the stake before switching tokens. | An oracle registered with USDC, then attempts to top up its stake with EURC → `#22`; the existing USDC-denominated stake is left untouched. |
 
 ---
 

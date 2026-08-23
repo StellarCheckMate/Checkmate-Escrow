@@ -53,4 +53,8 @@ pub enum Error {
     InvalidAmount = 19,
     Overflow = 20,
     SlippageExceeded = 21,
+    /// `register_oracle_with_stake` was called with a `token` that differs
+    /// from the token backing an existing registration for the same oracle
+    /// address — stake denominated in two different tokens cannot be summed.
+    StakeTokenMismatch = 22,
 }
