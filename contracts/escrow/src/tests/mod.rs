@@ -100,6 +100,16 @@ pub fn token_client<'a>(env: &'a Env, token: &Address) -> TokenClient<'a> {
     TokenClient::new(env, token)
 }
 
+/// Like `setup`, but also configures a custom dispute period.
+pub fn setup_with_dispute_period(
+    period: u32,
+) -> (Env, Address, Address, Address, Address, Address, Address) {
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.set_dispute_period(&period);
+    (env, contract_id, oracle, player1, player2, token, admin)
+}
+
 /// Like `setup`, but also creates a match and has both players deposit so the
 /// match is in `Active` state.  Returns the base tuple plus the `match_id`.
 ///

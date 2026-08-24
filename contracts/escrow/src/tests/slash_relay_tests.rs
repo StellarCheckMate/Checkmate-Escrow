@@ -2,9 +2,18 @@ use super::*;
 use soroban_sdk::testutils::Ledger as _;
 
 /// Helper to set up contracts and get through to an overturned dispute ready for slashing
-fn setup_for_slash_relay_test() -> (Env, Address, Address, Address, Address, Address, Address, u64, i128) {
-    let (env, contract_id, oracle, player1, player2, token, admin) =
-        setup_with_dispute_period(200);
+fn setup_for_slash_relay_test() -> (
+    Env,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    u64,
+    i128,
+) {
+    let (env, contract_id, oracle, player1, player2, token, admin) = setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Set up dispute bond (10%)
@@ -31,14 +40,25 @@ fn setup_for_slash_relay_test() -> (Env, Address, Address, Address, Address, Add
     );
 
     client.vote_on_dispute(&dispute_id, &player2, &true);
-    env.ledger().set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
     client.resolve_dispute_by_vote(&dispute_id);
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.state, DisputeState::ResolvedOverturned);
     let bond = dispute.dispute_bond;
 
-    (env, contract_id, oracle, player1, player2, token, admin, dispute_id, bond)
+    (
+        env,
+        contract_id,
+        oracle,
+        player1,
+        player2,
+        token,
+        admin,
+        dispute_id,
+        bond,
+    )
 }
 
 /// Test 1: Verify that mark_dispute_for_oracle_slash emits the correct signal event
@@ -62,7 +82,10 @@ fn test_relay_slash_signal_event_format() {
         .iter()
         .find(|(_, topics, _)| *topics == expected_topics);
 
-    assert!(matched.is_some(), "oracle_slash_signal event must be emitted");
+    assert!(
+        matched.is_some(),
+        "oracle_slash_signal event must be emitted"
+    );
 
     let (_, _, data) = matched.unwrap();
     let (ev_dispute_id, ev_oracle, ev_amount): (u64, Address, i128) =
@@ -92,7 +115,8 @@ fn test_relay_oracle_stake_unchanged_before_slash() {
 /// Test 3: Verify correct oracle is included in slash signal
 #[test]
 fn test_relay_slash_signal_names_correct_oracle() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_with_dispute_period(200);
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Create match and get to overturned dispute with a specific oracle
@@ -119,7 +143,8 @@ fn test_relay_slash_signal_names_correct_oracle() {
     );
 
     client.vote_on_dispute(&dispute_id, &player2, &true);
-    env.ledger().set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
     client.resolve_dispute_by_vote(&dispute_id);
 
     let bond = client.get_dispute(&dispute_id).dispute_bond;
@@ -206,7 +231,8 @@ fn test_relay_slash_signal_partial_slash_amount() {
 /// Test 6: Verify slash signal is rejected if dispute not overturned
 #[test]
 fn test_relay_slash_signal_requires_overturned_state() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup_with_dispute_period(200);
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id = client.create_match(
@@ -233,7 +259,8 @@ fn test_relay_slash_signal_requires_overturned_state() {
     client.vote_on_dispute(&dispute_id, &player1, &false);
     client.vote_on_dispute(&dispute_id, &player2, &false);
 
-    env.ledger().set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
     client.resolve_dispute_by_vote(&dispute_id);
 
     let dispute = client.get_dispute(&dispute_id);
@@ -276,7 +303,8 @@ fn test_relay_multiple_disputes_independent_signals() {
     );
 
     client.vote_on_dispute(&dispute_id_1, &player2, &true);
-    env.ledger().set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
     client.resolve_dispute_by_vote(&dispute_id_1);
 
     let bond_1 = client.get_dispute(&dispute_id_1).dispute_bond;
@@ -304,7 +332,8 @@ fn test_relay_multiple_disputes_independent_signals() {
     );
 
     client.vote_on_dispute(&dispute_id_2, &player1, &true);
-    env.ledger().set_sequence_number(2100 + VOTING_PERIOD_LEDGERS);
+    env.ledger()
+        .set_sequence_number(2100 + VOTING_PERIOD_LEDGERS);
     client.resolve_dispute_by_vote(&dispute_id_2);
 
     let bond_2 = client.get_dispute(&dispute_id_2).dispute_bond;
@@ -318,15 +347,20 @@ fn test_relay_multiple_disputes_independent_signals() {
     let slash_signals: Vec<_> = events
         .iter()
         .filter(|(_, topics, _)| {
-            *topics == vec![
-                &env,
-                Symbol::new(&env, "dispute").into_val(&env),
-                Symbol::new(&env, "oracle_slash_signal").into_val(&env),
-            ]
+            *topics
+                == vec![
+                    &env,
+                    Symbol::new(&env, "dispute").into_val(&env),
+                    Symbol::new(&env, "oracle_slash_signal").into_val(&env),
+                ]
         })
         .collect();
 
-    assert_eq!(slash_signals.len(), 2, "Two slash signals should be emitted");
+    assert_eq!(
+        slash_signals.len(),
+        2,
+        "Two slash signals should be emitted"
+    );
 }
 
 /// Test 8: Verify relay handles unregistered oracle gracefully in tests
@@ -360,7 +394,8 @@ fn test_relay_signal_emitted_even_if_oracle_unregistered() {
     );
 
     client.vote_on_dispute(&dispute_id, &player2, &true);
-    env.ledger().set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
     client.resolve_dispute_by_vote(&dispute_id);
 
     let bond = client.get_dispute(&dispute_id).dispute_bond;
