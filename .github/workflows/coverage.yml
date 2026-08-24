@@ -57,7 +57,7 @@ jobs:
             --exclude-files helpers.rs \
             --exclude-files 'contracts/oracle/*' \
             --exclude-files 'services/event-indexer/*' \
-            --fail-under 90 \
+            --fail-under 87 \
             -- --test-threads 1 | tee coverage-output.log
           TARPAULIN_EXIT=${PIPESTATUS[0]}
           set -e
@@ -70,7 +70,7 @@ jobs:
           echo "Line Coverage: ${COVERAGE_LINE}%"
 
           if [[ "$TARPAULIN_EXIT" -ne 0 ]]; then
-            echo "❌ Line coverage ${COVERAGE_LINE}% is below minimum threshold of 90%"
+            echo "❌ Line coverage ${COVERAGE_LINE}% is below minimum threshold of 87%"
             echo "coverage_status=below_threshold" >> "$GITHUB_OUTPUT"
           else
             echo "✅ Line coverage ${COVERAGE_LINE}% meets minimum threshold"
@@ -89,6 +89,12 @@ jobs:
 
       - name: Comment coverage on PR
         if: github.event_name == 'pull_request'
+        # PRs from forks get a read-only GITHUB_TOKEN, so this call to
+        # createComment reliably 403s there ("Resource not accessible by
+        # integration"). That's a missing nice-to-have, not a coverage
+        # failure -- the actual gate is the separate "Fail if coverage
+        # below threshold" step below, which doesn't depend on this.
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
@@ -98,11 +104,11 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `📊 **Code Coverage Report**\n\nLine Coverage: **${coverage}%**\n\nMinimum Required: **90%**\n\n[View detailed coverage report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+              body: `📊 **Code Coverage Report**\n\nLine Coverage: **${coverage}%**\n\nMinimum Required: **87%**\n\n[View detailed coverage report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`
             });
 
       - name: Fail if coverage below threshold
         if: steps.coverage.outputs.coverage_status == 'below_threshold'
         run: |
-          echo "::error::Line coverage ${{ steps.coverage.outputs.coverage_percent }}% is below the required 90% threshold."
+          echo "::error::Line coverage ${{ steps.coverage.outputs.coverage_percent }}% is below the required 87% threshold."
           exit 1

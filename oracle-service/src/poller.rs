@@ -1,6 +1,23 @@
 //! Oracle pipeline poller.
 //!
-//! The poller runs as a background task.  On every tick it:
+//! The poller runs as two background tasks that share the same durable
+//! queue: reconciliation (discovery) and the pipeline tick (verification).
+//!
+//! ## Reconciliation — how matches enter the queue
+//!
+//! [`Poller::reconcile`] periodically pages through the escrow contract's
+//! `Active` matches via `get_active_matches_paginated` and, for each one that
+//! the oracle contract's `has_result` reports as not yet resolved, calls
+//! [`Poller::enqueue`]. `PendingQueue::enqueue` dedups on `match_id`, so
+//! running this on every cycle is safe: a match that's already queued (mid
+//! retry backoff or otherwise) is left untouched.  This is what makes a
+//! match that becomes `Active` — or a queue that's lost its persisted state
+//! entirely — get (re)discovered without needing an external caller to push
+//! it in.
+//!
+//! ## Pipeline tick — verification
+//!
+//! On every tick, [`Poller::tick`]:
 //!
 //! 1. Reads all active matches from the queue that are due for a retry.
 //! 2. For each due entry, calls the appropriate chess platform client to
@@ -10,14 +27,10 @@
 //! 4. On a *transient* failure (network, rate-limit, game not finished yet):
 //!    records the failure and advances the retry schedule.
 //! 5. On exhaustion: moves the entry to the dead-letter store.
-//!
-//! The poller does **not** discover new matches — that is the responsibility
-//! of the match-source adapter passed in via `MatchSource`.  In the current
-//! implementation, matches are enqueued externally (e.g. by reading the
-//! on-chain active-match list via the event-indexer or a manual CLI call).
 
 use std::sync::Arc;
 
+use ed25519_dalek::SigningKey;
 use tracing::{error, info, warn};
 use zeroize::Zeroizing;
 
@@ -43,6 +56,13 @@ struct PollerInner {
     signing_key: Zeroizing<[u8; 32]>,
     max_retries: u32,
     retry_base_delay_secs: u64,
+    /// Strkey of the oracle contract — used by reconciliation to check
+    /// `has_result` before enqueuing a discovered match.
+    contract_oracle: String,
+    /// Raw ed25519 public key derived from `signing_key`, used as the source
+    /// account for read-only simulation calls (`get_active_matches_paginated`,
+    /// `has_result`). Never used to sign anything.
+    pubkey: [u8; 32],
 }
 
 impl Poller {
@@ -58,6 +78,7 @@ impl Poller {
             ChessComClient::new().map_err(|e| OracleServiceError::Config(e.to_string()))?;
         let lichess =
             LichessClient::new().map_err(|e| OracleServiceError::Config(e.to_string()))?;
+        let pubkey = pubkey_from_signing_key(&cfg.oracle_signing_key);
 
         Ok(Self {
             inner: Arc::new(PollerInner {
@@ -69,6 +90,8 @@ impl Poller {
                 signing_key: Zeroizing::new(*cfg.oracle_signing_key),
                 max_retries: cfg.max_retries,
                 retry_base_delay_secs: cfg.retry_base_delay_secs,
+                contract_oracle: cfg.contract_oracle.clone(),
+                pubkey,
             }),
         })
     }
@@ -93,6 +116,7 @@ impl Poller {
             std::time::Duration::from_secs(30),
         )
         .map_err(|e| OracleServiceError::Config(e.to_string()))?;
+        let pubkey = pubkey_from_signing_key(&cfg.oracle_signing_key);
 
         Ok(Self {
             inner: Arc::new(PollerInner {
@@ -104,6 +128,8 @@ impl Poller {
                 signing_key: Zeroizing::new(*cfg.oracle_signing_key),
                 max_retries: cfg.max_retries,
                 retry_base_delay_secs: cfg.retry_base_delay_secs,
+                contract_oracle: cfg.contract_oracle.clone(),
+                pubkey,
             }),
         })
     }
@@ -128,6 +154,7 @@ impl Poller {
         .map_err(|e| OracleServiceError::Config(e.to_string()))?;
         let lichess =
             LichessClient::new().map_err(|e| OracleServiceError::Config(e.to_string()))?;
+        let pubkey = pubkey_from_signing_key(&cfg.oracle_signing_key);
 
         Ok(Self {
             inner: Arc::new(PollerInner {
@@ -139,6 +166,8 @@ impl Poller {
                 signing_key: Zeroizing::new(*cfg.oracle_signing_key),
                 max_retries: cfg.max_retries,
                 retry_base_delay_secs: cfg.retry_base_delay_secs,
+                contract_oracle: cfg.contract_oracle.clone(),
+                pubkey,
             }),
         })
     }
@@ -179,6 +208,92 @@ impl Poller {
         platform: Platform,
     ) -> Result<bool, OracleServiceError> {
         self.inner.queue.enqueue(match_id, game_id, platform).await
+    }
+
+    /// Run one reconciliation pass: page through the escrow contract's
+    /// `Active` matches and enqueue any that the oracle contract does not
+    /// yet have a result for.
+    ///
+    /// Safe to call on a fresh queue (nothing enqueued yet), after the queue
+    /// file has been lost entirely, or against a queue that already has
+    /// entries mid-retry — `PendingQueue::enqueue` dedups on `match_id` and
+    /// never touches an existing entry's retry state.
+    pub async fn reconcile(&self) -> Result<(), OracleServiceError> {
+        const PAGE_SIZE: u32 = 50;
+
+        let mut offset = 0u32;
+        let mut discovered = 0u32;
+
+        loop {
+            let page = self
+                .inner
+                .soroban
+                .get_active_matches_paginated(offset, PAGE_SIZE, &self.inner.pubkey)
+                .await?;
+            let page_len = page.len() as u32;
+            if page.is_empty() {
+                break;
+            }
+
+            for m in page {
+                let has_result = self
+                    .inner
+                    .soroban
+                    .has_result(&self.inner.contract_oracle, m.match_id, &self.inner.pubkey)
+                    .await?;
+                if has_result {
+                    continue;
+                }
+
+                match self
+                    .inner
+                    .queue
+                    .enqueue(m.match_id, m.game_id.clone(), m.platform)
+                    .await
+                {
+                    Ok(true) => {
+                        discovered += 1;
+                        info!(
+                            match_id = m.match_id,
+                            game_id = %m.game_id,
+                            platform = %m.platform,
+                            "reconciliation discovered new match",
+                        );
+                    }
+                    Ok(false) => {
+                        // Already queued (fresh entry or mid-backoff) — leave it alone.
+                    }
+                    Err(e) => {
+                        error!(
+                            match_id = m.match_id,
+                            "reconciliation failed to enqueue discovered match: {}", e
+                        );
+                    }
+                }
+            }
+
+            if page_len < PAGE_SIZE {
+                break;
+            }
+            offset += page_len;
+        }
+
+        if discovered > 0 {
+            info!(count = discovered, "reconciliation cycle complete");
+        }
+        Ok(())
+    }
+
+    /// Run the reconciliation loop forever, sleeping `interval_secs` between
+    /// passes.
+    pub async fn run_reconciliation_loop(self, interval_secs: u64) {
+        let interval = tokio::time::Duration::from_secs(interval_secs);
+        loop {
+            if let Err(e) = self.reconcile().await {
+                error!("reconciliation cycle error: {}", e);
+            }
+            tokio::time::sleep(interval).await;
+        }
     }
 
     // ── private ───────────────────────────────────────────────────────────────
@@ -285,6 +400,12 @@ impl Poller {
             );
         }
     }
+}
+
+/// Derive the raw ed25519 public key bytes for the oracle's signing key, used
+/// only as the source account for read-only simulation calls.
+fn pubkey_from_signing_key(seed: &[u8; 32]) -> [u8; 32] {
+    SigningKey::from_bytes(seed).verifying_key().to_bytes()
 }
 
 // ── Error classification ──────────────────────────────────────────────────────
