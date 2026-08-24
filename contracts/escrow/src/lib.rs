@@ -150,6 +150,23 @@ const MAX_ACTIVE_MATCHES_PER_PLAYER: u32 = 1_000;
 /// per-call cost. Callers requiring more results should use the _paginated variants.
 const MAX_UNBOUNDED_MATCH_RESULTS: u32 = 10_000;
 
+/// Hard cap on the total number of matches `get_completed_matches` will scan before
+/// returning `Error::TooManyResults`. Chosen to leave comfortable headroom under
+/// Soroban's per-invocation resource budget while still accommodating typical
+/// production deployments.
+///
+/// Once the contract's total match count exceeds this threshold callers **must**
+/// switch to `get_completed_matches_paginated` — the un-paginated variant will
+/// return this error on every subsequent invocation.
+///
+/// The threshold of 500 corresponds roughly to the break-even point where a
+/// full linear scan begins to approach the Soroban ledger-entry read budget for a
+/// single invocation when all entries are in persistent storage (each match record
+/// costs ~1 read unit and Soroban's resource limits are relatively tight per call).
+/// Adjust `GET_COMPLETED_MATCHES_SCAN_CAP` in tandem with any budget headroom
+/// changes established by benchmarking.
+const GET_COMPLETED_MATCHES_SCAN_CAP: u64 = 500;
+
 // ── Upgrade / migration constants ─────────────────────────────────────────────
 
 /// Current contract version: major=0, minor=1, patch=0  →  1_000 * 0 + 1 * 1000 + 0.
@@ -2547,7 +2564,7 @@ impl EscrowContract {
         let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
 
         if count >= MAX_ACTIVE_MATCHES_PER_PLAYER {
-            return Err(Error::TooManyActiveMatches);
+            return Err(Error::TooManyResults);
         }
 
         let key = DataKey::ActiveMatch(player.clone(), match_id);
@@ -4190,14 +4207,37 @@ impl EscrowContract {
     /// Useful for off-chain clients and the frontend to display match history and
     /// payout records without relying on event indexing.
     ///
-    /// # Storage cost note
+    /// # Scan cap
     ///
-    /// This function scans every match ever created in linear time. For contracts with
-    /// a large number of matches this may become expensive. Prefer
-    /// `get_completed_matches_paginated` for production use cases where the total
-    /// match count could grow unboundedly — it lets callers fetch results in bounded
-    /// pages rather than loading the entire history in a single call.
+    /// Once the contract's total match count reaches [`GET_COMPLETED_MATCHES_SCAN_CAP`],
+    /// this function returns `Error::TooManyResults` on every call and emits a
+    /// `query / scan_cap_hit` diagnostic event carrying the current match count.
+    /// This hard stop prevents an otherwise-silent resource-exhaustion failure as
+    /// match history grows over months of real operation.
+    ///
+    /// **When you receive `Error::TooManyResults` from this function**, switch to
+    /// `get_completed_matches_paginated` — it is the production-safe path and is
+    /// unaffected by this cap.
     pub fn get_completed_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        let match_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+
+        if match_count >= GET_COMPLETED_MATCHES_SCAN_CAP {
+            // Emit a diagnostic event so off-chain monitors can detect the
+            // condition without needing to parse the error return value.
+            env.events().publish(
+                (
+                    Symbol::new(&env, "query"),
+                    Symbol::new(&env, "scan_cap_hit"),
+                ),
+                match_count,
+            );
+            return Err(Error::TooManyResults);
+        }
+
         Self::collect_matches_by_state(&env, MatchState::Completed)
     }
 

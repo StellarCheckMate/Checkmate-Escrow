@@ -937,7 +937,7 @@ paths:
         | 16 | InvalidPlayers    | `player1 == player2` or invalid address |
         | 17 | TokenNotAllowed   | Token not on allowlist (when enforcement active) |
         | 35 | TierStakeNotAllowed | Stake exceeds player's tier limit |
-        | 45 | TooManyActiveMatches | Player has hit the 1000 active-match cap |
+        | 45 | TooManyResults | Player has hit the 1000 active-match cap (active-match cap case) |
 
         **curl example:**
         ```bash

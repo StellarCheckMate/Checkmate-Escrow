@@ -1,6 +1,6 @@
 # Smart Contract Error Codes Reference
 
-**Last updated:** 2026-07-29 · **Verified against:** `contracts/escrow/src/errors.rs` and `contracts/oracle/src/errors.rs`
+**Last updated:** 2026-08-24 · **Verified against:** `contracts/escrow/src/errors.rs` and `contracts/oracle/src/errors.rs`
 
 This document is the exhaustive, user-facing reference for every error a
 caller can receive from the two on-chain Soroban contracts in this repo:
@@ -137,7 +137,7 @@ These error codes support advanced features including dispute resolution, stakin
 | 42 | `QuorumNotMet` | Consensus functions | Consensus voting hasn't reached the required quorum | Wait for more oracles to vote | Attempting to finalize consensus before enough oracles have voted → `#42`. |
 | 43 | `InsufficientHoldingDuration` | Tier/staking functions | Staked tokens don't meet the minimum holding-period requirement | Wait longer, or unstake and re-stake to reset the timer | Player tries to use tier benefits before their stake has been locked for the required time → `#43`. |
 | 44 | `OracleSlashFailed` | Internal slashing logic | Attempted to slash an oracle's stake but the operation failed | Not recoverable by caller; indicates a contract state issue requiring investigation | Slashing logic attempted but underlying state became inconsistent → `#44` (fatal). |
-| 45 | `TooManyActiveMatches` | Match creation | The player has exceeded the maximum concurrent active matches | Wait for some existing matches to complete/cancel | Player with 50 active matches tries to create a 51st → `#45`. |
+| 45 | `TooManyResults` | **Match creation** (active-match cap): [`add_active_match`](../contracts/escrow/src/lib.rs) — **Query scan cap**: [`get_completed_matches`](../contracts/escrow/src/lib.rs) | Two distinct situations share this error code: **(1) Active-match cap** — the player has exceeded `MAX_ACTIVE_MATCHES_PER_PLAYER` concurrent active matches; **(2) Scan cap** — `get_completed_matches` was called when the contract's total match count ≥ `GET_COMPLETED_MATCHES_SCAN_CAP` (500). For the scan-cap case, a `query / scan_cap_hit` diagnostic event is also emitted (payload: `match_count: u64`). | For (1): wait for existing matches to complete or cancel. For (2): **switch to `get_completed_matches_paginated`** — it is the production-safe path and is never affected by this cap. | (1) Player with 1000 active matches attempts to deposit into a new match → `#45`. (2) `get_completed_matches` called on a contract with 500+ total matches → `#45` + `query/scan_cap_hit` event emitted. |
 | 46 | `NotStablecoin` | Match creation (stablecoin-only mode) | Token is not a registered stablecoin and stablecoin-only mode is enabled | Use a stablecoin token (e.g., USDC, EURC) or have admin disable stablecoin-only mode | Creating a match with a non-stablecoin token when the contract is in stablecoin-only mode → `#46`. |
 | 47 | `UpgradeNotScheduled` | Contract upgrade functions | Attempting to execute an upgrade that hasn't been scheduled | Schedule the upgrade first via the admin upgrade functions | Calling `execute_upgrade` without a prior `schedule_upgrade` → `#47`. |
 | 48 | `UpgradeReviewPeriodNotElapsed` | Contract upgrade | Attempting to execute an upgrade before the review/delay period expires | Wait for the configured review window to pass | Trying to execute an upgrade 1 hour after scheduling when the minimum is 24 hours → `#48`. |
@@ -199,9 +199,9 @@ Use this when you only know the *symptom*, not the code.
 
 ## Coverage
 
-This document covers all variants present in source as of 2026-07-29:
+This document covers all variants present in source as of 2026-08-24:
 
-- Escrow (`contracts/escrow/src/errors.rs`): 50/50 variants documented (including new variants 22–50 for dispute resolution, vesting, tiers, and upgrades).
+- Escrow (`contracts/escrow/src/errors.rs`): 50/50 variants documented (including new variants 22–50 for dispute resolution, vesting, tiers, and upgrades; variant 45 renamed from `TooManyActiveMatches` to `TooManyResults` with broadened semantics to cover the `get_completed_matches` scan cap).
 - Oracle (`contracts/oracle/src/errors.rs`): 21/21 variants documented (including new variants for oracle staking and SLA enforcement).
 
 If `cargo build` or a code review surfaces a new variant in either

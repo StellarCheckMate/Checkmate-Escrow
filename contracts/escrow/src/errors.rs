@@ -11,11 +11,17 @@ use soroban_sdk::contracterror;
 /// This document is kept in lockstep with this enum — if you add or remove a variant,
 /// update `docs/error-codes.md` in the same PR.
 ///
-/// This enum currently has 49 variants, which is the hard ceiling `#[contracterror]`
-/// supports in this soroban-sdk version -- adding a 50th panics the proc macro at
-/// compile time with `LengthExceedsMax` (confirmed empirically; not documented by the
-/// SDK). Adding a new error requires either freeing a slot by repurposing an existing,
-/// semantically-close variant, or removing one that's been superseded.
+/// This enum has 50 variants, which is the hard ceiling `#[contracterror]`
+/// supports in this soroban-sdk version (confirmed empirically: adding a 51st
+/// panics the proc macro at compile time with `LengthExceedsMax`; not documented
+/// by the SDK). Adding a new error requires repurposing an existing,
+/// semantically-close variant — discriminant values may be sparse (gaps exist at
+/// 11, 12, 38, 44, 53) but the variant *count* must not exceed 50.
+///
+/// **Reuse history**:
+/// - `TooManyResults = 45` was previously `TooManyActiveMatches`. Its semantics
+///   were broadened to cover any "result set exceeds an on-chain cap" situation,
+///   including the scan cap enforced by `get_completed_matches`.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -59,7 +65,18 @@ pub enum Error {
     InsufficientBond = 41,
     QuorumNotMet = 42,
     InsufficientHoldingDuration = 43,
-    TooManyActiveMatches = 45,
+    /// A "result set too large" guard fired. Used for two distinct situations
+    /// that share the same "too many" semantics:
+    ///
+    /// 1. **Active-match cap**: The player has exceeded the maximum number of
+    ///    concurrent active matches (`MAX_ACTIVE_MATCHES_PER_PLAYER`). Wait for
+    ///    some existing matches to complete or be cancelled.
+    ///
+    /// 2. **Scan cap**: `get_completed_matches` was called on a contract whose
+    ///    total match count exceeds `GET_COMPLETED_MATCHES_SCAN_CAP`. Switch to
+    ///    `get_completed_matches_paginated` to fetch completed matches in
+    ///    bounded pages.
+    TooManyResults = 45,
     /// Token is not issued by a registered stablecoin issuer and stablecoin-only mode is enabled.
     NotStablecoin = 46,
     UpgradeNotScheduled = 47,

@@ -66,6 +66,7 @@ Pending ──► Active ──► Completed
 | `match` / `completed`     | `submit_result`     | `(match_id, winner, payout_amount)`          |
 | `match` / `cancelled`     | `cancel_match`      | `match_id`                                   |
 | `match` / `expired`       | `expire_match`      | `match_id`                                   |
+| `query` / `scan_cap_hit`  | `get_completed_matches` | `match_count: u64` — total match count at the time the cap fired. Emitted when the contract has ≥ `GET_COMPLETED_MATCHES_SCAN_CAP` (500) total matches. Switch to `get_completed_matches_paginated` when you observe this event. |
 
 ## 🛠️ Quick Start
 
