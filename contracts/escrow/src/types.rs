@@ -287,9 +287,15 @@ pub enum DataKey {
     DepositInProgress(u64),
     /// Combined temp + pending oracle rotation state (see `OracleRotationState`).
     OracleRotation,
-    /// Tracks a rejected/conflicting vote submitted by an oracle for a match.
-    /// Key: (match_id, oracle_address) → Winner (the conflicting result)
-    RejectedOracleVote(u64, Address),
+}
+
+/// Storage keys for multi-oracle consensus deadlock tracking.
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// because Soroban's contract-type union spec caps a single enum at 50
+/// variants, and `DataKey` is already at that limit.
+#[contracttype]
+pub enum OracleConsensusKey {
     /// Flags a match as deadlocked (threshold unreachable given approved oracle set).
     /// Key: match_id → true
     OracleDeadlock(u64),

@@ -1725,7 +1725,7 @@ impl EscrowContract {
             .get(&DataKey::ApprovedOracles)
             .unwrap_or_else(|| soroban_sdk::vec![&env]);
 
-        let oracle_count = oracles.len() as u32;
+        let oracle_count = oracles.len();
 
         // Calculate how many more confirmations could theoretically be obtained.
         // We assume all remaining oracles might vote once each.
@@ -1736,10 +1736,12 @@ impl EscrowContract {
         if max_possible_confirmations < required {
             env.storage()
                 .persistent()
-                .set(&DataKey::OracleDeadlock(match_id), &true);
-            env.storage()
-                .persistent()
-                .extend_ttl(&DataKey::OracleDeadlock(match_id), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+                .set(&types::OracleConsensusKey::OracleDeadlock(match_id), &true);
+            env.storage().persistent().extend_ttl(
+                &types::OracleConsensusKey::OracleDeadlock(match_id),
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
 
             env.events().publish(
                 (Symbol::new(env, "match"), symbol_short!("ora_dead")),
@@ -5281,18 +5283,9 @@ impl EscrowContract {
                 .get(&leading_winner_key)
                 .ok_or(Error::ConflictingResult)?;
             if existing_winner != winner {
-                // Store the rejected vote before returning error, so disagreement is recorded.
-                let rejected_vote_key = DataKey::RejectedOracleVote(match_id, oracle_address.clone());
-                env.storage().persistent().set(&rejected_vote_key, &winner);
-                env.storage().persistent().extend_ttl(
-                    &rejected_vote_key,
-                    MATCH_TTL_LEDGERS,
-                    MATCH_TTL_LEDGERS,
-                );
-                env.events().publish(
-                    (Symbol::new(&env, "match"), symbol_short!("ora_rej")),
-                    (match_id, oracle_address, winner),
-                );
+                // Soroban rolls back all storage writes made during a call that
+                // returns `Err`, so a conflicting vote cannot itself persist any
+                // record of the disagreement — it's reported only via this error.
                 return Err(Error::ConflictingResult);
             }
         } else {
@@ -5355,32 +5348,17 @@ impl EscrowContract {
             .unwrap_or(0)
     }
 
-    /// Return whether a given oracle's rejected vote exists for a match.
-    pub fn get_rejected_oracle_vote(
-        env: Env,
-        match_id: u64,
-        oracle_address: Address,
-    ) -> Option<Winner> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::RejectedOracleVote(match_id, oracle_address))
-    }
-
     /// Return whether a match is deadlocked (threshold unreachable).
     pub fn is_oracle_deadlocked(env: Env, match_id: u64) -> bool {
         env.storage()
             .persistent()
-            .get(&DataKey::OracleDeadlock(match_id))
+            .get(&types::OracleConsensusKey::OracleDeadlock(match_id))
             .unwrap_or(false)
     }
 
     /// Resolve a deadlocked match by admin authority, executing payout for a chosen winner.
     /// Only callable if the match is flagged as deadlocked.
-    pub fn resolve_oracle_deadlock(
-        env: Env,
-        match_id: u64,
-        winner: Winner,
-    ) -> Result<(), Error> {
+    pub fn resolve_oracle_deadlock(env: Env, match_id: u64, winner: Winner) -> Result<(), Error> {
         extend_instance_ttl(&env);
 
         if env
@@ -5415,14 +5393,14 @@ impl EscrowContract {
         if !env
             .storage()
             .persistent()
-            .get::<_, bool>(&DataKey::OracleDeadlock(match_id))
+            .get::<_, bool>(&types::OracleConsensusKey::OracleDeadlock(match_id))
             .unwrap_or(false)
         {
             return Err(Error::InvalidState);
         }
 
         // Execute payout with the admin-chosen winner.
-        Self::settle_result(&env, match_id, winner)?;
+        Self::settle_result(&env, match_id, winner.clone())?;
 
         // Emit event for admin resolution.
         env.events().publish(
