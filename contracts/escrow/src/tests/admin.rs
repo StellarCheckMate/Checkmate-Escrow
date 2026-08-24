@@ -1,4 +1,5 @@
 use super::*;
+use soroban_sdk::testutils::Ledger as _;
 
 #[test]
 fn test_pause_on_uninitialized_contract_returns_unauthorized() {
@@ -894,4 +895,97 @@ fn test_get_contract_version_returns_semver_string() {
             version_str
         );
     }
+}
+
+#[test]
+fn test_rotate_oracle_temporary_sets_effective_oracle_until_expiry() {
+    let (env, contract_id, oracle, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let temp_oracle = Address::generate(&env);
+    let start = env.ledger().timestamp();
+    client.rotate_oracle_temporary(&oracle, &temp_oracle, &3600u64);
+    assert_eq!(client.get_oracle(), temp_oracle);
+
+    env.ledger().set_timestamp(start + 3601);
+    assert_eq!(
+        client.get_oracle(),
+        oracle,
+        "temporary rotation must revert to the base oracle once it expires"
+    );
+}
+
+#[test]
+fn test_rotate_oracle_temporary_rejects_self_address() {
+    let (env, contract_id, oracle, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_rotate_oracle_temporary(&oracle, &contract_id, &3600u64);
+    assert_eq!(result, Err(Ok(Error::InvalidAddress)));
+}
+
+#[test]
+fn test_rotate_oracle_temporary_rejects_old_oracle_mismatch() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let wrong_old = Address::generate(&env);
+    let new_oracle = Address::generate(&env);
+    let result = client.try_rotate_oracle_temporary(&wrong_old, &new_oracle, &3600u64);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_propose_and_rotate_oracle_permanent() {
+    let (env, contract_id, oracle, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_oracle = Address::generate(&env);
+    client.propose_oracle_rotation(&oracle, &new_oracle);
+    client.rotate_oracle_permanent(&oracle, &new_oracle);
+
+    assert_eq!(client.get_oracle(), new_oracle);
+}
+
+#[test]
+fn test_propose_oracle_rotation_rejects_self_address() {
+    let (env, contract_id, oracle, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_propose_oracle_rotation(&oracle, &contract_id);
+    assert_eq!(result, Err(Ok(Error::InvalidAddress)));
+}
+
+#[test]
+fn test_propose_oracle_rotation_rejects_old_oracle_mismatch() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let wrong_old = Address::generate(&env);
+    let new_oracle = Address::generate(&env);
+    let result = client.try_propose_oracle_rotation(&wrong_old, &new_oracle);
+    assert_eq!(result, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_rotate_oracle_permanent_rejects_without_pending_proposal() {
+    let (env, contract_id, oracle, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_oracle = Address::generate(&env);
+    let result = client.try_rotate_oracle_permanent(&oracle, &new_oracle);
+    assert_eq!(result, Err(Ok(Error::InvalidState)));
+}
+
+#[test]
+fn test_rotate_oracle_permanent_rejects_mismatched_proposal() {
+    let (env, contract_id, oracle, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let proposed_new = Address::generate(&env);
+    client.propose_oracle_rotation(&oracle, &proposed_new);
+
+    let different_new = Address::generate(&env);
+    let result = client.try_rotate_oracle_permanent(&oracle, &different_new);
+    assert_eq!(result, Err(Ok(Error::InvalidState)));
 }

@@ -441,3 +441,18 @@ fn test_get_match_history_filters_by_player() {
     assert_eq!(player2_history.len(), 1);
     assert_eq!(player2_history.get(0).unwrap().id, id_12);
 }
+
+/// `get_live_matches` / `get_live_matches_paginated` are naming aliases for
+/// `get_active_matches` / `get_active_matches_paginated`.
+#[test]
+fn test_get_live_matches_aliases_active_matches() {
+    let (env, contract_id, ..) = setup_with_funded_match();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.get_live_matches(), client.get_active_matches());
+
+    let active_paginated = client.get_active_matches_paginated(&0, &10);
+    let live_paginated = client.get_live_matches_paginated(&0, &10);
+    assert_eq!(live_paginated, active_paginated);
+    assert_eq!(live_paginated.len(), 1);
+}
