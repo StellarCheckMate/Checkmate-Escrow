@@ -660,6 +660,37 @@ fn test_cannot_resolve_non_deadlocked_match() {
 }
 
 #[test]
+fn test_resolve_oracle_deadlock_blocked_while_paused() {
+    let (env, contract_id, admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(2, 3);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Reach deadlock (2 oracles, 3 required — unreachable from the first vote).
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+    assert!(client.is_oracle_deadlocked(&match_id));
+
+    client.pause(&admin);
+
+    let result = client.try_resolve_oracle_deadlock(&match_id, &Winner::Player1);
+    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+}
+
+#[test]
+fn test_resolve_oracle_deadlock_rejects_non_active_match() {
+    let (env, contract_id, _admin, player1, _p2, _token, oracles, match_id) = setup_consensus(2, 2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Complete the match normally via consensus — it's no longer Active.
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(1).unwrap());
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Completed);
+    client.claim_vested_payout(&match_id, &player1);
+
+    let result = client.try_resolve_oracle_deadlock(&match_id, &Winner::Player2);
+    assert_eq!(result, Err(Ok(Error::InvalidState)));
+}
+
+#[test]
 fn test_no_deadlock_with_enough_remaining_oracles() {
     let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(3, 3);
     let client = EscrowContractClient::new(&env, &contract_id);
