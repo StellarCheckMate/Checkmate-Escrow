@@ -99,7 +99,7 @@ fn test_relay_slash_signal_event_format() {
 /// Test 2: Verify that before any relay processes the signal, the oracle's stake is unchanged
 #[test]
 fn test_relay_oracle_stake_unchanged_before_slash() {
-    let (env, contract_id, oracle, _player1, _player2, _token, _admin, dispute_id, bond) =
+    let (env, contract_id, _oracle, _player1, _player2, _token, _admin, dispute_id, bond) =
         setup_for_slash_relay_test();
     let client = EscrowContractClient::new(&env, &contract_id);
 
