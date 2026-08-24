@@ -395,6 +395,7 @@ The oracle service (`oracle-service/`) polls active matches, checks their result
 | `ORACLE_MAX_RETRIES` | no | Max retry attempts before an entry is dead-lettered (default `5`). |
 | `ORACLE_RETRY_BASE_DELAY_SECS` | no | Base delay before the first retry; doubles each attempt (default `10`). |
 | `ORACLE_QUEUE_DIR` | no | Directory for the pending/dead-letter queue files (default `./oracle-queue`). |
+| `ORACLE_RECONCILIATION_INTERVAL_SECS` | no | How often the reconciliation task re-scans active matches for ones missing a result (default `60`). |
 
 ### Sample `.env` for local oracle development
 
@@ -413,6 +414,7 @@ ORACLE_POLL_INTERVAL_SECS=10
 ORACLE_MAX_RETRIES=5
 ORACLE_RETRY_BASE_DELAY_SECS=5
 ORACLE_QUEUE_DIR=./oracle-queue
+ORACLE_RECONCILIATION_INTERVAL_SECS=10
 ```
 
 ### Starting the service

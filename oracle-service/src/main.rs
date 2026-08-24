@@ -1,6 +1,6 @@
 //! Oracle service entry point.
 //!
-//! Starts three concurrent tasks:
+//! Starts four concurrent tasks:
 //!
 //! 1. **Health HTTP endpoint** on `0.0.0.0:8000` — exposes `/health` with
 //!    real-time dependency checks and `/metrics` for Prometheus scraping.
@@ -10,7 +10,13 @@
 //!    seconds, updating the health status with real RPC, contract, and API
 //!    connectivity information.
 //!
-//! 3. **Pipeline poller** — wakes every `ORACLE_POLL_INTERVAL_SECS` seconds,
+//! 3. **Reconciliation task** — wakes every `ORACLE_RECONCILIATION_INTERVAL_SECS`
+//!    seconds, pages through the escrow contract's `Active` matches, and
+//!    enqueues any that the oracle contract doesn't yet have a result for.
+//!    This is how a match actually enters the pipeline — see
+//!    `oracle_service::poller` for details.
+//!
+//! 4. **Pipeline poller** — wakes every `ORACLE_POLL_INTERVAL_SECS` seconds,
 //!    processes all due pending-verification entries, and submits results
 //!    on-chain via Soroban RPC.
 
@@ -99,6 +105,7 @@ async fn main() {
     };
 
     let poll_interval = cfg.poll_interval_secs;
+    let reconciliation_interval = cfg.reconciliation_interval_secs;
 
     // ── Initialize dependencies ───────────────────────────────────────────
     let soroban = match SorobanClient::new(
@@ -170,7 +177,7 @@ async fn main() {
     info!("oracle service listening on http://0.0.0.0:8000");
     info!("API docs available at http://0.0.0.0:8000/api/docs");
 
-    // ── Run all three tasks concurrently ───────────────────────────────────
+    // ── Run all four tasks concurrently ─────────────────────────────────────
     tokio::select! {
         res = axum::serve(listener, app) => {
             if let Err(e) = res {
@@ -179,6 +186,9 @@ async fn main() {
         }
         _ = run_health_check_loop(health_checker) => {
             // health loop never returns normally
+        }
+        _ = poller.clone().run_reconciliation_loop(reconciliation_interval) => {
+            // run_reconciliation_loop never returns normally
         }
         _ = poller.run_loop(poll_interval) => {
             // run_loop never returns normally

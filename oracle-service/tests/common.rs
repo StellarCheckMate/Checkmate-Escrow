@@ -19,6 +19,7 @@ pub fn test_config() -> OracleConfig {
         max_retries: 5,
         retry_base_delay_secs: 10,
         queue_dir: "/tmp/test-oracle-queue".to_string(),
+        reconciliation_interval_secs: 60,
     }
 }
 

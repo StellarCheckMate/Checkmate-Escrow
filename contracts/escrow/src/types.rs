@@ -289,6 +289,18 @@ pub enum DataKey {
     OracleRotation,
 }
 
+/// Storage keys for multi-oracle consensus deadlock tracking.
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// because Soroban's contract-type union spec caps a single enum at 50
+/// variants, and `DataKey` is already at that limit.
+#[contracttype]
+pub enum OracleConsensusKey {
+    /// Flags a match as deadlocked (threshold unreachable given approved oracle set).
+    /// Key: match_id → true
+    OracleDeadlock(u64),
+}
+
 /// The lifecycle event that triggered a balance snapshot.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
