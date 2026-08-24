@@ -314,7 +314,7 @@ fn test_relay_multiple_disputes_independent_signals() {
     let match_id_2 = client.create_match(
         &player1,
         &player2,
-        &200,
+        &100,
         &token,
         &String::from_str(&env, "rly00005"),
         &Platform::Lichess,
