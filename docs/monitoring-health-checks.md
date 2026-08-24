@@ -19,7 +19,7 @@ This document describes the monitoring architecture, health check system, and al
 
 ## Health Check Architecture
 
-The oracle service runs three concurrent subsystems:
+The oracle service runs four concurrent subsystems:
 
 ### 1. HTTP Health Server (Port 8000)
 
@@ -37,7 +37,11 @@ A background task that:
 - Stores results with timestamps and latency data
 - Distinguishes transient failures (rate limits, timeouts) from persistent outages
 
-### 3. Pipeline Poller (Every `ORACLE_POLL_INTERVAL_SECS`)
+### 3. Reconciliation Task (Every `ORACLE_RECONCILIATION_INTERVAL_SECS`)
+
+Pages through the escrow contract's `Active` matches via `get_active_matches_paginated` and enqueues any that the oracle contract's `has_result` reports as not yet resolved. This is what makes a match's first verification attempt happen — the pipeline poller below only processes entries this task (or a manual replay) has already enqueued.
+
+### 4. Pipeline Poller (Every `ORACLE_POLL_INTERVAL_SECS`)
 
 The existing match verification poller. Not affected by health check state, but health status informs operational decisions (e.g., pause service if unhealthy).
 

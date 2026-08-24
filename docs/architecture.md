@@ -62,6 +62,13 @@ sequenceDiagram
     Player2->>Escrow: deposit(match_id, player2)
     Escrow-->>Escrow: state = Active (both deposited)
 
+    loop Reconciliation (every ORACLE_RECONCILIATION_INTERVAL_SECS)
+        OracleSvc->>Escrow: get_active_matches_paginated(offset, limit)
+        Escrow-->>OracleSvc: Active matches
+        OracleSvc->>OracleContract: has_result(match_id)?
+        OracleContract-->>OracleSvc: false → enqueue match_id for verification
+    end
+
     OracleSvc->>Platform: Poll game result for game_id
     Platform-->>OracleSvc: Game outcome (winner)
     OracleSvc->>OracleContract: Record verified result
@@ -83,7 +90,7 @@ sequenceDiagram
     end
 ```
 
-- **Oracle Service** is the off-chain component (`oracle-service/`) that polls Lichess/Chess.com, then calls both the on-chain Oracle Contract (audit record) and the Escrow Contract's `submit_result`.
+- **Oracle Service** is the off-chain component (`oracle-service/`) that discovers `Active` matches missing a result via periodic reconciliation against the Escrow Contract, polls Lichess/Chess.com for each one, then calls both the on-chain Oracle Contract (audit record) and the Escrow Contract's `submit_result`.
 - The cancel/expire path is only reachable while the match is still `Pending` (before both players have deposited); once `Active`, the match can only resolve via `submit_result` and its downstream payout/dispute flow.
 
 ### State Machine Diagram
