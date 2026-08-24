@@ -2695,12 +2695,13 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        env.storage()
-            .instance()
-            .set(&DataKey::PendingAdmin, &PendingAdminProposal {
+        env.storage().instance().set(
+            &DataKey::PendingAdmin,
+            &PendingAdminProposal {
                 proposer: admin,
                 pending_admin: new_admin.clone(),
-            });
+            },
+        );
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("propose")),
             new_admin,

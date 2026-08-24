@@ -906,10 +906,18 @@ fn test_stale_nominee_cannot_hijack_after_transfer_admin() {
     let admin_c = Address::generate(&env);
 
     client.propose_admin(&pending_admin_b);
-    assert_eq!(client.get_admin(), admin_a, "admin must not change after propose");
+    assert_eq!(
+        client.get_admin(),
+        admin_a,
+        "admin must not change after propose"
+    );
 
     client.transfer_admin(&admin_c, &admin_a);
-    assert_eq!(client.get_admin(), admin_c, "admin must be admin_c after transfer");
+    assert_eq!(
+        client.get_admin(),
+        admin_c,
+        "admin must be admin_c after transfer"
+    );
 
     env.mock_auths(&[MockAuth {
         address: &pending_admin_b,
@@ -941,7 +949,11 @@ fn test_legitimate_propose_accept_flow_still_works() {
 
     let new_admin = Address::generate(&env);
     client.propose_admin(&new_admin);
-    assert_eq!(client.get_admin(), admin, "admin must not change after propose");
+    assert_eq!(
+        client.get_admin(),
+        admin,
+        "admin must not change after propose"
+    );
 
     env.mock_auths(&[MockAuth {
         address: &new_admin,
@@ -1002,7 +1014,10 @@ fn test_accept_admin_fails_when_no_proposal_pending() {
     }]);
 
     let result = client.try_accept_admin();
-    assert!(result.is_err(), "accept_admin must fail when no proposal is pending");
+    assert!(
+        result.is_err(),
+        "accept_admin must fail when no proposal is pending"
+    );
 }
 
 // #1281 — accept_admin fails when called by wrong address
@@ -1043,10 +1058,17 @@ fn test_accept_admin_fails_when_proposer_changed() {
     let admin_c = Address::generate(&env);
 
     client.propose_admin(&pending_admin_b);
-    assert_eq!(client.get_admin(), admin_a, "initial admin should be admin_a");
+    assert_eq!(
+        client.get_admin(),
+        admin_a,
+        "initial admin should be admin_a"
+    );
 
     let mut proposal: PendingAdminProposal = env.as_contract(&contract_id, || {
-        env.storage().instance().get(&DataKey::PendingAdmin).unwrap()
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .unwrap()
     });
     assert_eq!(
         proposal.proposer, admin_a,
