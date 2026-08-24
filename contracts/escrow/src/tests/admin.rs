@@ -1064,7 +1064,7 @@ fn test_accept_admin_fails_when_proposer_changed() {
         "initial admin should be admin_a"
     );
 
-    let mut proposal: PendingAdminProposal = env.as_contract(&contract_id, || {
+    let proposal: PendingAdminProposal = env.as_contract(&contract_id, || {
         env.storage()
             .instance()
             .get(&DataKey::PendingAdmin)
