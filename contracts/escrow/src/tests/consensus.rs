@@ -699,4 +699,3 @@ fn test_deadlock_not_triggered_with_partial_votes() {
     client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
     assert!(!client.is_oracle_deadlocked(&match_id));
 }
-}
