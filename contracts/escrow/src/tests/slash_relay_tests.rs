@@ -24,7 +24,7 @@ fn setup_for_slash_relay_test() -> (
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "relay0001"),
+        &String::from_str(&env, "rly00001"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -127,7 +127,7 @@ fn test_relay_slash_signal_names_correct_oracle() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "relay0002"),
+        &String::from_str(&env, "rly00002"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -240,7 +240,7 @@ fn test_relay_slash_signal_requires_overturned_state() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "relay0003"),
+        &String::from_str(&env, "rly00003"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
@@ -287,7 +287,7 @@ fn test_relay_multiple_disputes_independent_signals() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "relay_multi_1"),
+        &String::from_str(&env, "rly00004"),
         &Platform::Lichess,
     );
     client.deposit(&match_id_1, &player1);
@@ -316,7 +316,7 @@ fn test_relay_multiple_disputes_independent_signals() {
         &player2,
         &200,
         &token,
-        &String::from_str(&env, "relay_multi_2"),
+        &String::from_str(&env, "rly00005"),
         &Platform::Lichess,
     );
     client.deposit(&match_id_2, &player1);
@@ -378,7 +378,7 @@ fn test_relay_signal_emitted_even_if_oracle_unregistered() {
         &player2,
         &100,
         &token,
-        &String::from_str(&env, "relay_unreg_oracle"),
+        &String::from_str(&env, "rly00006"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &player1);
