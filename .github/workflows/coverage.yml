@@ -94,12 +94,21 @@ jobs:
           script: |
             const coverage = '${{ steps.coverage.outputs.coverage_percent }}' || 'Unknown';
 
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `📊 **Code Coverage Report**\n\nLine Coverage: **${coverage}%**\n\nMinimum Required: **90%**\n\n[View detailed coverage report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`
-            });
+            try {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `📊 **Code Coverage Report**\n\nLine Coverage: **${coverage}%**\n\nMinimum Required: **90%**\n\n[View detailed coverage report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})`
+              });
+            } catch (error) {
+              // Fork PRs get a read-only GITHUB_TOKEN, so posting a comment is
+              // expected to fail with "Resource not accessible by integration".
+              // The coverage number is still surfaced via the job summary and
+              // the "Fail if coverage below threshold" step, so don't let a
+              // permissions error here fail the whole coverage job.
+              core.warning(`Could not comment on PR: ${error.message}`);
+            }
 
       - name: Fail if coverage below threshold
         if: steps.coverage.outputs.coverage_status == 'below_threshold'
