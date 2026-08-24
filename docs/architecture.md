@@ -62,6 +62,13 @@ sequenceDiagram
     Player2->>Escrow: deposit(match_id, player2)
     Escrow-->>Escrow: state = Active (both deposited)
 
+    loop Reconciliation (every ORACLE_RECONCILIATION_INTERVAL_SECS)
+        OracleSvc->>Escrow: get_active_matches_paginated(offset, limit)
+        Escrow-->>OracleSvc: Active matches
+        OracleSvc->>OracleContract: has_result(match_id)?
+        OracleContract-->>OracleSvc: false → enqueue match_id for verification
+    end
+
     OracleSvc->>Platform: Poll game result for game_id
     Platform-->>OracleSvc: Game outcome (winner)
     OracleSvc->>OracleContract: Record verified result
@@ -83,7 +90,7 @@ sequenceDiagram
     end
 ```
 
-- **Oracle Service** is the off-chain component (`oracle-service/`) that polls Lichess/Chess.com, then calls both the on-chain Oracle Contract (audit record) and the Escrow Contract's `submit_result`.
+- **Oracle Service** is the off-chain component (`oracle-service/`) that discovers `Active` matches missing a result via periodic reconciliation against the Escrow Contract, polls Lichess/Chess.com for each one, then calls both the on-chain Oracle Contract (audit record) and the Escrow Contract's `submit_result`.
 - The cancel/expire path is only reachable while the match is still `Pending` (before both players have deposited); once `Active`, the match can only resolve via `submit_result` and its downstream payout/dispute flow.
 
 ### State Machine Diagram
@@ -486,8 +493,10 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_approved_oracles` | `() -> Vec<Address>` | Returns the list of approved consensus oracles. |
 | `set_required_confirmations` | `(count: u32) -> Result<(), Error>` | Admin-only. Sets the number of oracle confirmations required for consensus (default 2). |
 | `get_required_confirmations` | `() -> u32` | Returns the currently required number of oracle confirmations (default 2). |
-| `submit_result_consensus` | `(match_id: u64, winner: Winner, oracle_address: Address) -> Result<(), Error>` | Any approved oracle votes on a match outcome; each oracle may vote once per match and all votes must agree (a conflicting vote returns `Error::ConflictingResult`). Once the required confirmation threshold is reached, payout executes automatically. |
+| `submit_result_consensus` | `(match_id: u64, winner: Winner, oracle_address: Address) -> Result<(), Error>` | Any approved oracle votes on a match outcome; each oracle may vote once per match and all votes must agree (a conflicting vote returns `Error::ConflictingResult`). Once the required confirmation threshold is reached, payout executes automatically. Because Soroban rolls back all storage writes made during a call that returns `Err`, a conflicting vote cannot itself persist any state — it is reported only via the returned error, and neither the confirmation count nor deadlock status change. If an *accepted* vote leaves the confirmation threshold mathematically unreachable given the remaining unvoted approved oracles, the match is flagged deadlocked (see `is_oracle_deadlocked`) and an `ora_dead` event is emitted. |
 | `get_oracle_confirmations` | `(match_id: u64) -> u32` | Returns the current confirmation count for a match. |
+| `is_oracle_deadlocked` | `(match_id: u64) -> bool` | Returns whether an accepted vote via `submit_result_consensus` has flagged this match as deadlocked — the required confirmation threshold can no longer be reached given the number of approved oracles yet to vote. Only reachable through an accepted vote (e.g. `required_confirmations` set higher than the approved oracle count); a conflicting vote's attempt to trigger this check is rolled back along with the rest of its state. |
+| `resolve_oracle_deadlock` | `(match_id: u64, winner: Winner) -> Result<(), Error>` | Admin-only. Resolves a match flagged by `is_oracle_deadlocked` by executing payout for the admin-chosen `winner`, bypassing further oracle consensus. Returns `Error::InvalidState` if the match is not `Active` or is not currently flagged deadlocked. Emits an `ora_adm` event. |
 
 #### Platform Statistics
 

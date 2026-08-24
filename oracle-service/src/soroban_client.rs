@@ -32,7 +32,19 @@ use stellar_xdr::{
 };
 use zeroize::Zeroizing;
 
+use crate::config::Platform;
 use crate::oracle::errors::OracleServiceError;
+
+/// A minimal projection of the escrow contract's `Match` struct, decoded from
+/// the return value of `get_active_matches_paginated`. Only the fields the
+/// reconciliation task needs to enqueue a match for verification are
+/// extracted; the rest of the on-chain `Match` record is ignored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActiveMatchSummary {
+    pub match_id: u64,
+    pub game_id: String,
+    pub platform: Platform,
+}
 
 /// A thin wrapper around the Soroban RPC endpoint.
 #[derive(Clone)]
@@ -133,6 +145,106 @@ impl SorobanClient {
         self.await_confirmation(&tx_hash).await?;
 
         Ok(tx_hash)
+    }
+
+    /// Fetch one page of `Active` matches from the escrow contract via
+    /// `get_active_matches_paginated`.
+    ///
+    /// `source_pubkey` is only used as the transaction's source account for
+    /// simulation — this is a read-only call, nothing is signed or submitted.
+    pub async fn get_active_matches_paginated(
+        &self,
+        offset: u32,
+        limit: u32,
+        source_pubkey: &[u8; 32],
+    ) -> Result<Vec<ActiveMatchSummary>, OracleServiceError> {
+        let args = vec![ScVal::U32(offset), ScVal::U32(limit)];
+        let result = self
+            .simulate_read_call(
+                &self.contract_escrow,
+                "get_active_matches_paginated",
+                args,
+                source_pubkey,
+            )
+            .await?;
+        decode_active_matches(&result)
+    }
+
+    /// Ask the oracle contract whether a result has already been recorded for
+    /// `match_id` via `has_result`.
+    pub async fn has_result(
+        &self,
+        contract_oracle_strkey: &str,
+        match_id: u64,
+        source_pubkey: &[u8; 32],
+    ) -> Result<bool, OracleServiceError> {
+        let contract_oracle = decode_contract_id(contract_oracle_strkey)?;
+        let args = vec![ScVal::U64(match_id)];
+        let result = self
+            .simulate_read_call(&contract_oracle, "has_result", args, source_pubkey)
+            .await?;
+        match result {
+            ScVal::Bool(b) => Ok(b),
+            other => Err(OracleServiceError::RpcError(format!(
+                "has_result: unexpected return value type: {:?}",
+                other
+            ))),
+        }
+    }
+
+    /// Simulate a read-only contract call and return its decoded ScVal
+    /// result. Never signs or submits anything on-chain.
+    async fn simulate_read_call(
+        &self,
+        contract_id: &[u8; 32],
+        function_name: &str,
+        args: Vec<ScVal>,
+        source_pubkey: &[u8; 32],
+    ) -> Result<ScVal, OracleServiceError> {
+        let g_address = pubkey_to_g_address(source_pubkey)?;
+        let sequence = self.get_account_sequence(&g_address).await?;
+
+        let contract_address = ScAddress::Contract(ContractId(Hash(*contract_id)));
+        let args_vecm: VecM<ScVal> = args
+            .try_into()
+            .map_err(|e| OracleServiceError::XdrError(format!("args vec: {:?}", e)))?;
+        let invoke_args = InvokeContractArgs {
+            contract_address,
+            function_name: ScSymbol(
+                function_name
+                    .try_into()
+                    .map_err(|e| OracleServiceError::XdrError(format!("fn name: {:?}", e)))?,
+            ),
+            args: args_vecm,
+        };
+        let op = Operation {
+            source_account: None,
+            body: OperationBody::InvokeHostFunction(InvokeHostFunctionOp {
+                host_function: stellar_xdr::HostFunction::InvokeContract(invoke_args),
+                auth: VecM::default(),
+            }),
+        };
+
+        let source = MuxedAccount::Ed25519(Uint256(*source_pubkey));
+        let tx = build_transaction(source, sequence + 1, op, 100)?;
+        let sim = self.simulate_transaction(&tx).await?;
+
+        let xdr_str = sim
+            .results
+            .as_array()
+            .and_then(|arr| arr.first())
+            .and_then(|r| r.get("xdr"))
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| {
+                OracleServiceError::RpcError(format!(
+                    "{}: missing return value in simulation results",
+                    function_name
+                ))
+            })?;
+
+        use stellar_xdr::ReadXdr;
+        ScVal::from_xdr_base64(xdr_str, Limits::none())
+            .map_err(|e| OracleServiceError::XdrError(format!("decode return value: {}", e)))
     }
 
     // ── RPC helpers ───────────────────────────────────────────────────────────
@@ -325,6 +437,101 @@ fn winner_to_sc_val(winner: &crate::oracle::Winner) -> ScVal {
     };
     // Enums on-chain are represented as ScVal::Symbol
     ScVal::Symbol(ScSymbol(sym.try_into().expect("short symbol")))
+}
+
+// ── Read-call return-value decoding ─────────────────────────────────────────
+//
+// `#[contracttype]` structs are encoded as `ScVal::Map(Some(ScMap))` with one
+// entry per field, keyed by a `Symbol` matching the Rust field name. Fieldless
+// enum variants (e.g. `Platform::Lichess`) are encoded as
+// `ScVal::Vec(Some(vec![ScVal::Symbol(variant_name)]))`. See
+// `soroban-sdk-macros`' `derive_struct`/`derive_enum` for the canonical
+// encoding this mirrors.
+
+/// Look up a field by name in a decoded struct `ScMap`.
+fn map_get<'a>(map: &'a [stellar_xdr::ScMapEntry], key: &str) -> Option<&'a ScVal> {
+    map.iter()
+        .find(|entry| matches!(&entry.key, ScVal::Symbol(s) if s.0.to_utf8_string().as_deref() == Ok(key)))
+        .map(|entry| &entry.val)
+}
+
+fn decode_platform(val: &ScVal) -> Result<Platform, OracleServiceError> {
+    let ScVal::Vec(Some(vec)) = val else {
+        return Err(OracleServiceError::XdrError(format!(
+            "platform: expected Vec-encoded enum, got {:?}",
+            val
+        )));
+    };
+    match vec.0.first() {
+        Some(ScVal::Symbol(sym)) => {
+            let name = sym.0.to_utf8_string().map_err(|e| {
+                OracleServiceError::XdrError(format!("platform: symbol decode: {}", e))
+            })?;
+            match name.as_str() {
+                "Lichess" => Ok(Platform::Lichess),
+                "ChessDotCom" => Ok(Platform::ChessDotCom),
+                other => Err(OracleServiceError::XdrError(format!(
+                    "platform: unknown variant '{}'",
+                    other
+                ))),
+            }
+        }
+        other => Err(OracleServiceError::XdrError(format!(
+            "platform: expected leading Symbol discriminant, got {:?}",
+            other
+        ))),
+    }
+}
+
+fn decode_match_summary(val: &ScVal) -> Result<ActiveMatchSummary, OracleServiceError> {
+    let ScVal::Map(Some(map)) = val else {
+        return Err(OracleServiceError::XdrError(format!(
+            "Match: expected Map-encoded struct, got {:?}",
+            val
+        )));
+    };
+
+    let match_id = match map_get(&map.0, "id") {
+        Some(ScVal::U64(id)) => *id,
+        other => {
+            return Err(OracleServiceError::XdrError(format!(
+                "Match.id: expected U64, got {:?}",
+                other
+            )))
+        }
+    };
+
+    let game_id = match map_get(&map.0, "game_id") {
+        Some(ScVal::String(s)) => s.0.to_utf8_string().map_err(|e| {
+            OracleServiceError::XdrError(format!("Match.game_id: string decode: {}", e))
+        })?,
+        other => {
+            return Err(OracleServiceError::XdrError(format!(
+                "Match.game_id: expected String, got {:?}",
+                other
+            )))
+        }
+    };
+
+    let platform_val = map_get(&map.0, "platform")
+        .ok_or_else(|| OracleServiceError::XdrError("Match.platform: field missing".to_string()))?;
+    let platform = decode_platform(platform_val)?;
+
+    Ok(ActiveMatchSummary {
+        match_id,
+        game_id,
+        platform,
+    })
+}
+
+fn decode_active_matches(val: &ScVal) -> Result<Vec<ActiveMatchSummary>, OracleServiceError> {
+    let ScVal::Vec(Some(vec)) = val else {
+        return Err(OracleServiceError::XdrError(format!(
+            "get_active_matches_paginated: expected Vec return value, got {:?}",
+            val
+        )));
+    };
+    vec.0.iter().map(decode_match_summary).collect()
 }
 
 fn decode_contract_id(strkey: &str) -> Result<[u8; 32], OracleServiceError> {
@@ -537,4 +744,100 @@ fn sign_transaction(
         tx,
         signatures,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stellar_xdr::{ScMap, ScMapEntry, ScString, ScVec};
+
+    /// Build a `ScVal` mirroring how `#[contracttype]` encodes a fieldless
+    /// enum variant: `Vec(Some([Symbol(variant_name)]))`.
+    fn enum_variant(name: &str) -> ScVal {
+        ScVal::Vec(Some(ScVec(
+            vec![ScVal::Symbol(ScSymbol(name.try_into().unwrap()))]
+                .try_into()
+                .unwrap(),
+        )))
+    }
+
+    /// Build a `ScVal` mirroring how `#[contracttype]` encodes a struct: a
+    /// `Map` keyed by field-name `Symbol`s. Only the fields the decoder reads
+    /// are included; a real on-chain `Match` has many more.
+    fn match_scval(id: u64, game_id: &str, platform_variant: &str) -> ScVal {
+        let entries = vec![
+            ScMapEntry {
+                key: ScVal::Symbol(ScSymbol("game_id".try_into().unwrap())),
+                val: ScVal::String(ScString(game_id.try_into().unwrap())),
+            },
+            ScMapEntry {
+                key: ScVal::Symbol(ScSymbol("id".try_into().unwrap())),
+                val: ScVal::U64(id),
+            },
+            ScMapEntry {
+                key: ScVal::Symbol(ScSymbol("platform".try_into().unwrap())),
+                val: enum_variant(platform_variant),
+            },
+        ];
+        ScVal::Map(Some(ScMap(entries.try_into().unwrap())))
+    }
+
+    #[test]
+    fn decode_active_matches_happy_path() {
+        let val = ScVal::Vec(Some(ScVec(
+            vec![
+                match_scval(1, "abcd1234", "Lichess"),
+                match_scval(2, "efgh5678", "ChessDotCom"),
+            ]
+            .try_into()
+            .unwrap(),
+        )));
+
+        let matches = decode_active_matches(&val).expect("decode should succeed");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].match_id, 1);
+        assert_eq!(matches[0].game_id, "abcd1234");
+        assert_eq!(matches[0].platform, Platform::Lichess);
+        assert_eq!(matches[1].match_id, 2);
+        assert_eq!(matches[1].game_id, "efgh5678");
+        assert_eq!(matches[1].platform, Platform::ChessDotCom);
+    }
+
+    #[test]
+    fn decode_active_matches_empty_vec() {
+        let val = ScVal::Vec(Some(ScVec(VecM::default())));
+        let matches = decode_active_matches(&val).expect("decode should succeed");
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn decode_active_matches_rejects_non_vec() {
+        let err = decode_active_matches(&ScVal::Bool(true)).unwrap_err();
+        assert!(matches!(err, OracleServiceError::XdrError(_)));
+    }
+
+    #[test]
+    fn decode_match_summary_rejects_missing_field() {
+        let entries = vec![
+            ScMapEntry {
+                key: ScVal::Symbol(ScSymbol("id".try_into().unwrap())),
+                val: ScVal::U64(1),
+            },
+            ScMapEntry {
+                key: ScVal::Symbol(ScSymbol("platform".try_into().unwrap())),
+                val: enum_variant("Lichess"),
+            },
+            // "game_id" deliberately omitted.
+        ];
+        let val = ScVal::Map(Some(ScMap(entries.try_into().unwrap())));
+        let err = decode_match_summary(&val).unwrap_err();
+        assert!(matches!(err, OracleServiceError::XdrError(_)));
+    }
+
+    #[test]
+    fn decode_match_summary_rejects_unknown_platform_variant() {
+        let val = match_scval(1, "abcd1234", "Xbox");
+        let err = decode_match_summary(&val).unwrap_err();
+        assert!(matches!(err, OracleServiceError::XdrError(_)));
+    }
 }
