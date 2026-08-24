@@ -896,26 +896,38 @@ fn test_get_contract_version_returns_semver_string() {
     }
 }
 
-// #1282 — oracle rotation must validate that proposal.old_oracle matches current oracle
+// #1282 — defense-in-depth: rotate_oracle_permanent must reject a pending
+// proposal whose old_oracle no longer matches the live oracle, even if
+// something other than update_oracle desynced the two (e.g. a future code
+// path or a storage migration). This cannot be reached through the public
+// API today since every writer of DataKey::Oracle also clears the pending
+// proposal, so the divergence is simulated directly via contract storage.
 #[test]
-fn test_rotate_oracle_permanent_rejects_stale_proposal() {
+fn test_rotate_oracle_permanent_rejects_when_current_oracle_desynced() {
     let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let next_oracle = Address::generate(&env);
-    let new_oracle_final = Address::generate(&env);
+    let desynced_oracle = Address::generate(&env);
 
-    // Admin proposes rotation: oracle -> next_oracle
+    // Admin proposes rotation: oracle -> next_oracle (pending.old_oracle == oracle)
     client.propose_oracle_rotation(&oracle, &next_oracle);
 
-    // Admin calls update_oracle directly, which should clear the pending proposal
-    client.update_oracle(&new_oracle_final);
+    // Simulate the live oracle diverging from the pending proposal without
+    // going through update_oracle (which would otherwise clear the pending
+    // proposal itself).
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::Oracle, &desynced_oracle);
+    });
 
-    // Now try to execute the stale proposal (oracle, next_oracle)
-    // This should fail because proposal.old_oracle (oracle) doesn't match current (new_oracle_final)
+    // Executing the now-stale proposal must fail because proposal.old_oracle
+    // (oracle) no longer matches the live oracle (desynced_oracle).
     let result = client.try_rotate_oracle_permanent(&oracle, &next_oracle);
-    assert!(
-        result.is_err(),
+    assert_eq!(
+        result,
+        Err(Ok(Error::Unauthorized)),
         "rotate_oracle_permanent must reject a proposal where old_oracle no longer matches the current oracle"
     );
 }
