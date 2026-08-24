@@ -45,8 +45,9 @@ use soroban_sdk::{
 };
 use types::{
     BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeState, FeeTier, Match,
-    MatchState, OracleRotationState, PendingOracleRotation, Platform, PlatformStats,
-    PlayerBalanceSnapshot, PlayerTier, ProtocolConfig, SnapshotReason, TempOracleRotation, Winner,
+    MatchState, OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform,
+    PlatformStats, PlayerBalanceSnapshot, PlayerTier, ProtocolConfig, SnapshotReason,
+    TempOracleRotation, Winner,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
