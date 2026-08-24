@@ -33,6 +33,43 @@ fn create_funded_active_match(
     id
 }
 
+/// Give `voter` a large escrowed stake by depositing into a dedicated match
+/// with a throwaway counterparty. Dispute-vote weight is sourced from
+/// escrowed stake (`player_escrow_balance`), not raw token balance, so this
+/// is how tests exercise vote weights beyond what the Bronze-tier stake
+/// ceiling would otherwise allow. Both sides of the match are fast-tracked
+/// to Platinum tier (unlimited stake cap) by writing `PlayerCompletedMatchCount`
+/// directly, mirroring the pattern in `security.rs`.
+fn give_voter_large_stake(
+    client: &EscrowContractClient,
+    env: &Env,
+    contract_id: &Address,
+    token: &Address,
+    voter: &Address,
+    stake: i128,
+    game_id: &str,
+) {
+    let counterparty = Address::generate(env);
+    env.as_contract(contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerCompletedMatchCount(voter.clone()), &10u32);
+        env.storage().persistent().set(
+            &DataKey::PlayerCompletedMatchCount(counterparty.clone()),
+            &10u32,
+        );
+    });
+    let match_id = client.create_match(
+        voter,
+        &counterparty,
+        &stake,
+        token,
+        &String::from_str(env, game_id),
+        &Platform::Lichess,
+    );
+    client.deposit(&match_id, voter);
+}
+
 #[allow(dead_code)]
 fn advance_ledger(env: &Env, ledgers: u32) {
     let current = env.ledger().sequence();
@@ -1106,25 +1143,36 @@ fn test_vote_weight_exceeding_u32_max_recorded_correctly() {
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = StellarAssetClient::new(&env, &token);
+    env.mock_all_auths();
 
-    // Create a player with balance exceeding u32::MAX (4,294,967,295)
+    // Give a voter an escrowed stake exceeding u32::MAX (4,294,967,295) via a
+    // dedicated match. Dispute-vote weight is sourced from escrowed stake,
+    // not raw token balance.
     let large_voter = Address::generate(&env);
     let large_balance: i128 = 5_000_000_000; // 5 billion, exceeds u32::MAX
     token_client.mint(&large_voter, &large_balance);
+    give_voter_large_stake(
+        &client,
+        &env,
+        &contract_id,
+        &token,
+        &large_voter,
+        large_balance,
+        "lrgstak1",
+    );
 
     // Create a small match with normal players
     let normal_player1 = Address::generate(&env);
     let normal_player2 = Address::generate(&env);
-    token_client.mint(&normal_player1, &100);
-    token_client.mint(&normal_player2, &100);
+    token_client.mint(&normal_player1, &1000);
+    token_client.mint(&normal_player2, &1000);
 
-    env.mock_all_auths();
     let match_id = client.create_match(
         &normal_player1,
         &normal_player2,
         &100,
         &token,
-        &String::from_str(&env, "large_voter_test"),
+        &String::from_str(&env, "bigvote1"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &normal_player1);
@@ -1133,17 +1181,22 @@ fn test_vote_weight_exceeding_u32_max_recorded_correctly() {
     env.ledger().set_sequence_number(1000);
     client.submit_result(&match_id, &Winner::Player1, &oracle);
 
-    let dispute_id =
-        client.dispute_oracle_result(&match_id, &normal_player2, &String::from_str(&env, "evidence"));
+    let dispute_id = client.dispute_oracle_result(
+        &match_id,
+        &normal_player2,
+        &String::from_str(&env, "evidence"),
+    );
 
-    // Record the voter's vote with large balance
-    // This should correctly record their full balance weight, not a truncated u32 value
+    // Record the voter's vote with large escrowed stake
+    // This should correctly record their full stake weight, not a truncated u32 value
     client.vote_on_dispute(&dispute_id, &large_voter, &true);
 
     let dispute = client.get_dispute(&dispute_id);
     // The vote weight should be the full large_balance, not a truncated version
-    assert_eq!(dispute.yes_votes, large_balance,
-        "vote weight should equal the full i128 balance, not truncated to u32");
+    assert_eq!(
+        dispute.yes_votes, large_balance,
+        "vote weight should equal the full i128 stake, not truncated to u32"
+    );
 }
 
 #[test]
@@ -1153,28 +1206,47 @@ fn test_two_voters_with_2_to_32_balance_difference_distinguished() {
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = StellarAssetClient::new(&env, &token);
 
+    env.mock_all_auths();
+
     let voter1 = Address::generate(&env);
     let voter2 = Address::generate(&env);
 
-    // Create balances that differ by exactly 2^32
+    // Create escrowed stakes that differ by exactly 2^32
     let base: i128 = 5_000_000_000; // 5 billion
     let u32_max: i128 = 4_294_967_296; // 2^32
 
     token_client.mint(&voter1, &base);
     token_client.mint(&voter2, &(base + u32_max));
+    give_voter_large_stake(
+        &client,
+        &env,
+        &contract_id,
+        &token,
+        &voter1,
+        base,
+        "difstak1",
+    );
+    give_voter_large_stake(
+        &client,
+        &env,
+        &contract_id,
+        &token,
+        &voter2,
+        base + u32_max,
+        "difstak2",
+    );
 
     let normal_player1 = Address::generate(&env);
     let normal_player2 = Address::generate(&env);
-    token_client.mint(&normal_player1, &100);
-    token_client.mint(&normal_player2, &100);
+    token_client.mint(&normal_player1, &1000);
+    token_client.mint(&normal_player2, &1000);
 
-    env.mock_all_auths();
     let match_id = client.create_match(
         &normal_player1,
         &normal_player2,
         &100,
         &token,
-        &String::from_str(&env, "diff_test"),
+        &String::from_str(&env, "diffvot1"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &normal_player1);
@@ -1183,17 +1255,22 @@ fn test_two_voters_with_2_to_32_balance_difference_distinguished() {
     env.ledger().set_sequence_number(1000);
     client.submit_result(&match_id, &Winner::Player1, &oracle);
 
-    let dispute_id =
-        client.dispute_oracle_result(&match_id, &normal_player2, &String::from_str(&env, "evidence"));
+    let dispute_id = client.dispute_oracle_result(
+        &match_id,
+        &normal_player2,
+        &String::from_str(&env, "evidence"),
+    );
 
     client.vote_on_dispute(&dispute_id, &voter1, &true);
     client.vote_on_dispute(&dispute_id, &voter2, &true);
 
     let dispute = client.get_dispute(&dispute_id);
-    // With the fix, both balances should be correctly added without truncation
+    // With the fix, both stakes should be correctly added without truncation
     let expected_total = base + (base + u32_max);
-    assert_eq!(dispute.yes_votes, expected_total,
-        "votes should sum to correct total without truncation artifacts");
+    assert_eq!(
+        dispute.yes_votes, expected_total,
+        "votes should sum to correct total without truncation artifacts"
+    );
 }
 
 #[test]
@@ -1202,6 +1279,8 @@ fn test_quorum_calculation_with_large_total_votes() {
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
     let token_client = StellarAssetClient::new(&env, &token);
+
+    env.mock_all_auths();
 
     // Set quorum to a percentage of large total weight
     client.set_quorum_basis_points(&5000); // 50%
@@ -1212,19 +1291,36 @@ fn test_quorum_calculation_with_large_total_votes() {
     let large_balance: i128 = 10_000_000_000; // 10 billion
     token_client.mint(&voter1, &large_balance);
     token_client.mint(&voter2, &large_balance);
+    give_voter_large_stake(
+        &client,
+        &env,
+        &contract_id,
+        &token,
+        &voter1,
+        large_balance,
+        "qorstak1",
+    );
+    give_voter_large_stake(
+        &client,
+        &env,
+        &contract_id,
+        &token,
+        &voter2,
+        large_balance,
+        "qorstak2",
+    );
 
     let normal_player1 = Address::generate(&env);
     let normal_player2 = Address::generate(&env);
-    token_client.mint(&normal_player1, &100);
-    token_client.mint(&normal_player2, &100);
+    token_client.mint(&normal_player1, &1000);
+    token_client.mint(&normal_player2, &1000);
 
-    env.mock_all_auths();
     let match_id = client.create_match(
         &normal_player1,
         &normal_player2,
         &100,
         &token,
-        &String::from_str(&env, "quorum_large_test"),
+        &String::from_str(&env, "qorumbig"),
         &Platform::Lichess,
     );
     client.deposit(&match_id, &normal_player1);
@@ -1233,8 +1329,11 @@ fn test_quorum_calculation_with_large_total_votes() {
     env.ledger().set_sequence_number(1000);
     client.submit_result(&match_id, &Winner::Player1, &oracle);
 
-    let dispute_id =
-        client.dispute_oracle_result(&match_id, &normal_player2, &String::from_str(&env, "evidence"));
+    let dispute_id = client.dispute_oracle_result(
+        &match_id,
+        &normal_player2,
+        &String::from_str(&env, "evidence"),
+    );
 
     // Both large voters vote yes
     client.vote_on_dispute(&dispute_id, &voter1, &true);
@@ -1256,7 +1355,7 @@ fn test_small_balances_unchanged_behavior() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let match_id =
-        create_funded_active_match(&client, &env, &player1, &player2, &token, "small_balance_test");
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "smallbal");
 
     env.ledger().set_sequence_number(1000);
     client.submit_result(&match_id, &Winner::Player1, &oracle);
@@ -1264,19 +1363,27 @@ fn test_small_balances_unchanged_behavior() {
     let dispute_id =
         client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "evidence"));
 
-    // Both players have 100 balance each (well under u32::MAX)
+    // Both players have a 100 stake each (well under u32::MAX)
     client.vote_on_dispute(&dispute_id, &player1, &true);
     client.vote_on_dispute(&dispute_id, &player2, &false);
 
     let dispute = client.get_dispute(&dispute_id);
-    assert_eq!(dispute.yes_votes, 100, "small balance vote should be recorded correctly");
-    assert_eq!(dispute.no_votes, 100, "small balance vote should be recorded correctly");
+    assert_eq!(
+        dispute.yes_votes, 100,
+        "small stake vote should be recorded correctly"
+    );
+    assert_eq!(
+        dispute.no_votes, 100,
+        "small stake vote should be recorded correctly"
+    );
 
     env.ledger()
         .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
 
-    // Verify resolution works correctly with small balances
+    // Verify resolution works correctly with small balances: a tied vote
+    // (100 yes vs 100 no) does not exceed the original result, so the
+    // dispute is upheld rather than overturned.
     client.resolve_dispute_by_vote(&dispute_id);
     let dispute_final = client.get_dispute(&dispute_id);
-    assert_eq!(dispute_final.state, DisputeState::ResolvedOverturned);
+    assert_eq!(dispute_final.state, DisputeState::ResolvedUpheld);
 }
