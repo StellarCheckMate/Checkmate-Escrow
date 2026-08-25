@@ -10,6 +10,7 @@ This document outlines the security considerations, trust assumptions, and risk 
 - [Re-initialization Protection](#re-initialization-protection)
 - [Pause Mechanism](#pause-mechanism)
 - [Cross-Contract Reentrancy Protection](#cross-contract-reentrancy-protection)
+- [Oracle Service HTTP Hardening](#oracle-service-http-hardening)
 - [Known Limitations](#known-limitations)
 - [Deployment Security](#deployment-security)
 - [Operational Security](#operational-security)
@@ -257,6 +258,24 @@ Key properties:
    state), a concurrent `deposit()` call for the same `match_id` is rejected
    with `Error::DepositInProgress`.
 2. After the guard is cleared, `deposit()` proceeds normally.
+
+## Oracle Service HTTP Hardening
+
+The oracle service's exposed HTTP endpoints (`/health`, `/api/docs`,
+`/api/openapi.yaml`) are protected by two `axum` middleware layers, attached
+in `oracle-service/src/main.rs` and implemented in
+`oracle-service/src/middleware/`:
+
+1. **WAF** — blocks request bursts over 20 req/s from one IP (`429`),
+   oversized bodies over 1 MiB (`413`), URIs over 2,048 characters (`400`),
+   and null bytes in the URI (`400`).
+2. **Rate limiter** — token-bucket limiting per IP (100 req/min) and per
+   `X-Api-Key` (1,000 req/min), returning `429` with standard
+   `X-RateLimit-*`/`Retry-After` headers.
+
+Both layers run on every request before it reaches a handler; see
+[docs/oracle.md § HTTP Layer Protections](oracle.md#http-layer-protections-waf--rate-limiting)
+for the layering order and full detail.
 
 ## Known Limitations
 

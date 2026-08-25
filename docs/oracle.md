@@ -27,6 +27,29 @@ health check now:
 
 ---
 
+## HTTP Layer Protections (WAF & Rate Limiting)
+
+Every request to the oracle service's exposed HTTP endpoints (`/health`, `/api/docs`,
+`/api/openapi.yaml`) passes through two `axum` middleware layers before reaching a
+handler, applied in `oracle-service/src/main.rs`:
+
+1. **WAF** (`oracle_service::middleware::waf`) — outermost layer, runs first:
+   - Burst rate limiting: more than 20 requests/second from one IP → `429`
+   - Oversized body: `Content-Length` over 1 MiB → `413`
+   - Long URI: request URI over 2,048 characters → `400`
+   - Null byte in URI → `400`
+2. **Rate limiter** (`oracle_service::middleware::rate_limit`) — token-bucket
+   limiting per IP (100 req/min) and per `X-Api-Key` (1,000 req/min), returning
+   `429` with `X-RateLimit-*`/`Retry-After` headers when a bucket is exhausted.
+
+This is distinct from the on-chain [Oracle Submission Rate
+Limiting](#oracle-submission-rate-limiting) (which throttles `submit_result`
+calls) and from the client-side platform rate limiters described in [Chess.com
+API Rate Limits](#chesscom-api-rate-limits-timeouts-and-offline-fallback) —
+this section covers protection of the oracle service's own HTTP surface.
+
+---
+
 ## Oracle Contract Role
 
 The escrow contract uses its configured oracle address as the authoritative
