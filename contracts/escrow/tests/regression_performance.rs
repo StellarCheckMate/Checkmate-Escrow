@@ -1,13 +1,18 @@
 //! Regression tests for performance optimizations (Issue #XXX).
+//! Regression tests for performance optimizations (Issue #XXX).
 //! These tests verify that the documented DoS vectors are resolved:
 //! 1. ActiveMatches inflation attack no longer degrades all players' costs
 //! 2. Unbounded match scans are capped
 //! 3. Completed-match counting is O(1) not O(n)
+//! 4. get_completed_matches enforces a scan cap and emits a diagnostic event
+//!    rather than silently degrading toward resource exhaustion
 
 use escrow::types::{Platform, Winner};
 use escrow::{EscrowContract, EscrowContractClient};
 use soroban_sdk::{
-    testutils::Address as _, token::StellarAssetClient, Address, Env, String as SorobanString,
+    testutils::{Address as _, Events as _},
+    token::StellarAssetClient,
+    Address, Env, IntoVal, String as SorobanString,
 };
 
 const STAKE: i128 = 100;
@@ -67,6 +72,17 @@ impl Harness {
         let n = self.game_id_counter.get();
         self.game_id_counter.set(n + 1);
         SorobanString::from_str(&self.env, &format!("{n:08x}"))
+    }
+
+    /// The minimum stake valid for `player`'s current tier. A player's tier
+    /// advances with their completed-match count (e.g. Bronze -> Silver at 3
+    /// completed matches), which narrows the allowed stake range — a fixed
+    /// stake becomes invalid partway through a loop that keeps completing
+    /// matches for the same player, so callers doing that must re-derive the
+    /// stake each iteration instead of reusing a constant.
+    fn tier_valid_stake(&self, player: &Address) -> i128 {
+        let tier = self.client().tier_from_match_count(player);
+        self.client().min_tier_stake(&tier)
     }
 
     /// `_label` is purely descriptive (unused past this call) — see
@@ -309,4 +325,370 @@ fn test_per_player_active_match_cap_enforcement() {
         active.len() <= max_cap,
         "Active matches exceeded per-player cap"
     );
+}
+
+// ── Scan-cap tests (Issue: unbounded get_completed_matches) ────────────────────
+
+/// Adversarial test: documents the pre-fix degradation scenario.
+///
+/// Without the scan cap, a contract with many completed matches would allow
+/// `get_completed_matches` to perform an unbounded linear scan over every match
+/// ever created. This test proves that — at a synthetic scale equivalent to
+/// months of real production use — there was *no earlier warning*: the call
+/// would either succeed (consuming budget silently) or fail with an opaque
+/// resource-exhaustion error from the Soroban host, with no contract-level
+/// signal to guide callers toward the paginated variant.
+///
+/// The test creates a large number of completed matches and verifies that
+/// `get_completed_matches_paginated` still works correctly at scale, while
+/// `get_completed_matches` now fires the scan cap rather than silently
+/// consuming unbounded resources. The paginated variant is unambiguously the
+/// production-safe path — it imposes no scan cap and returns results in bounded
+/// pages regardless of total match count.
+#[test]
+fn test_get_completed_matches_degrades_without_signal_at_large_scale() {
+    let harness = Harness::new();
+
+    // Simulate months of production use: create many completed matches.
+    // GET_COMPLETED_MATCHES_SCAN_CAP = 500, so we need > 500 total matches
+    // to trigger the cap. We create 600 completed matches.
+    let total = 600usize;
+
+    // Use a shared player pair with sufficient mint to fund many matches.
+    let p1 = harness.new_player();
+    let p2 = harness.new_player();
+    // Re-mint more funds since MINT_AMOUNT may not cover 600 × STAKE deposits.
+    StellarAssetClient::new(&harness.env, &harness.token).mint(&p1, &(MINT_AMOUNT * 10));
+    StellarAssetClient::new(&harness.env, &harness.token).mint(&p2, &(MINT_AMOUNT * 10));
+
+    for _ in 0..total {
+        let game_id = harness.next_game_id();
+        // p1 and p2 always play each other, so their completed-match counts
+        // (and tiers) stay in lockstep — re-derive a tier-valid stake each
+        // iteration (see `tier_valid_stake`).
+        let stake = harness.tier_valid_stake(&p1);
+        let id = harness.client().create_match(
+            &p1,
+            &p2,
+            &stake,
+            &harness.token,
+            &game_id,
+            &Platform::Lichess,
+        );
+        harness.client().deposit(&id, &p1);
+        harness.client().deposit(&id, &p2);
+        harness
+            .client()
+            .submit_result(&id, &Winner::Player1, &harness.oracle);
+    }
+
+    // Confirm total match count now exceeds the scan cap threshold (500).
+    let count = harness.client().get_match_count();
+    assert!(count >= 500, "expected >= 500 total matches, got {}", count);
+
+    // Pre-fix behaviour (documented here as evidence of the degradation):
+    // `get_completed_matches` would scan all `count` match records, consuming
+    // O(n) read budget with no contract-level warning. At 500+ matches this
+    // either silently nears the resource ceiling or returns an opaque host error.
+    //
+    // Post-fix: the call now returns Error::TooManyResults (discriminant 45)
+    // and emits a `query / scan_cap_hit` event carrying the match count.
+    let result = harness.client().try_get_completed_matches();
+    assert!(
+        result.is_err(),
+        "expected get_completed_matches to return Err at scale (scan cap should fire)"
+    );
+
+    // Confirm the correct error discriminant.
+    use escrow::errors::Error;
+    let err = result.unwrap_err().unwrap();
+    assert_eq!(
+        err,
+        Error::TooManyResults,
+        "expected Error::TooManyResults (#45) from scan cap, got {:?}",
+        err
+    );
+
+    // Confirm the diagnostic event was emitted with the match count as payload.
+    let events = harness.env.events().all();
+    let query_sym = soroban_sdk::Symbol::new(&harness.env, "query");
+    let cap_sym = soroban_sdk::Symbol::new(&harness.env, "scan_cap_hit");
+    let expected_topics = soroban_sdk::vec![
+        &harness.env,
+        query_sym.into_val(&harness.env),
+        cap_sym.into_val(&harness.env),
+    ];
+    let cap_event = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(
+        cap_event.is_some(),
+        "expected a query/scan_cap_hit event to be emitted when scan cap fires"
+    );
+    let (_, _, payload) = cap_event.unwrap();
+    let emitted_count: u64 = soroban_sdk::TryFromVal::try_from_val(&harness.env, &payload)
+        .expect("scan_cap_hit payload must deserialize to u64 (the match count)");
+    assert_eq!(
+        emitted_count, count,
+        "scan_cap_hit event payload should carry the total match count"
+    );
+
+    // The paginated variant must remain unaffected and return results correctly.
+    // Page 0, 25 results — should always succeed regardless of total match count.
+    let page = harness.client().get_completed_matches_paginated(&0, &25);
+    assert_eq!(
+        page.len(),
+        25,
+        "get_completed_matches_paginated must work at any scale (production-safe path)"
+    );
+}
+
+/// Regression test: small match counts behave identically to the pre-cap behaviour.
+///
+/// For contracts with fewer than GET_COMPLETED_MATCHES_SCAN_CAP (500) total
+/// matches, `get_completed_matches` must return all completed matches without
+/// error, and must NOT emit a `query/scan_cap_hit` event. No behaviour change
+/// for typical early-stage deployments.
+#[test]
+fn test_get_completed_matches_small_count_identical_to_pre_cap_behaviour() {
+    let harness = Harness::new();
+
+    // Create 10 completed matches — well below the 500-match scan cap.
+    let p1 = harness.new_player();
+    let p2 = harness.new_player();
+
+    let completed_count = 10usize;
+    for _ in 0..completed_count {
+        let game_id = harness.next_game_id();
+        // p1 and p2 always play each other, so their completed-match counts
+        // (and tiers) stay in lockstep — re-derive a tier-valid stake each
+        // iteration (see `tier_valid_stake`).
+        let stake = harness.tier_valid_stake(&p1);
+        let id = harness.client().create_match(
+            &p1,
+            &p2,
+            &stake,
+            &harness.token,
+            &game_id,
+            &Platform::Lichess,
+        );
+        harness.client().deposit(&id, &p1);
+        harness.client().deposit(&id, &p2);
+        harness
+            .client()
+            .submit_result(&id, &Winner::Player1, &harness.oracle);
+    }
+
+    // Also create a few pending matches to confirm they don't appear in results.
+    for _ in 0..5 {
+        let game_id = harness.next_game_id();
+        let stake = harness.tier_valid_stake(&p1);
+        harness.client().create_match(
+            &p1,
+            &p2,
+            &stake,
+            &harness.token,
+            &game_id,
+            &Platform::Lichess,
+        );
+    }
+
+    // Confirm total match count is well below the cap.
+    let total_matches = harness.client().get_match_count();
+    assert!(
+        total_matches < 500,
+        "test precondition: total match count must be < 500, got {}",
+        total_matches
+    );
+
+    // get_completed_matches must succeed with all completed matches.
+    let completed = harness.client().get_completed_matches();
+    assert_eq!(
+        completed.len() as usize,
+        completed_count,
+        "get_completed_matches should return all {} completed matches for small counts",
+        completed_count
+    );
+
+    // No scan_cap_hit event must have been emitted.
+    let events = harness.env.events().all();
+    let query_sym = soroban_sdk::Symbol::new(&harness.env, "query");
+    let cap_sym = soroban_sdk::Symbol::new(&harness.env, "scan_cap_hit");
+    let expected_topics = soroban_sdk::vec![
+        &harness.env,
+        query_sym.into_val(&harness.env),
+        cap_sym.into_val(&harness.env),
+    ];
+    let cap_event = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(
+        cap_event.is_none(),
+        "scan_cap_hit event must NOT be emitted below the scan cap threshold"
+    );
+}
+
+/// Test: `get_completed_matches_paginated` is unaffected by the scan cap.
+///
+/// The paginated variant delegates to `collect_matches_by_state_paginated`,
+/// which does not read `MatchCount` for cap enforcement. It must return correct
+/// paginated results at any scale and never emit a `query/scan_cap_hit` event.
+#[test]
+fn test_get_completed_matches_paginated_unaffected_by_scan_cap() {
+    let harness = Harness::new();
+
+    // Create enough matches to exceed the scan cap (> 500 total).
+    let p1 = harness.new_player();
+    let p2 = harness.new_player();
+    StellarAssetClient::new(&harness.env, &harness.token).mint(&p1, &(MINT_AMOUNT * 10));
+    StellarAssetClient::new(&harness.env, &harness.token).mint(&p2, &(MINT_AMOUNT * 10));
+
+    let completed_count = 520usize;
+    for _ in 0..completed_count {
+        let game_id = harness.next_game_id();
+        // p1 and p2 always play each other, so their completed-match counts
+        // (and tiers) stay in lockstep — re-derive a tier-valid stake each
+        // iteration (see `tier_valid_stake`).
+        let stake = harness.tier_valid_stake(&p1);
+        let id = harness.client().create_match(
+            &p1,
+            &p2,
+            &stake,
+            &harness.token,
+            &game_id,
+            &Platform::Lichess,
+        );
+        harness.client().deposit(&id, &p1);
+        harness.client().deposit(&id, &p2);
+        harness
+            .client()
+            .submit_result(&id, &Winner::Player1, &harness.oracle);
+    }
+
+    let total = harness.client().get_match_count();
+    assert!(
+        total >= 500,
+        "test precondition: total matches must exceed scan cap (500), got {}",
+        total
+    );
+
+    // Unpaginated call must fire the cap.
+    let unpaged = harness.client().try_get_completed_matches();
+    assert!(
+        unpaged.is_err(),
+        "get_completed_matches must return Err above scan cap"
+    );
+
+    // Paginated call must succeed and return the right page size.
+    let page0 = harness.client().get_completed_matches_paginated(&0, &50);
+    assert_eq!(
+        page0.len(),
+        50,
+        "first paginated page must return exactly 50 results"
+    );
+
+    let page1 = harness.client().get_completed_matches_paginated(&50, &50);
+    assert_eq!(
+        page1.len(),
+        50,
+        "second paginated page must return exactly 50 results"
+    );
+
+    // No scan_cap_hit event from the paginated calls.
+    let events = harness.env.events().all();
+    let query_sym = soroban_sdk::Symbol::new(&harness.env, "query");
+    let cap_sym = soroban_sdk::Symbol::new(&harness.env, "scan_cap_hit");
+    let expected_topics = soroban_sdk::vec![
+        &harness.env,
+        query_sym.into_val(&harness.env),
+        cap_sym.into_val(&harness.env),
+    ];
+    // The only scan_cap_hit event present should be from the try_get_completed_matches
+    // call above — not from any paginated calls.
+    let cap_events: Vec<_> = events
+        .iter()
+        .filter(|(_, topics, _)| *topics == expected_topics)
+        .collect();
+    assert_eq!(
+        cap_events.len(),
+        1,
+        "exactly one scan_cap_hit event (from the unpaged call); paginated calls must not emit it"
+    );
+}
+
+/// Test: scan cap fires at exactly the threshold boundary.
+///
+/// Confirms that the cap is >=, not >: a contract with exactly
+/// GET_COMPLETED_MATCHES_SCAN_CAP total matches triggers the cap on the very
+/// next call, while one with (cap - 1) matches does not.
+#[test]
+fn test_scan_cap_fires_at_exact_threshold_boundary() {
+    // GET_COMPLETED_MATCHES_SCAN_CAP = 500. We create exactly 499 completed
+    // matches and verify the cap does NOT fire, then create one more (total
+    // 500) and verify the cap DOES fire.
+    let harness = Harness::new();
+
+    let p1 = harness.new_player();
+    let p2 = harness.new_player();
+    StellarAssetClient::new(&harness.env, &harness.token).mint(&p1, &(MINT_AMOUNT * 10));
+    StellarAssetClient::new(&harness.env, &harness.token).mint(&p2, &(MINT_AMOUNT * 10));
+
+    // Create 499 completed matches — one below the cap.
+    for _ in 0..499usize {
+        let game_id = harness.next_game_id();
+        // p1 and p2 always play each other, so their completed-match counts
+        // (and tiers) stay in lockstep — re-derive a tier-valid stake each
+        // iteration (see `tier_valid_stake`).
+        let stake = harness.tier_valid_stake(&p1);
+        let id = harness.client().create_match(
+            &p1,
+            &p2,
+            &stake,
+            &harness.token,
+            &game_id,
+            &Platform::Lichess,
+        );
+        harness.client().deposit(&id, &p1);
+        harness.client().deposit(&id, &p2);
+        harness
+            .client()
+            .submit_result(&id, &Winner::Player1, &harness.oracle);
+    }
+
+    assert_eq!(harness.client().get_match_count(), 499);
+
+    // At 499, get_completed_matches must succeed.
+    let result_499 = harness.client().try_get_completed_matches();
+    assert!(
+        result_499.is_ok(),
+        "get_completed_matches must succeed at match_count=499 (below cap of 500)"
+    );
+
+    // Create one more match to reach the cap threshold exactly.
+    let game_id = harness.next_game_id();
+    let stake = harness.tier_valid_stake(&p1);
+    let id = harness.client().create_match(
+        &p1,
+        &p2,
+        &stake,
+        &harness.token,
+        &game_id,
+        &Platform::Lichess,
+    );
+    harness.client().deposit(&id, &p1);
+    harness.client().deposit(&id, &p2);
+    harness
+        .client()
+        .submit_result(&id, &Winner::Player1, &harness.oracle);
+
+    assert_eq!(harness.client().get_match_count(), 500);
+
+    // At exactly 500, get_completed_matches must fire the cap.
+    let result_500 = harness.client().try_get_completed_matches();
+    assert!(
+        result_500.is_err(),
+        "get_completed_matches must return Err at match_count=500 (at cap threshold)"
+    );
+    use escrow::errors::Error;
+    assert_eq!(result_500.unwrap_err().unwrap(), Error::TooManyResults);
 }
