@@ -12,7 +12,7 @@ use escrow::{EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Events as _},
     token::StellarAssetClient,
-    Address, Env, IntoVal, String as SorobanString, TryFromVal,
+    Address, Env, IntoVal, String as SorobanString,
 };
 
 const STAKE: i128 = 100;
