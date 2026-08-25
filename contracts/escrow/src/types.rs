@@ -39,6 +39,13 @@ pub enum PlayerTier {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingAdminProposal {
+    pub proposer: Address,
+    pub pending_admin: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProtocolConfig {
     pub vesting_duration_seconds: u64,
     pub cancellation_fee_basis_points: u32,

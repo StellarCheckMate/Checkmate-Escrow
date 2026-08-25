@@ -45,8 +45,9 @@ use soroban_sdk::{
 };
 use types::{
     BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeState, FeeTier, Match,
-    MatchState, OracleRotationState, PendingOracleRotation, Platform, PlatformStats,
-    PlayerBalanceSnapshot, PlayerTier, ProtocolConfig, SnapshotReason, TempOracleRotation, Winner,
+    MatchState, OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform,
+    PlatformStats, PlayerBalanceSnapshot, PlayerTier, ProtocolConfig, SnapshotReason,
+    TempOracleRotation, Winner,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -2883,9 +2884,13 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        env.storage()
-            .instance()
-            .set(&DataKey::PendingAdmin, &new_admin);
+        env.storage().instance().set(
+            &DataKey::PendingAdmin,
+            &PendingAdminProposal {
+                proposer: admin,
+                pending_admin: new_admin.clone(),
+            },
+        );
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("propose")),
             new_admin,
@@ -2895,20 +2900,29 @@ impl EscrowContract {
 
     /// Accept pending admin proposal. Pending admin only. Finalizes the transfer.
     pub fn accept_admin(env: Env) -> Result<(), Error> {
-        let pending_admin: Address = env
+        let proposal: PendingAdminProposal = env
             .storage()
             .instance()
             .get(&DataKey::PendingAdmin)
             .ok_or(Error::Unauthorized)?;
-        pending_admin.require_auth();
+        proposal.pending_admin.require_auth();
+
+        let current_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        if current_admin != proposal.proposer {
+            return Err(Error::Unauthorized);
+        }
 
         env.storage()
             .instance()
-            .set(&DataKey::Admin, &pending_admin);
+            .set(&DataKey::Admin, &proposal.pending_admin);
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("xfer")),
-            pending_admin,
+            proposal.pending_admin,
         );
         Ok(())
     }
@@ -4707,6 +4721,7 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("xfer")),
             (admin, new_admin),
