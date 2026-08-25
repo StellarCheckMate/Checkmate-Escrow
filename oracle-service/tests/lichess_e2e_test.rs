@@ -54,6 +54,7 @@ fn make_config(soroban_rpc_url: &str, queue_dir: &str) -> OracleConfig {
         max_retries: 3,
         retry_base_delay_secs: 1,
         queue_dir: queue_dir.to_string(),
+        reconciliation_interval_secs: 1,
     }
 }
 

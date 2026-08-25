@@ -54,6 +54,7 @@ fn make_config(
         max_retries,
         retry_base_delay_secs,
         queue_dir: queue_dir.to_string(),
+        reconciliation_interval_secs: 1,
     }
 }
 

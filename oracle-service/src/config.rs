@@ -89,6 +89,9 @@ pub struct OracleConfig {
     pub retry_base_delay_secs: u64,
     /// Directory where the pending queue and dead-letter files are stored.
     pub queue_dir: String,
+    /// How often (seconds) the reconciliation task re-scans the escrow
+    /// contract's active matches for ones missing a result and enqueues them.
+    pub reconciliation_interval_secs: u64,
 }
 
 impl fmt::Debug for OracleConfig {
@@ -112,6 +115,10 @@ impl fmt::Debug for OracleConfig {
             .field("max_retries", &self.max_retries)
             .field("retry_base_delay_secs", &self.retry_base_delay_secs)
             .field("queue_dir", &self.queue_dir)
+            .field(
+                "reconciliation_interval_secs",
+                &self.reconciliation_interval_secs,
+            )
             .finish()
     }
 }
@@ -142,6 +149,7 @@ pub enum ConfigError {
 /// - `ORACLE_MAX_RETRIES` (default: 5)
 /// - `ORACLE_RETRY_BASE_DELAY_SECS` (default: 10)
 /// - `ORACLE_QUEUE_DIR` (default: `./oracle-queue`)
+/// - `ORACLE_RECONCILIATION_INTERVAL_SECS` (default: 60)
 pub fn load() -> Result<OracleConfig, ConfigError> {
     let rpc_url = require_env("STELLAR_RPC_URL")?;
 
@@ -195,6 +203,7 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
     let retry_base_delay_secs = parse_u64_env("ORACLE_RETRY_BASE_DELAY_SECS", 10)?;
     let queue_dir =
         std::env::var("ORACLE_QUEUE_DIR").unwrap_or_else(|_| "./oracle-queue".to_string());
+    let reconciliation_interval_secs = parse_u64_env("ORACLE_RECONCILIATION_INTERVAL_SECS", 60)?;
 
     Ok(OracleConfig {
         rpc_url,
@@ -209,6 +218,7 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
         max_retries,
         retry_base_delay_secs,
         queue_dir,
+        reconciliation_interval_secs,
     })
 }
 

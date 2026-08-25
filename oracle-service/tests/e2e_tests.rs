@@ -118,6 +118,7 @@ impl E2EConfig {
             max_retries: 3,
             retry_base_delay_secs: 2,
             queue_dir,
+            reconciliation_interval_secs: 5,
         }
     }
 }
