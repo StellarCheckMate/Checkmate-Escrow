@@ -89,6 +89,14 @@ pub const VOTING_PERIOD_LEDGERS: u32 = 17_280;
 /// back a stake after claiming the opponent disconnected. 24 hours.
 pub const ROLLBACK_WINDOW_SECONDS: u64 = 24 * 60 * 60; // 86_400
 
+/// Time window (in seconds, since `last_heartbeat`) after which an admin
+/// may invoke `admin_resolve_stalled_match` to recover funds from an Active
+/// match that has received no oracle result. Set to 7 days (longer than the
+/// player-initiated 24h rollback window) to give the oracle ample time to
+/// recover from transient outages without admin intervention, while still
+/// providing a bounded recovery path so funds are never permanently locked.
+pub const ADMIN_STALL_WINDOW_SECONDS: u64 = 7 * 24 * 60 * 60; // 604_800
+
 /// Maximum allowed byte length for a `dispute_and_rollback_match` reason.
 const MAX_REASON_LEN: u32 = 256;
 
@@ -2331,6 +2339,186 @@ impl EscrowContract {
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("heartbeat")),
             (match_id, player, now),
+        );
+
+        Ok(())
+    }
+
+    /// Admin-only recovery for Active matches stalled for >7 days with no result.
+    ///
+    /// **Purpose**: Provide a bounded recovery path for matches stuck in `Active`
+    /// state after the 24-hour player-initiated rollback window has elapsed and
+    /// the oracle has failed to submit a result. Without this function, funds
+    /// would be permanently locked if the oracle service went down or lost its
+    /// signing key.
+    ///
+    /// **Rules**:
+    /// - `caller` must be the configured admin and provide `require_auth`.
+    /// - Match must be in `MatchState::Active` (neither `Pending`, nor already
+    ///   `Completed`/`Cancelled`).
+    /// - Both players must have deposited (the match is truly funded and stuck,
+    ///   not just a half-funded `Pending` that should use `expire_match`).
+    /// - Time since `last_heartbeat` must exceed `ADMIN_STALL_WINDOW_SECONDS`
+    ///   (7 days) — long enough not to compete with the 24-hour player window,
+    ///   but bounded so funds are never truly stuck forever.
+    /// - `resolution` dictates the outcome: `Winner::Player1`, `Winner::Player2`,
+    ///   or `Winner::Draw` (for full refund). `Winner::None` is rejected.
+    /// - On refund (`Winner::Draw`), no cancellation fee is applied — this is
+    ///   a player-friendly escape hatch for a stalled contract, not a penalty.
+    /// - Emits `("match", "admin_stall_resolution")` with `(match_id, resolution)`
+    ///   to distinguish this operator-initiated path from normal oracle settlement.
+    ///
+    /// **Note**: This function intentionally does NOT consult the contract-wide
+    /// `Paused` flag, mirroring the design of `dispute_and_rollback_match` — the
+    /// pause gates new operations (create, deposit, submit), not recovery paths
+    /// that exist to return funds to players.
+    pub fn admin_resolve_stalled_match(
+        env: Env,
+        match_id: u64,
+        caller: Address,
+        resolution: Winner,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        // Admin-only access.
+        caller.require_auth();
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        if caller != admin {
+            return Err(Error::Unauthorized);
+        }
+
+        // Reject Winner::None — admin must pick a concrete resolution.
+        if resolution == Winner::None {
+            return Err(Error::InvalidAmount);
+        }
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        // Only Active matches may be admin-resolved. Pending matches should
+        // use `expire_match`; Completed/Cancelled are terminal; PendingResult
+        // has the normal dispute path; Paused can be resumed or expired.
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
+        }
+
+        // Require both deposits — this is the "truly stuck, funds locked"
+        // scenario the issue describes. A half-funded match can already be
+        // handled by `expire_match` after the timeout elapses.
+        if !m.player1_deposited || !m.player2_deposited {
+            return Err(Error::NotFunded);
+        }
+
+        // Enforce the 7-day stall threshold. Reject admin intervention if
+        // the match has shown recent activity (heartbeat) within that window.
+        let now: u64 = env.ledger().timestamp();
+        let since_heartbeat: u64 = now.saturating_sub(m.last_heartbeat);
+        if since_heartbeat <= ADMIN_STALL_WINDOW_SECONDS {
+            return Err(Error::MatchNotExpired);
+        }
+
+        // Drop the active-match index for both players before mutating state.
+        Self::remove_active_match_indexed(&env, &m.player1, match_id);
+        Self::remove_active_match_indexed(&env, &m.player2, match_id);
+
+        // Execute the resolution.
+        let is_multi_token = m.token_b.is_some() && m.conversion_rate.is_some_and(|r| r > 0);
+
+        match resolution {
+            Winner::Player1 => {
+                // Full pot to player1.
+                let total_pot = if is_multi_token {
+                    let p2_amount = m
+                        .stake_amount
+                        .checked_mul(m.conversion_rate.unwrap_or(0))
+                        .ok_or(Error::Overflow)?
+                        .checked_div(10_000_000)
+                        .ok_or(Error::Overflow)?;
+                    m.stake_amount
+                        .checked_add(p2_amount)
+                        .ok_or(Error::Overflow)?
+                } else {
+                    m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?
+                };
+                let client_a = token::Client::new(&env, &m.token);
+                client_a.transfer(&env.current_contract_address(), &m.player1, &total_pot);
+            }
+            Winner::Player2 => {
+                // Full pot to player2.
+                let token_b = m.token_b.clone().unwrap_or_else(|| m.token.clone());
+                let total_pot = if is_multi_token {
+                    let p2_stake = m
+                        .stake_amount
+                        .checked_mul(m.conversion_rate.unwrap_or(0))
+                        .ok_or(Error::Overflow)?
+                        .checked_div(10_000_000)
+                        .ok_or(Error::Overflow)?;
+                    m.stake_amount
+                        .checked_add(p2_stake)
+                        .ok_or(Error::Overflow)?
+                } else {
+                    m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?
+                };
+                let client_b = token::Client::new(&env, &token_b);
+                client_b.transfer(&env.current_contract_address(), &m.player2, &total_pot);
+            }
+            Winner::Draw => {
+                // Refund both players (no cancellation fee).
+                let client_a = token::Client::new(&env, &m.token);
+                client_a.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
+
+                let token_b = m.token_b.clone().unwrap_or_else(|| m.token.clone());
+                let amount_b = if is_multi_token {
+                    m.stake_amount
+                        .checked_mul(m.conversion_rate.unwrap_or(0))
+                        .ok_or(Error::Overflow)?
+                        .checked_div(10_000_000)
+                        .ok_or(Error::Overflow)?
+                } else {
+                    m.stake_amount
+                };
+                let client_b = token::Client::new(&env, &token_b);
+                client_b.transfer(&env.current_contract_address(), &m.player2, &amount_b);
+            }
+            Winner::None => {
+                // Already rejected above, but match exhaustiveness.
+                return Err(Error::InvalidAmount);
+            }
+        }
+
+        // Finalize the match as Completed and stamp the completion ledger.
+        m.state = MatchState::Completed;
+        m.winner = resolution.clone();
+        m.completed_ledger = Some(env.ledger().sequence());
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Completed);
+        Self::record_player_snapshot(&env, &m.player1);
+        Self::record_player_snapshot(&env, &m.player2);
+
+        // Record as a completed match if not a draw (for tier progression).
+        if resolution != Winner::Draw {
+            Self::record_completed_match(&env, &m.player1);
+            Self::record_completed_match(&env, &m.player2);
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("adm_stall")),
+            (match_id, resolution),
         );
 
         Ok(())
