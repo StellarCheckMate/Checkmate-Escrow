@@ -369,11 +369,7 @@ fn test_get_completed_matches_degrades_without_signal_at_large_scale() {
 
     // Confirm total match count now exceeds the scan cap threshold (500).
     let count = harness.client().get_match_count();
-    assert!(
-        count >= 500,
-        "expected >= 500 total matches, got {}",
-        count
-    );
+    assert!(count >= 500, "expected >= 500 total matches, got {}", count);
 
     // Pre-fix behaviour (documented here as evidence of the degradation):
     // `get_completed_matches` would scan all `count` match records, consuming
