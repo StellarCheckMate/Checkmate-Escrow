@@ -74,6 +74,17 @@ impl Harness {
         SorobanString::from_str(&self.env, &format!("{n:08x}"))
     }
 
+    /// The minimum stake valid for `player`'s current tier. A player's tier
+    /// advances with their completed-match count (e.g. Bronze -> Silver at 3
+    /// completed matches), which narrows the allowed stake range — a fixed
+    /// stake becomes invalid partway through a loop that keeps completing
+    /// matches for the same player, so callers doing that must re-derive the
+    /// stake each iteration instead of reusing a constant.
+    fn tier_valid_stake(&self, player: &Address) -> i128 {
+        let tier = self.client().tier_from_match_count(player);
+        self.client().min_tier_stake(&tier)
+    }
+
     /// `_label` is purely descriptive (unused past this call) — see
     /// `next_game_id`.
     fn new_match(&self, _label: &str) -> (u64, Address, Address) {
@@ -352,10 +363,14 @@ fn test_get_completed_matches_degrades_without_signal_at_large_scale() {
 
     for _ in 0..total {
         let game_id = harness.next_game_id();
+        // p1 and p2 always play each other, so their completed-match counts
+        // (and tiers) stay in lockstep — re-derive a tier-valid stake each
+        // iteration (see `tier_valid_stake`).
+        let stake = harness.tier_valid_stake(&p1);
         let id = harness.client().create_match(
             &p1,
             &p2,
-            &STAKE,
+            &stake,
             &harness.token,
             &game_id,
             &Platform::Lichess,
@@ -445,10 +460,14 @@ fn test_get_completed_matches_small_count_identical_to_pre_cap_behaviour() {
     let completed_count = 10usize;
     for _ in 0..completed_count {
         let game_id = harness.next_game_id();
+        // p1 and p2 always play each other, so their completed-match counts
+        // (and tiers) stay in lockstep — re-derive a tier-valid stake each
+        // iteration (see `tier_valid_stake`).
+        let stake = harness.tier_valid_stake(&p1);
         let id = harness.client().create_match(
             &p1,
             &p2,
-            &STAKE,
+            &stake,
             &harness.token,
             &game_id,
             &Platform::Lichess,
@@ -463,10 +482,11 @@ fn test_get_completed_matches_small_count_identical_to_pre_cap_behaviour() {
     // Also create a few pending matches to confirm they don't appear in results.
     for _ in 0..5 {
         let game_id = harness.next_game_id();
+        let stake = harness.tier_valid_stake(&p1);
         harness.client().create_match(
             &p1,
             &p2,
-            &STAKE,
+            &stake,
             &harness.token,
             &game_id,
             &Platform::Lichess,
@@ -526,10 +546,14 @@ fn test_get_completed_matches_paginated_unaffected_by_scan_cap() {
     let completed_count = 520usize;
     for _ in 0..completed_count {
         let game_id = harness.next_game_id();
+        // p1 and p2 always play each other, so their completed-match counts
+        // (and tiers) stay in lockstep — re-derive a tier-valid stake each
+        // iteration (see `tier_valid_stake`).
+        let stake = harness.tier_valid_stake(&p1);
         let id = harness.client().create_match(
             &p1,
             &p2,
-            &STAKE,
+            &stake,
             &harness.token,
             &game_id,
             &Platform::Lichess,
@@ -612,10 +636,14 @@ fn test_scan_cap_fires_at_exact_threshold_boundary() {
     // Create 499 completed matches — one below the cap.
     for _ in 0..499usize {
         let game_id = harness.next_game_id();
+        // p1 and p2 always play each other, so their completed-match counts
+        // (and tiers) stay in lockstep — re-derive a tier-valid stake each
+        // iteration (see `tier_valid_stake`).
+        let stake = harness.tier_valid_stake(&p1);
         let id = harness.client().create_match(
             &p1,
             &p2,
-            &STAKE,
+            &stake,
             &harness.token,
             &game_id,
             &Platform::Lichess,
@@ -638,10 +666,11 @@ fn test_scan_cap_fires_at_exact_threshold_boundary() {
 
     // Create one more match to reach the cap threshold exactly.
     let game_id = harness.next_game_id();
+    let stake = harness.tier_valid_stake(&p1);
     let id = harness.client().create_match(
         &p1,
         &p2,
-        &STAKE,
+        &stake,
         &harness.token,
         &game_id,
         &Platform::Lichess,
