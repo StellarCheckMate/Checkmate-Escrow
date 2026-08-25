@@ -825,7 +825,7 @@ fn test_two_step_admin_transfer() {
         new_admin,
         "admin must be new_admin after accept"
     );
-    let pending: Option<Address> = env.as_contract(&contract_id, || {
+    let pending: Option<PendingAdminProposal> = env.as_contract(&contract_id, || {
         env.storage().instance().get(&DataKey::PendingAdmin)
     });
     assert!(
