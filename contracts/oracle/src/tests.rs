@@ -107,6 +107,130 @@ fn test_slash_oracle_reduces_stake_and_transfers_tokens() {
 }
 
 #[test]
+fn test_register_oracle_with_stake_first_registration_unchanged() {
+    // Regression: a single (first-time) registration must behave identically
+    // to today — the stake stored equals the amount transferred.
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    asset_client.mint(&oracle_admin, &200);
+    client.register_oracle_with_stake(&oracle_admin, &200i128, &token_addr);
+
+    assert_eq!(balance_client.balance(&contract_id), 200);
+
+    let registration: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_admin.clone()))
+            .unwrap()
+    });
+    assert_eq!(registration.oracle_stake, 200);
+    assert_eq!(registration.token, token_addr);
+}
+
+#[test]
+fn test_register_oracle_with_stake_accumulates_on_reregistration() {
+    // Adversarial: before the fix, two sequential registrations left the
+    // stored registration reporting only the *second* call's amount, even
+    // though both transfers succeeded and the contract balance reflects
+    // both. This must fail on the pre-fix implementation.
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    asset_client.mint(&oracle_admin, &500);
+    client.register_oracle_with_stake(&oracle_admin, &300i128, &token_addr);
+    client.register_oracle_with_stake(&oracle_admin, &200i128, &token_addr);
+
+    // Both transfers landed in the contract.
+    assert_eq!(balance_client.balance(&contract_id), 500);
+
+    // The recorded stake is the cumulative sum, not just the second call.
+    let registration: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_admin.clone()))
+            .unwrap()
+    });
+    assert_eq!(registration.oracle_stake, 500);
+}
+
+#[test]
+fn test_slash_oracle_can_slash_cumulative_stake_after_top_up() {
+    // Post-fix: slash_oracle must be able to slash up to the *cumulative*
+    // staked amount after two top-up calls, not just the most recent one.
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    asset_client.mint(&oracle_admin, &500);
+    client.register_oracle_with_stake(&oracle_admin, &300i128, &token_addr);
+    client.register_oracle_with_stake(&oracle_admin, &200i128, &token_addr);
+
+    // A slash larger than either individual top-up, but within the
+    // cumulative total, must succeed.
+    let admin_balance_before = balance_client.balance(&oracle_admin);
+    client.slash_oracle(&oracle_admin, &450i128);
+
+    assert_eq!(balance_client.balance(&contract_id), 50);
+    assert_eq!(
+        balance_client.balance(&oracle_admin),
+        admin_balance_before + 450
+    );
+
+    let registration: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_admin.clone()))
+            .unwrap()
+    });
+    assert_eq!(registration.oracle_stake, 50);
+}
+
+#[test]
+fn test_register_oracle_with_stake_rejects_mismatched_token_top_up() {
+    // A top-up in a different token than the original registration must be
+    // rejected rather than silently discarding the mismatch (stake in two
+    // different tokens cannot be meaningfully summed).
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    let other_admin = Address::generate(&env);
+    let other_token_id = env.register_stellar_asset_contract_v2(other_admin.clone());
+    let other_token_addr = other_token_id.address();
+    let other_asset_client = StellarAssetClient::new(&env, &other_token_addr);
+
+    asset_client.mint(&oracle_admin, &300);
+    other_asset_client.mint(&oracle_admin, &200);
+
+    client.register_oracle_with_stake(&oracle_admin, &300i128, &token_addr);
+
+    let result = client.try_register_oracle_with_stake(&oracle_admin, &200i128, &other_token_addr);
+    assert_eq!(result, Err(Ok(Error::StakeTokenMismatch)));
+
+    // The mismatched top-up must not have moved any tokens or mutated the
+    // existing registration.
+    assert_eq!(balance_client.balance(&contract_id), 300);
+    let other_balance_client = soroban_sdk::token::Client::new(&env, &other_token_addr);
+    assert_eq!(other_balance_client.balance(&contract_id), 0);
+
+    let registration: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_admin.clone()))
+            .unwrap()
+    });
+    assert_eq!(registration.oracle_stake, 300);
+    assert_eq!(registration.token, token_addr);
+}
+
+#[test]
 fn test_submit_result_rejects_registered_oracle_without_sufficient_stake() {
     let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
     let client = OracleContractClient::new(&env, &contract_id);
