@@ -262,7 +262,10 @@ impl ApiCache {
                 Err(e) => {
                     warn!(
                         "Redis unavailable ({}) — falling back to a process-local \
-                         response cache. Latency will be higher across replicas.",
+                         response cache. This creates a consistency risk: multiple \
+                         replicas behind a load balancer will serve different cached \
+                         responses for the same request until their independent TTLs expire. \
+                         Health endpoint reports this degraded state.",
                         e
                     );
                     Self::in_memory()
