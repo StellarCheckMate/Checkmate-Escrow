@@ -1,5 +1,4 @@
 use super::*;
-use soroban_sdk::testutils::Ledger as _;
 
 #[test]
 fn test_pause_on_uninitialized_contract_returns_unauthorized() {
