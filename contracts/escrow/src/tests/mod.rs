@@ -11,6 +11,7 @@ pub use std::{format, vec::Vec};
 pub mod helpers;
 
 mod admin;
+mod admin_stall_resolution;
 mod balance_history_edge_cases;
 mod batch_submit;
 mod consensus;

@@ -103,6 +103,19 @@ impl OracleContract {
     }
 
     /// Register an oracle with a token stake that can be slashed if needed.
+    ///
+    /// If `oracle_address` already has a registration, `stake_amount` is
+    /// added to its existing `oracle_stake` rather than overwriting it — this
+    /// is the top-up path an oracle uses to replenish its bond after a
+    /// partial slash. `token` must match the token of the existing
+    /// registration; topping up with a different token is rejected, since
+    /// stake denominated in two different tokens cannot be meaningfully
+    /// summed.
+    ///
+    /// # Errors
+    /// - [`Error::InsufficientStake`] — `stake_amount` is not positive.
+    /// - [`Error::StakeTokenMismatch`] — `token` differs from the token
+    ///   backing this oracle's existing registration.
     pub fn register_oracle_with_stake(
         env: Env,
         oracle_address: Address,
@@ -116,6 +129,15 @@ impl OracleContract {
             return Err(Error::InsufficientStake);
         }
 
+        let registration_key = DataKey::OracleRegistration(oracle_address.clone());
+        let existing: Option<OracleRegistration> = env.storage().instance().get(&registration_key);
+
+        if let Some(existing) = &existing {
+            if existing.token != token {
+                return Err(Error::StakeTokenMismatch);
+            }
+        }
+
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(
             &oracle_address,
@@ -123,11 +145,16 @@ impl OracleContract {
             &stake_amount,
         );
 
+        let new_stake = existing
+            .map(|r| r.oracle_stake)
+            .unwrap_or(0)
+            .saturating_add(stake_amount);
+
         env.storage().instance().set(
-            &DataKey::OracleRegistration(oracle_address.clone()),
+            &registration_key,
             &OracleRegistration {
                 oracle_address: oracle_address.clone(),
-                oracle_stake: stake_amount,
+                oracle_stake: new_stake,
                 token: token.clone(),
             },
         );

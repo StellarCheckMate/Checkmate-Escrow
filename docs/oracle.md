@@ -27,6 +27,29 @@ health check now:
 
 ---
 
+## HTTP Layer Protections (WAF & Rate Limiting)
+
+Every request to the oracle service's exposed HTTP endpoints (`/health`, `/api/docs`,
+`/api/openapi.yaml`) passes through two `axum` middleware layers before reaching a
+handler, applied in `oracle-service/src/main.rs`:
+
+1. **WAF** (`oracle_service::middleware::waf`) — outermost layer, runs first:
+   - Burst rate limiting: more than 20 requests/second from one IP → `429`
+   - Oversized body: `Content-Length` over 1 MiB → `413`
+   - Long URI: request URI over 2,048 characters → `400`
+   - Null byte in URI → `400`
+2. **Rate limiter** (`oracle_service::middleware::rate_limit`) — token-bucket
+   limiting per IP (100 req/min) and per `X-Api-Key` (1,000 req/min), returning
+   `429` with `X-RateLimit-*`/`Retry-After` headers when a bucket is exhausted.
+
+This is distinct from the on-chain [Oracle Submission Rate
+Limiting](#oracle-submission-rate-limiting) (which throttles `submit_result`
+calls) and from the client-side platform rate limiters described in [Chess.com
+API Rate Limits](#chesscom-api-rate-limits-timeouts-and-offline-fallback) —
+this section covers protection of the oracle service's own HTTP surface.
+
+---
+
 ## Oracle Contract Role
 
 The escrow contract uses its configured oracle address as the authoritative
@@ -140,6 +163,16 @@ Each oracle registers independently with its own key and its own stake:
 ```rust
 oracle_client.register_oracle_with_stake(&oracle_address, &stake_amount, &token);
 ```
+
+**Re-registration tops up, it does not overwrite.** If `oracle_address` is
+already registered, `stake_amount` is *added* to its existing `oracle_stake`
+rather than replacing it. This is the intended way for an oracle to
+replenish its bond after a partial slash (e.g. after landing on the losing
+side of a majority vote) — the operational action the m-of-n safety bound
+above assumes operators will take. `token` must match the token of the
+existing registration; a top-up call with a different token is rejected with
+`StakeTokenMismatch`, since stake denominated in two different tokens cannot
+be meaningfully summed. A first-time registration behaves exactly as before.
 
 Registering appends the address to the contract's oracle set (queryable via
 `get_registered_oracle_count`). The admin configures how many *distinct*
@@ -962,7 +995,7 @@ Stored per oracle address via `register_oracle_with_stake`; read and mutated by 
 | Field | Type | Description |
 |---|---|---|
 | `oracle_address` | `Address` | The registered oracle's address. |
-| `oracle_stake` | `i128` | Token stake currently backing this oracle; reduced by `slash_oracle`. |
+| `oracle_stake` | `i128` | Token stake currently backing this oracle; reduced by `slash_oracle`, increased by re-registration/top-up via `register_oracle_with_stake`. |
 | `token` | `Address` | Token contract the stake was posted in. |
 
 ### `RateLimitConfig`

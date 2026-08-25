@@ -339,8 +339,8 @@ pub struct Dispute {
     pub evidence_hash: String,
     pub uphold_votes: u32,
     pub overturn_votes: u32,
-    pub yes_votes: u32,
-    pub no_votes: u32,
+    pub yes_votes: i128,
+    pub no_votes: i128,
     /// Bonded stake required to open dispute; refunded on overturn, forfeited on upheld.
     pub dispute_bond: i128,
     /// Snapshot ledger for vote weight calculation; prevents flash-loan acquisition attacks.

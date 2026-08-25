@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `admin_resolve_stalled_match` — admin-gated recovery function for Active matches stuck after the 24-hour player rollback window expires and the oracle has failed to submit a result for more than 7 days. Provides a bounded recovery path so funds are never permanently locked in the event of prolonged oracle outage or lost signing keys.
+- `ADMIN_STALL_WINDOW_SECONDS` constant (7 days) — configurable threshold after which admin can invoke stall resolution, long enough not to compete with the player-initiated 24-hour rollback window.
+
+### Fixed
+- Active matches with no oracle response are no longer permanently unrecoverable after the 24-hour `dispute_and_rollback_match` window elapses. The new admin recovery function closes the gap identified in Issue #1274, ensuring funds can always be recovered after a bounded stall period.
+
 ## [1.0.0] - 2026-06-29
 
 ### Added
