@@ -59,6 +59,15 @@ pub enum Error {
     InsufficientBond = 41,
     QuorumNotMet = 42,
     InsufficientHoldingDuration = 43,
+    /// Returned in two distinct situations:
+    /// 1. **Match creation** — the player already has `MAX_ACTIVE_MATCHES_PER_PLAYER`
+    ///    concurrent active matches and cannot open another until some complete or cancel.
+    /// 2. **Scan cap** — `get_completed_matches` was called when the total `MatchCount`
+    ///    exceeds `GET_COMPLETED_MATCHES_CAP` (500).  The full linear scan would exceed
+    ///    Soroban's per-invocation resource budget, so the call aborts early and emits a
+    ///    `"scan" / "cap_hit"` diagnostic event.  Callers must switch to
+    ///    `get_completed_matches_paginated` and can detect this condition cheaply via
+    ///    `match_count_exceeds_scan_cap()`.
     TooManyActiveMatches = 45,
     /// Token is not issued by a registered stablecoin issuer and stablecoin-only mode is enabled.
     NotStablecoin = 46,

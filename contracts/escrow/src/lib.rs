@@ -159,6 +159,19 @@ const MAX_ACTIVE_MATCHES_PER_PLAYER: u32 = 1_000;
 /// per-call cost. Callers requiring more results should use the _paginated variants.
 const MAX_UNBOUNDED_MATCH_RESULTS: u32 = 10_000;
 
+/// Maximum total `MatchCount` at which `get_completed_matches` will attempt a full
+/// linear scan.  Once the contract has seen more than this many matches (across all
+/// states, not just Completed) the scan budget is no longer safe and
+/// `get_completed_matches` returns `Error::TooManyActiveMatches` immediately, before
+/// touching any persistent storage.  Callers MUST switch to
+/// `get_completed_matches_paginated` before this threshold is reached.
+///
+/// Rationale: Soroban's per-invocation resource budget is finite.  A linear scan
+/// over every match ever created hits that budget at roughly 1 000–2 000 entries
+/// (depending on stake/player data stored per match).  A cap of 500 gives a 2×
+/// safety margin and is detectable in advance via `match_count_exceeds_scan_cap`.
+const GET_COMPLETED_MATCHES_CAP: u64 = 500;
+
 // ── Upgrade / migration constants ─────────────────────────────────────────────
 
 /// Current contract version: major=0, minor=1, patch=0  →  1_000 * 0 + 1 * 1000 + 0.
@@ -4392,15 +4405,69 @@ impl EscrowContract {
     /// Useful for off-chain clients and the frontend to display match history and
     /// payout records without relying on event indexing.
     ///
+    /// # Hard scan cap
+    ///
+    /// Before scanning, this function reads the total `MatchCount` (an O(1) instance
+    /// storage read).  If `MatchCount > GET_COMPLETED_MATCHES_CAP` (currently 500),
+    /// the call returns `Err(Error::TooManyActiveMatches)` immediately — without
+    /// touching any persistent match storage — **and** emits a `"scan" / "cap_hit"`
+    /// diagnostic event carrying the current match count as payload.  Off-chain
+    /// callers can detect this condition early via `match_count_exceeds_scan_cap()`
+    /// before it causes a hard failure here.
+    ///
+    /// Once the contract has more than 500 total matches **callers must switch to
+    /// `get_completed_matches_paginated`**, which is the production-safe path and is
+    /// unaffected by this cap.  Use `match_count_exceeds_scan_cap()` as a cheap
+    /// pre-flight check.
+    ///
     /// # Storage cost note
     ///
-    /// This function scans every match ever created in linear time. For contracts with
-    /// a large number of matches this may become expensive. Prefer
-    /// `get_completed_matches_paginated` for production use cases where the total
-    /// match count could grow unboundedly — it lets callers fetch results in bounded
-    /// pages rather than loading the entire history in a single call.
+    /// Below the cap this function still scans every match ever created in linear
+    /// time — prefer `get_completed_matches_paginated` even before the cap is
+    /// reached for contracts where the match count could grow over time.
     pub fn get_completed_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
+        let match_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+
+        if match_count > GET_COMPLETED_MATCHES_CAP {
+            // Emit a diagnostic event so off-chain indexers and monitoring
+            // tools can observe the cap firing without needing to parse the
+            // error code from a failed transaction.
+            env.events().publish(
+                (Symbol::new(&env, "scan"), symbol_short!("cap_hit")),
+                match_count,
+            );
+            return Err(Error::TooManyActiveMatches);
+        }
+
         Self::collect_matches_by_state(&env, MatchState::Completed)
+    }
+
+    /// Returns `true` if the total match count already exceeds
+    /// `GET_COMPLETED_MATCHES_CAP` — meaning a call to `get_completed_matches`
+    /// **will** fail with `Error::TooManyActiveMatches`.
+    ///
+    /// This is an O(1) read of the `MatchCount` instance key.  Off-chain clients
+    /// and the frontend should call this before `get_completed_matches` so they
+    /// can switch to `get_completed_matches_paginated` before hitting the wall.
+    ///
+    /// ```text
+    /// if client.match_count_exceeds_scan_cap() {
+    ///     // use get_completed_matches_paginated(offset, limit) instead
+    /// } else {
+    ///     let all = client.get_completed_matches();
+    /// }
+    /// ```
+    pub fn match_count_exceeds_scan_cap(env: Env) -> bool {
+        let match_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+        match_count > GET_COMPLETED_MATCHES_CAP
     }
 
     /// Return a paginated page of completed matches ordered by match ID ascending.

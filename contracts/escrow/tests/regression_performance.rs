@@ -310,3 +310,152 @@ fn test_per_player_active_match_cap_enforcement() {
         "Active matches exceeded per-player cap"
     );
 }
+
+// ── get_completed_matches scan-cap tests ────────────────────────────────────
+
+/// Adversarial regression: demonstrates there was no earlier signal when a large
+/// synthetic match count caused `get_completed_matches` to degrade.
+///
+/// With the new hard cap this test proves the contract now returns
+/// `Error::TooManyActiveMatches` and emits a `"scan" / "cap_hit"` diagnostic
+/// event rather than silently running a budget-exhausting scan — giving callers
+/// an observable, actionable failure instead of an opaque resource-exhaustion
+/// trap.
+///
+/// Only Pending matches are created (no funding needed) because the cap is
+/// checked against the total `MatchCount` (all states), not the count of
+/// completed matches.  This also reflects the realistic production scenario:
+/// the scan budget is proportional to the total stored-match count, not just
+/// how many happened to finish.
+#[test]
+fn test_get_completed_matches_adversarial_large_count_returns_cap_error() {
+    let harness = Harness::new();
+
+    // GET_COMPLETED_MATCHES_CAP = 500; create 501 matches so we exceed it.
+    for i in 0..501usize {
+        harness.new_match(&format!("adversarial-{i:05}"));
+        // Deliberately leave all matches in Pending state — the cap is on
+        // MatchCount (total), not completed count, so no funding is required.
+    }
+
+    // match_count_exceeds_scan_cap() must return true as a cheap pre-flight signal.
+    assert!(
+        harness.client().match_count_exceeds_scan_cap(),
+        "match_count_exceeds_scan_cap must return true when MatchCount > 500"
+    );
+
+    // get_completed_matches must now return the cap error without attempting
+    // a full scan.
+    let result = harness.client().try_get_completed_matches();
+    assert!(
+        result.is_err(),
+        "get_completed_matches must return Err when MatchCount exceeds the scan cap"
+    );
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        escrow::errors::Error::TooManyActiveMatches,
+        "error must be TooManyActiveMatches (the scan-cap sentinel)"
+    );
+}
+
+/// Proves the new cap fires exactly at the threshold and that
+/// `get_completed_matches_paginated` is unaffected and remains the safe path.
+#[test]
+fn test_get_completed_matches_cap_fires_at_threshold_paginated_unaffected() {
+    let harness = Harness::new();
+
+    // Create exactly 500 matches — at the limit, not over it.
+    for i in 0..500usize {
+        harness.new_match(&format!("at-limit-{i:05}"));
+    }
+
+    // At exactly 500 the cap should not fire.
+    assert!(
+        !harness.client().match_count_exceeds_scan_cap(),
+        "match_count_exceeds_scan_cap must be false when MatchCount == 500 (not > 500)"
+    );
+    assert!(
+        harness.client().try_get_completed_matches().is_ok(),
+        "get_completed_matches must succeed when MatchCount == 500 (at cap, not over)"
+    );
+
+    // Add the 501st match — now MatchCount = 501, which is > 500.
+    harness.new_match("over-limit");
+
+    assert!(
+        harness.client().match_count_exceeds_scan_cap(),
+        "match_count_exceeds_scan_cap must be true when MatchCount == 501 (> 500)"
+    );
+    let capped = harness.client().try_get_completed_matches();
+    assert!(
+        capped.is_err(),
+        "get_completed_matches must fail after crossing the cap"
+    );
+    assert_eq!(
+        capped.unwrap_err().unwrap(),
+        escrow::errors::Error::TooManyActiveMatches,
+    );
+
+    // get_completed_matches_paginated must be unaffected — no cap is applied.
+    // It should return 0 completed matches (none were funded/settled above)
+    // without error.
+    let page = harness.client().get_completed_matches_paginated(&0, &50);
+    assert_eq!(
+        page.len(),
+        0,
+        "get_completed_matches_paginated must succeed regardless of MatchCount"
+    );
+}
+
+/// Regression: small match counts (typical deployments) must behave identically
+/// to before the cap was introduced — no behavior change for ≤ 500 total matches.
+#[test]
+fn test_get_completed_matches_small_count_no_behavior_change() {
+    let harness = Harness::new();
+
+    // Create and complete 5 matches — well below the cap.
+    // Use fresh player pairs for each match so tier-stake boundaries are never
+    // crossed (each new player pair starts at Bronze tier).
+    for _ in 0..5 {
+        let p1 = harness.new_player();
+        let p2 = harness.new_player();
+        let game_id = harness.next_game_id();
+        let id = harness.client().create_match(
+            &p1,
+            &p2,
+            &STAKE,
+            &harness.token,
+            &game_id,
+            &Platform::Lichess,
+        );
+        harness.client().deposit(&id, &p1);
+        harness.client().deposit(&id, &p2);
+        harness
+            .client()
+            .submit_result(&id, &Winner::Player1, &harness.oracle);
+    }
+
+    // Leave 1 match in Pending state (also with fresh players).
+    harness.new_match("pending-straggler");
+
+    // Total MatchCount = 6, well below 500.
+    assert!(
+        !harness.client().match_count_exceeds_scan_cap(),
+        "match_count_exceeds_scan_cap must be false for small deployments"
+    );
+
+    // get_completed_matches must return exactly the 5 completed matches.
+    let completed = harness.client().get_completed_matches();
+    assert_eq!(
+        completed.len(),
+        5,
+        "get_completed_matches must return all 5 completed matches for small counts"
+    );
+    for m in completed.iter() {
+        assert_eq!(
+            m.state,
+            escrow::types::MatchState::Completed,
+            "every entry must be in Completed state"
+        );
+    }
+}
