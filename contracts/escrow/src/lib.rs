@@ -3290,9 +3290,9 @@ impl EscrowContract {
 
         // Tally vote using historical snapshot weight
         if vote {
-            dispute.yes_votes = dispute.yes_votes.saturating_add(snapshot_weight as u32);
+            dispute.yes_votes = dispute.yes_votes.saturating_add(snapshot_weight);
         } else {
-            dispute.no_votes = dispute.no_votes.saturating_add(snapshot_weight as u32);
+            dispute.no_votes = dispute.no_votes.saturating_add(snapshot_weight);
         }
 
         env.storage()
@@ -3353,7 +3353,7 @@ impl EscrowContract {
             .ok_or(Error::PendingResultNotFound)?;
 
         // Check quorum requirement
-        let total_votes = (dispute.yes_votes as i128).saturating_add(dispute.no_votes as i128);
+        let total_votes = dispute.yes_votes.saturating_add(dispute.no_votes);
         if total_votes < dispute.quorum_threshold {
             return Err(Error::QuorumNotMet);
         }
@@ -4381,6 +4381,7 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Oracle, &new_oracle);
         let mut rotation_state = Self::get_rotation_state(&env);
         rotation_state.set_temp(None);
+        rotation_state.set_pending(None);
         Self::save_rotation_state(&env, rotation_state);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
@@ -4497,6 +4498,15 @@ impl EscrowContract {
 
         if proposal.old_oracle != old_oracle || proposal.new_oracle != new_oracle {
             return Err(Error::InvalidState);
+        }
+
+        let current = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        if proposal.old_oracle != current {
+            return Err(Error::Unauthorized);
         }
 
         env.storage().instance().set(&DataKey::Oracle, &new_oracle);

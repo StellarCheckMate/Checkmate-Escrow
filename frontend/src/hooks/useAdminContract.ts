@@ -1,8 +1,22 @@
 import { useState, useCallback, useEffect } from 'react';
+import {
+  TransactionBuilder,
+  Account,
+  Networks,
+  Contract,
+  Address,
+  nativeToScVal,
+  xdr,
+} from '@stellar/stellar-sdk';
+import { freighterSign } from '../wallets/freighter';
+import { albedoSign } from '../wallets/albedo';
 import type { WalletType } from '../wallets/types';
 
 const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ESCROW ?? '';
 const RPC_URL = import.meta.env.VITE_STELLAR_RPC_URL ?? 'https://soroban-testnet.stellar.org';
+const NETWORK = import.meta.env.VITE_STELLAR_NETWORK === 'mainnet'
+  ? Networks.PUBLIC
+  : Networks.TESTNET;
 
 export interface AdminState {
   admin: string | null;
@@ -12,12 +26,94 @@ export interface AdminState {
   error: string | null;
 }
 
-async function callView(method: string): Promise<unknown> {
+function decodeXdrBuffer(xdrBase64: string): Uint8Array {
+  const binaryStr = atob(xdrBase64);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
+  }
+  return bytes;
+}
+
+export function decodeAddress(scValXdr: string): string {
+  try {
+    const buffer = decodeXdrBuffer(scValXdr);
+    const val = xdr.ScVal.fromXDR(buffer);
+    // Check if this is an address by examining the switch type
+    if (val.switch().name === 'scvAddress') {
+      const addr = val.address();
+      if (addr) {
+        return Address.fromScAddress(addr).toString();
+      }
+    }
+    throw new Error('Not an address SCVal');
+  } catch (err) {
+    throw new Error(`Failed to decode address: ${(err as Error).message}`, { cause: err });
+  }
+}
+
+export function decodeBoolean(scValXdr: string): boolean {
+  try {
+    const buffer = decodeXdrBuffer(scValXdr);
+    const val = xdr.ScVal.fromXDR(buffer);
+    // Check if this is a boolean by examining the switch type
+    if (val.switch().name === 'scvBool') {
+      return val.b()?.valueOf() ?? false;
+    }
+    throw new Error('Not a boolean SCVal');
+  } catch (err) {
+    throw new Error(`Failed to decode boolean: ${(err as Error).message}`, { cause: err });
+  }
+}
+
+export async function buildInvokeTx(walletPublicKey: string, method: string, args: unknown[]): Promise<string> {
+  // Fetch current account info for sequence number
+  const accountResponse = await fetch(RPC_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'getAccount',
+      params: [walletPublicKey],
+    }),
+  });
+
+  if (!accountResponse.ok) throw new Error('Failed to fetch account info');
+  const accountData = (await accountResponse.json()) as { result?: { sequence: string }; error?: { message: string } };
+  if (accountData.error) throw new Error(accountData.error.message);
+
+  const sequence = accountData.result?.sequence ?? '0';
+  const account = new Account(walletPublicKey, sequence);
+
+  const contract = new Contract(CONTRACT_ID);
+
+  const argsXdr = args.map(arg => {
+    if (typeof arg === 'string' && arg.startsWith('G')) {
+      return new Address(arg).toScVal();
+    }
+    return nativeToScVal(arg);
+  });
+
+  const txBuilder = new TransactionBuilder(account, {
+    fee: '100',
+    networkPassphrase: NETWORK,
+  });
+
+  const op = contract.call(method, ...argsXdr);
+  txBuilder.addOperation(op);
+
+  const tx = txBuilder.build();
+  return tx.toXDR();
+}
+
+export async function callView(walletPublicKey: string, method: string): Promise<string | null> {
+  const xdrTx = await buildInvokeTx(walletPublicKey, method, []);
   const body = {
     jsonrpc: '2.0',
     id: 1,
     method: 'simulateTransaction',
-    params: { transaction: buildInvokeTx(method, []) },
+    params: { transaction: xdrTx },
   };
   const res = await fetch(RPC_URL, {
     method: 'POST',
@@ -30,15 +126,7 @@ async function callView(method: string): Promise<unknown> {
   return json.result?.results?.[0]?.xdr ?? null;
 }
 
-// Stub: builds a minimal invoke-host-function transaction XDR.
-// In production this would use @stellar/stellar-sdk ContractSpec + TransactionBuilder.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function buildInvokeTx(_method: string, _args: unknown[]): string {
-  return '';
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function useAdminContract(walletPublicKey: string | null, _walletType: WalletType | null) {
+export function useAdminContract(walletPublicKey: string | null, walletType: WalletType | null) {
   const [state, setState] = useState<AdminState>({
     admin: null,
     oracle: null,
@@ -50,27 +138,54 @@ export function useAdminContract(walletPublicKey: string | null, _walletType: Wa
   const [actionError, setActionError] = useState<string | null>(null);
 
   const fetchAdminState = useCallback(async () => {
-    if (!CONTRACT_ID) return;
+    if (!CONTRACT_ID || !walletPublicKey) return;
     setState(s => ({ ...s, loading: true, error: null }));
     try {
-      // In a real integration these would decode SCVal XDR returned by the RPC.
-      // Here we call the view functions and return placeholders so the UI wires up correctly.
       const [adminXdr, oracleXdr, pausedXdr] = await Promise.all([
-        callView('get_admin').catch(() => null),
-        callView('get_oracle').catch(() => null),
-        callView('is_paused').catch(() => null),
+        callView(walletPublicKey, 'get_admin').catch(() => null),
+        callView(walletPublicKey, 'get_oracle').catch(() => null),
+        callView(walletPublicKey, 'is_paused').catch(() => null),
       ]);
+
+      let admin: string | null = null;
+      let oracle: string | null = null;
+      let paused: boolean | null = null;
+
+      if (adminXdr) {
+        try {
+          admin = decodeAddress(adminXdr);
+        } catch {
+          admin = null;
+        }
+      }
+
+      if (oracleXdr) {
+        try {
+          oracle = decodeAddress(oracleXdr);
+        } catch {
+          oracle = null;
+        }
+      }
+
+      if (pausedXdr) {
+        try {
+          paused = decodeBoolean(pausedXdr);
+        } catch {
+          paused = null;
+        }
+      }
+
       setState({
-        admin: adminXdr ? String(adminXdr) : null,
-        oracle: oracleXdr ? String(oracleXdr) : null,
-        paused: pausedXdr === null ? null : pausedXdr === 'true' || pausedXdr === true,
+        admin,
+        oracle,
+        paused,
         loading: false,
         error: null,
       });
     } catch (err) {
       setState(s => ({ ...s, loading: false, error: (err as Error).message }));
     }
-  }, []);
+  }, [walletPublicKey]);
 
   useEffect(() => {
     fetchAdminState();
@@ -79,17 +194,36 @@ export function useAdminContract(walletPublicKey: string | null, _walletType: Wa
   const isAdmin = walletPublicKey !== null && state.admin !== null && walletPublicKey === state.admin;
 
   async function invoke(method: string, args: unknown[]): Promise<boolean> {
-    if (!isAdmin) {
+    if (!isAdmin || !walletPublicKey || !walletType) {
       setActionError('Not authorized: connected wallet is not the contract admin.');
       return false;
     }
     setActionLoading(true);
     setActionError(null);
     try {
-      // In production: build + sign + submit transaction via stellar-sdk.
-      // This stub simulates a successful call for UI/test purposes.
-      void method; void args;
-      await new Promise(r => setTimeout(r, 300)); // simulate async
+      const xdrTx = await buildInvokeTx(walletPublicKey, method, args);
+
+      const signResult = walletType === 'freighter'
+        ? await freighterSign(xdrTx, NETWORK)
+        : await albedoSign(xdrTx, 'testnet');
+
+      const signedXdr = signResult.signedXdr;
+
+      const submitRes = await fetch(RPC_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'sendTransaction',
+          params: [signedXdr],
+        }),
+      });
+
+      if (!submitRes.ok) throw new Error(`RPC submission error: ${submitRes.statusText}`);
+      const submitData = (await submitRes.json()) as { result?: { status: string }; error?: { message: string } };
+      if (submitData.error) throw new Error(submitData.error.message);
+
       await fetchAdminState();
       return true;
     } catch (err) {

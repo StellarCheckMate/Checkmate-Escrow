@@ -6,32 +6,26 @@
 //! conditional `INSERT … ON CONFLICT DO UPDATE` that only succeeds when the row
 //! does not exist **or** the current `held_until` timestamp has expired.
 //!
+//! The lease is atomic at the database level. If the `INSERT` or `UPDATE`
+//! succeeds, we have become the leader and the row now bears our `instance_id`.
+//! If it fails (another instance holds an unexpired lease), we remain a
+//! follower.
+//!
 //! The leader must renew its lease every `heartbeat_secs` seconds.  If it
 //! crashes without renewing, the lease expires after `ttl_secs` and another
 //! instance can take over.
 //!
 //! ## Integration with the poller
 //! `event_poller` (in `rpc.rs`) calls `LeaderGuard::try_acquire` once per poll
-//! cycle.  Only the instance that holds the guard proceeds to ingest events.
+//! cycle.  Only the instance that holds the lease proceeds to ingest events.
 //! Non-leaders skip ingestion and sleep until the next cycle, keeping them
 //! warm (cache + DB connections stay alive) for fast failover.
-//!
-//! ## Advisory lock backstop
-//! In addition to the row-level lease, the leader holds PostgreSQL advisory lock
-//! `LOCK_KEY` (a fixed `i64`) for the duration of the connection.  This gives
-//! a second layer of mutual exclusion that is automatically released when the
-//! connection drops, eliminating a class of split-brain scenarios that can arise
-//! if the process is killed but the DB row has not yet expired.
 
 use anyhow::{anyhow, Result};
 use chrono::Utc;
 use deadpool_postgres::Pool;
 use tokio::time::{interval, Duration};
-use tracing::{debug, info, warn};
-
-/// Deterministic advisory lock key for the event-indexer leader slot.
-/// Value is arbitrary but must be consistent across all instances.
-const LOCK_KEY: i64 = 0x65_76_74_69_64_78; // "evtidx" in ASCII
+use tracing::{info, warn};
 
 /// A non-`Send` guard that holds the leader lease while it is in scope.
 /// Drop the guard (or let the `LeaderElection` task cancel) to release.
@@ -90,25 +84,10 @@ impl LeaderElection {
             .await
             .map_err(|e| anyhow!("Leader pool error: {}", e))?;
 
-        let ttl_interval = format!("{} seconds", self.ttl_secs);
         let now = Utc::now();
         let held_until = now + chrono::Duration::seconds(self.ttl_secs as i64);
 
-        // Acquire the PostgreSQL session-level advisory lock first.
-        // `pg_try_advisory_lock` is non-blocking: it returns false if another
-        // session already holds the lock.
-        let lock_row = conn
-            .query_one("SELECT pg_try_advisory_lock($1)", &[&LOCK_KEY])
-            .await
-            .map_err(|e| anyhow!("advisory lock failed: {}", e))?;
-        let got_advisory: bool = lock_row.get(0);
-
-        if !got_advisory {
-            debug!(instance_id = %self.instance_id, "Advisory lock held by another session");
-            return Ok(false);
-        }
-
-        // Now try to claim / renew the row-level lease.
+        // Try to claim or renew the row-level lease.
         // The UPDATE only fires when `held_until < NOW()` (expired) OR
         // `instance_id` matches our own ID (renewal).
         let rows_affected = conn
@@ -136,11 +115,10 @@ impl LeaderElection {
 
         let current_holder: String = row.get(0);
         let we_are_leader = rows_affected > 0 || current_holder == self.instance_id;
-        let _ = ttl_interval; // suppresses unused-variable warning
         Ok(we_are_leader)
     }
 
-    /// Explicitly release the advisory lock and delete (or expire) the row.
+    /// Explicitly release the row-level lease by deleting the leader row.
     pub async fn release(&mut self) {
         if !self.is_leader {
             return;
@@ -152,9 +130,6 @@ impl LeaderElection {
                         "DELETE FROM leader_state WHERE instance_id = '__leader__'",
                         &[],
                     )
-                    .await;
-                let _ = conn
-                    .execute("SELECT pg_advisory_unlock($1)", &[&LOCK_KEY])
                     .await;
                 info!(instance_id = %self.instance_id, "Leader lease released");
             }

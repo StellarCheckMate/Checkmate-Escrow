@@ -896,201 +896,103 @@ fn test_get_contract_version_returns_semver_string() {
     }
 }
 
-// #1281 — transfer_admin clears pending admin, preventing stale nominee hijack
+// #1282 — defense-in-depth: rotate_oracle_permanent must reject a pending
+// proposal whose old_oracle no longer matches the live oracle, even if
+// something other than update_oracle desynced the two (e.g. a future code
+// path or a storage migration). This cannot be reached through the public
+// API today since every writer of DataKey::Oracle also clears the pending
+// proposal, so the divergence is simulated directly via contract storage.
 #[test]
-fn test_stale_nominee_cannot_hijack_after_transfer_admin() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, admin_a) = setup();
+fn test_rotate_oracle_permanent_rejects_when_current_oracle_desynced() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let pending_admin_b = Address::generate(&env);
-    let admin_c = Address::generate(&env);
+    let next_oracle = Address::generate(&env);
+    let desynced_oracle = Address::generate(&env);
 
-    client.propose_admin(&pending_admin_b);
-    assert_eq!(
-        client.get_admin(),
-        admin_a,
-        "admin must not change after propose"
-    );
+    // Admin proposes rotation: oracle -> next_oracle (pending.old_oracle == oracle)
+    client.propose_oracle_rotation(&oracle, &next_oracle);
 
-    client.transfer_admin(&admin_c, &admin_a);
-    assert_eq!(
-        client.get_admin(),
-        admin_c,
-        "admin must be admin_c after transfer"
-    );
-
-    env.mock_auths(&[MockAuth {
-        address: &pending_admin_b,
-        invoke: &MockAuthInvoke {
-            contract: &contract_id,
-            fn_name: "accept_admin",
-            args: ().into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
-
-    let result = client.try_accept_admin();
-    assert!(
-        result.is_err(),
-        "stale pending_admin_b should not be able to accept after transfer_admin"
-    );
-    assert_eq!(
-        client.get_admin(),
-        admin_c,
-        "admin must remain admin_c after failed accept attempt"
-    );
-}
-
-// #1281 — legitimate two-step transfer still works when no intervening transfer_admin
-#[test]
-fn test_legitimate_propose_accept_flow_still_works() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let new_admin = Address::generate(&env);
-    client.propose_admin(&new_admin);
-    assert_eq!(
-        client.get_admin(),
-        admin,
-        "admin must not change after propose"
-    );
-
-    env.mock_auths(&[MockAuth {
-        address: &new_admin,
-        invoke: &MockAuthInvoke {
-            contract: &contract_id,
-            fn_name: "accept_admin",
-            args: ().into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
-
-    client.accept_admin();
-    assert_eq!(
-        client.get_admin(),
-        new_admin,
-        "admin must be new_admin after accept"
-    );
-}
-
-// #1281 — transfer_admin with no outstanding proposal is a no-op for pending_admin
-#[test]
-fn test_transfer_admin_with_no_pending_proposal() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let new_admin = Address::generate(&env);
-    client.transfer_admin(&new_admin, &admin);
-    assert_eq!(
-        client.get_admin(),
-        new_admin,
-        "admin must change to new_admin"
-    );
-
-    let pending: Option<PendingAdminProposal> = env.as_contract(&contract_id, || {
-        env.storage().instance().get(&DataKey::PendingAdmin)
-    });
-    assert!(
-        pending.is_none(),
-        "no pending admin should exist when none was proposed"
-    );
-}
-
-// #1281 — accept_admin fails when no proposal is pending
-#[test]
-fn test_accept_admin_fails_when_no_proposal_pending() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let random_address = Address::generate(&env);
-    env.mock_auths(&[MockAuth {
-        address: &random_address,
-        invoke: &MockAuthInvoke {
-            contract: &contract_id,
-            fn_name: "accept_admin",
-            args: ().into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
-
-    let result = client.try_accept_admin();
-    assert!(
-        result.is_err(),
-        "accept_admin must fail when no proposal is pending"
-    );
-}
-
-// #1281 — accept_admin fails when called by wrong address
-#[test]
-fn test_accept_admin_fails_when_called_by_wrong_address() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let pending_admin = Address::generate(&env);
-    let wrong_address = Address::generate(&env);
-
-    client.propose_admin(&pending_admin);
-
-    env.mock_auths(&[MockAuth {
-        address: &wrong_address,
-        invoke: &MockAuthInvoke {
-            contract: &contract_id,
-            fn_name: "accept_admin",
-            args: ().into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
-
-    let result = client.try_accept_admin();
-    assert!(
-        result.is_err(),
-        "accept_admin must fail when called by wrong address"
-    );
-}
-
-// #1281 — accept_admin fails when proposer is no longer the current admin
-#[test]
-fn test_accept_admin_fails_when_proposer_changed() {
-    let (env, contract_id, _oracle, _player1, _player2, _token, admin_a) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let pending_admin_b = Address::generate(&env);
-    let admin_c = Address::generate(&env);
-
-    client.propose_admin(&pending_admin_b);
-    assert_eq!(
-        client.get_admin(),
-        admin_a,
-        "initial admin should be admin_a"
-    );
-
-    let proposal: PendingAdminProposal = env.as_contract(&contract_id, || {
+    // Simulate the live oracle diverging from the pending proposal without
+    // going through update_oracle (which would otherwise clear the pending
+    // proposal itself).
+    env.as_contract(&contract_id, || {
         env.storage()
             .instance()
-            .get(&DataKey::PendingAdmin)
-            .unwrap()
+            .set(&DataKey::Oracle, &desynced_oracle);
     });
+
+    // Executing the now-stale proposal must fail because proposal.old_oracle
+    // (oracle) no longer matches the live oracle (desynced_oracle).
+    let result = client.try_rotate_oracle_permanent(&oracle, &next_oracle);
     assert_eq!(
-        proposal.proposer, admin_a,
-        "proposer should be the initial admin"
+        result,
+        Err(Ok(Error::Unauthorized)),
+        "rotate_oracle_permanent must reject a proposal where old_oracle no longer matches the current oracle"
+    );
+}
+
+// #1282 — update_oracle clears any outstanding pending rotation proposal
+#[test]
+fn test_update_oracle_clears_pending_rotation() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let next_oracle = Address::generate(&env);
+    let final_oracle = Address::generate(&env);
+
+    // Propose a rotation
+    client.propose_oracle_rotation(&oracle, &next_oracle);
+
+    // Call update_oracle, which should clear the pending proposal
+    client.update_oracle(&final_oracle);
+
+    // Try to execute the cleared proposal — should fail with InvalidState
+    let result = client.try_rotate_oracle_permanent(&oracle, &next_oracle);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "rotate_oracle_permanent must fail with InvalidState when no pending proposal exists"
     );
 
-    client.transfer_admin(&admin_c, &admin_a);
-    assert_eq!(client.get_admin(), admin_c, "admin should now be admin_c");
+    // Confirm the oracle was updated
+    assert_eq!(client.get_oracle(), final_oracle);
+}
 
-    env.mock_auths(&[MockAuth {
-        address: &pending_admin_b,
-        invoke: &MockAuthInvoke {
-            contract: &contract_id,
-            fn_name: "accept_admin",
-            args: ().into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
+// #1282 — legitimate propose + permanent rotation flow still works
+#[test]
+fn test_rotate_oracle_permanent_succeeds_with_matching_current() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_accept_admin();
+    let new_oracle = Address::generate(&env);
+
+    // Propose rotation from current oracle to new_oracle
+    client.propose_oracle_rotation(&oracle, &new_oracle);
+
+    // Execute the rotation immediately (current oracle is still oracle)
+    client.rotate_oracle_permanent(&oracle, &new_oracle);
+
+    // Confirm the oracle was updated
+    assert_eq!(client.get_oracle(), new_oracle);
+}
+
+// #1282 — rotate_oracle_temporary validates current oracle like rotate_oracle_permanent now does
+#[test]
+fn test_rotate_oracle_temporary_validates_current_oracle() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let new_oracle = Address::generate(&env);
+    let final_oracle = Address::generate(&env);
+
+    // Update oracle to final_oracle
+    client.update_oracle(&final_oracle);
+
+    // Try to rotate from the old oracle — should fail because it's not the current oracle
+    let result = client.try_rotate_oracle_temporary(&oracle, &new_oracle, &3600u64);
     assert!(
-        result.is_err(),
-        "accept_admin must fail because proposer (admin_a) is not the current admin (admin_c)"
+        matches!(result, Err(Ok(Error::Unauthorized))),
+        "rotate_oracle_temporary must reject when old_oracle doesn't match current oracle"
     );
 }

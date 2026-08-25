@@ -124,6 +124,7 @@ impl SorobanRpcClient {
 ///
 /// - `leader` – the distributed election handle for this instance.
 /// - Only the current leader calls `poll_events`; followers sleep and retry.
+/// - On leadership loss, the event cache is cleared to prevent serving stale data.
 pub async fn event_poller(
     rpc: Arc<SorobanRpcClient>,
     db: Arc<Database>,
@@ -133,9 +134,21 @@ pub async fn event_poller(
     contract_id: &str,
     poll_interval_secs: u64,
 ) -> Result<()> {
+    let mut was_leader = false;
+
     loop {
         // ── Leader check ──────────────────────────────────────────────────
         let is_leader = leader.try_acquire().await;
+
+        // Detect leadership loss and clear the cache to prevent stale reads.
+        if was_leader && !is_leader {
+            warn!("Leadership lost — clearing event cache to prevent stale reads");
+            let mut cache_lock = cache.write().await;
+            cache_lock.clear();
+            drop(cache_lock);
+        }
+
+        was_leader = is_leader;
 
         if !is_leader {
             debug!("Not the leader – skipping poll");
