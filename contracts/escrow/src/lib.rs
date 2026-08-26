@@ -2668,7 +2668,9 @@ impl EscrowContract {
     /// (which compares against ledger-sequence deltas).
     fn current_match_timeout(env: &Env) -> u32 {
         let seconds = Self::get_config(env).match_timeout_seconds;
-        (seconds / SECONDS_PER_LEDGER) as u32
+        // Ceiling division: floor division here would underestimate the
+        // ledger delta required, allowing the timeout to trigger early.
+        ((seconds + SECONDS_PER_LEDGER - 1) / SECONDS_PER_LEDGER) as u32
     }
 
     /// Get the cached count of completed matches for a player (O(1) lookup).
