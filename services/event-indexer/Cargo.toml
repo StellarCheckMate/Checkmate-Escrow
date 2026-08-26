@@ -36,7 +36,7 @@ indexmap = "2"
 # Redis — shared TTL cache for API responses.
 # `connection-manager` gives us a cloneable, self-reconnecting multiplexed
 # connection so handlers never block on a connection pool.
-redis = { version = "0.25", default-features = false, features = [
+redis = { version = "1.6", default-features = false, features = [
     "tokio-comp",
     "connection-manager",
 ] }
