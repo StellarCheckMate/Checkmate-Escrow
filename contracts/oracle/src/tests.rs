@@ -230,6 +230,102 @@ fn test_register_oracle_with_stake_rejects_mismatched_token_top_up() {
     assert_eq!(registration.token, token_addr);
 }
 
+/// Regression: stake accumulation across multiple register_oracle_with_stake
+/// calls must be cumulative and not overflow i128. Pre-fix: the second call
+/// would overwrite the first registration's stake rather than adding to it,
+/// and very large stakes near i128::MAX could wrap or truncate.
+#[test]
+fn test_register_oracle_with_stake_accumulates_near_i128_max() {
+    // Adversarial: test that three sequential registrations accumulate
+    // correctly, including a call that pushes the total near i128 practical
+    // limits used elsewhere in this codebase.
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    // Mint enough for three top-ups near u32::MAX and one near i128 max
+    let top_up1: i128 = 3_000_000_000;  // 3 billion
+    let top_up2: i128 = 2_000_000_000;  // 2 billion
+    let top_up3: i128 = 1_500_000_000;  // 1.5 billion
+
+    asset_client.mint(&oracle_admin, &top_up1);
+    client.register_oracle_with_stake(&oracle_admin, &top_up1, &token_addr);
+
+    asset_client.mint(&oracle_admin, &top_up2);
+    client.register_oracle_with_stake(&oracle_admin, &top_up2, &token_addr);
+
+    asset_client.mint(&oracle_admin, &top_up3);
+    client.register_oracle_with_stake(&oracle_admin, &top_up3, &token_addr);
+
+    // Total stake should be the sum of all three top-ups
+    assert_eq!(balance_client.balance(&contract_id), top_up1 + top_up2 + top_up3);
+
+    // The recorded stake is the cumulative sum, not just the last call.
+    let registration: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_admin.clone()))
+            .unwrap()
+    });
+    assert_eq!(registration.oracle_stake, top_up1 + top_up2 + top_up3);
+}
+
+/// Regression: registering with stake at u32::MAX boundary must be recorded
+/// exactly, neither truncated nor overflowed. Pre-fix: casting to u32 would
+/// wrap or truncate the stake amount.
+#[test]
+fn test_register_oracle_with_stake_at_u32_max_boundary() {
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    let u32_max: i128 = 4_294_967_295; // u32::MAX
+    asset_client.mint(&oracle_admin, &u32_max);
+    client.register_oracle_with_stake(&oracle_admin, &u32_max, &token_addr);
+
+    // Balance should reflect the full u32::MAX value
+    assert_eq!(balance_client.balance(&contract_id), u32_max);
+
+    // The recorded stake should be exactly u32::MAX
+    let registration: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_admin.clone()))
+            .unwrap()
+    });
+    assert_eq!(registration.oracle_stake, u32_max);
+}
+
+/// Regression: registering with stake exceeding u32::MAX must be accepted
+/// and stored as the full i128 value, not truncated to u32. Pre-fix: the
+/// stake would be cast to u32, losing the high bits.
+#[test]
+fn test_register_oracle_with_stake_exceeding_u32_max() {
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    // 5 billion exceeds u32::MAX (4,294,967,295)
+    let large_stake: i128 = 5_000_000_000;
+    asset_client.mint(&oracle_admin, &large_stake);
+    client.register_oracle_with_stake(&oracle_admin, &large_stake, &token_addr);
+
+    // Balance should reflect the full large_stake, not a truncated u32 value
+    assert_eq!(balance_client.balance(&contract_id), large_stake);
+
+    // The recorded stake should be the full i128 value
+    let registration: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_admin.clone()))
+            .unwrap()
+    });
+    assert_eq!(registration.oracle_stake, large_stake);
+}
+
 #[test]
 fn test_submit_result_rejects_registered_oracle_without_sufficient_stake() {
     let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();

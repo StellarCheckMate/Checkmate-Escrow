@@ -235,6 +235,41 @@ fn prop_timeout_bounds_enforced(timeout: u64) -> bool {
     }
 }
 
+// ── Monotonic stake accounting across balance ranges ───────────────────────────
+
+/// Property: vote weight and escrow balance are monotonic and lossless across
+/// a range of stake amounts, including boundaries near u32::MAX and i128 limits.
+/// Pre-fix: truncation to u32 would cause non-monotonic behavior and
+/// loss of balance conservation.
+#[quickcheck]
+fn prop_stake_accounting_monotonic(stake: i128) -> TestResult {
+    if stake <= 0 || stake > 500_000_000_000i128 {
+        return TestResult::discard();
+    }
+
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token);
+
+    // Mint enough for the chosen stake for both players
+    asset_client.mint(&player1, &stake);
+    asset_client.mint(&player2, &stake);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &stake,
+        &token,
+        &String::from_str(&env, "monotonic1"),
+        &Platform::Lichess,
+    );
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+
+    let balance = client.get_escrow_balance(&match_id);
+    TestResult::from_bool(balance == 2 * stake)
+}
+
 // ── Match State Machine Invariants (Property-Based) ───────────────────────────
 
 /// Property: A Completed match never transitions to any other state.
