@@ -1832,7 +1832,26 @@ impl EscrowContract {
 
         let mut outcomes = Vec::new(&env);
         for (match_id, winner) in results.iter() {
-            let outcome = Self::settle_result(&env, match_id, winner);
+            // A match already settled (Completed/PendingResult) in a prior
+            // call means this oracle is re-confirming a result it already
+            // submitted. Surface that explicitly instead of letting it fall
+            // through to the generic InvalidState from settle_result.
+            let already_settled = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
+                .is_some_and(|m| {
+                    matches!(
+                        m.state,
+                        MatchState::Completed | MatchState::PendingResult
+                    )
+                });
+
+            let outcome = if already_settled {
+                Err(Error::OracleAlreadyConfirmed)
+            } else {
+                Self::settle_result(&env, match_id, winner)
+            };
             outcomes.push_back(outcome.err());
         }
         Ok(outcomes)
