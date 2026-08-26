@@ -2941,6 +2941,9 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::Admin, &proposal.pending_admin);
+        // Audited: PendingAdmin is removed here, so a second accept_admin()
+        // call has nothing to load (Error::Unauthorized) and cannot replay
+        // this proposal.
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("xfer")),
