@@ -1064,6 +1064,12 @@ impl EscrowContract {
     }
 
     /// Create a new match with multi-token support and conversion rates.
+    ///
+    /// `rate` is the token_b-per-token_a conversion rate, scaled by 1e7
+    /// (e.g. a 1:1 rate is `10_000_000`). It must be strictly positive —
+    /// `rate <= 0` (including `0`) is rejected with `Error::InvalidAmount`,
+    /// since a zero or negative rate would later cause a division-by-zero
+    /// or nonsensical payout when converting amounts in `claim_vested_payout`.
     pub fn create_match_with_conversion(
         env: Env,
         player1: Address,
