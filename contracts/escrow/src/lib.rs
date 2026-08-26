@@ -4304,8 +4304,10 @@ impl EscrowContract {
             .unwrap_or(0);
 
         let mut collected = 0u32;
+        let mut truncated = false;
         for match_id in 0..count {
             if collected >= MAX_UNBOUNDED_MATCH_RESULTS {
+                truncated = true;
                 break;
             }
             if let Some(m) = env
@@ -4318,6 +4320,15 @@ impl EscrowContract {
                     collected = collected.saturating_add(1);
                 }
             }
+        }
+
+        if truncated {
+            // Silent data loss otherwise: callers of the deprecated unbounded
+            // getters have no other signal that results were capped.
+            env.events().publish(
+                (Symbol::new(env, "match"), symbol_short!("truncated")),
+                (state, MAX_UNBOUNDED_MATCH_RESULTS),
+            );
         }
 
         Ok(matches)
