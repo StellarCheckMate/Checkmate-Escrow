@@ -751,6 +751,8 @@ impl EscrowContract {
     /// `tiers` must be ordered by `max_stake` ascending.  The last entry acts
     /// as the open-ended catch-all (set `max_stake = i128::MAX`).  Pass an
     /// empty `Vec` to clear the schedule and fall back to zero protocol fees.
+    /// Each tier's `fee_basis_points` must be in the range `0..=10_000`
+    /// (0% to 100%).
     pub fn set_fee_tiers(env: Env, tiers: soroban_sdk::Vec<FeeTier>) -> Result<(), Error> {
         extend_instance_ttl(&env);
         let admin: Address = env
@@ -765,6 +767,9 @@ impl EscrowContract {
         let mut prev_max: i128 = -1;
         for tier in tiers.iter() {
             if tier.max_stake <= prev_max {
+                return Err(Error::InvalidAmount);
+            }
+            if tier.fee_basis_points > 10_000 {
                 return Err(Error::InvalidAmount);
             }
             prev_max = tier.max_stake;
