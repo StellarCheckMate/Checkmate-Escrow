@@ -233,6 +233,14 @@ impl EscrowContract {
         if caller != admin {
             return Err(Error::Unauthorized);
         }
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if already_paused {
+            return Err(Error::InvalidPauseState);
+        }
         env.storage().instance().set(&DataKey::Paused, &true);
         env.events()
             .publish((Symbol::new(&env, "admin"), symbol_short!("paused")), ());
@@ -250,6 +258,14 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         if caller != admin {
             return Err(Error::Unauthorized);
+        }
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if !already_paused {
+            return Err(Error::InvalidPauseState);
         }
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events()
