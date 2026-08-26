@@ -2984,6 +2984,22 @@ impl EscrowContract {
         Ok(Self::escrow_balance_of(&m))
     }
 
+    /// Return `true` only if funds are currently held in escrow for this
+    /// match, i.e. it is funded AND not yet Completed or Cancelled.
+    ///
+    /// Unlike [`Self::is_funded`], this reflects the *current* balance state
+    /// rather than historical deposit flags.
+    pub fn is_currently_escrowed(env: Env, match_id: u64) -> Result<bool, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        let funded = m.player1_deposited && m.player2_deposited;
+        let terminal = matches!(m.state, MatchState::Completed | MatchState::Cancelled);
+        Ok(funded && !terminal)
+    }
+
     fn depositor_count(m: &Match) -> i128 {
         let mut count: i128 = 0;
         if m.player1_deposited {
