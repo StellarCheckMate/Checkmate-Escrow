@@ -1529,8 +1529,18 @@ impl EscrowContract {
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
             );
-            Self::add_active_match(&env, &m.player1, match_id)?;
-            Self::add_active_match(&env, &m.player2, match_id)?;
+            if let Err(e) = Self::add_active_match(&env, &m.player1, match_id) {
+                env.storage()
+                    .temporary()
+                    .remove(&DataKey::DepositInProgress(match_id));
+                return Err(e);
+            }
+            if let Err(e) = Self::add_active_match(&env, &m.player2, match_id) {
+                env.storage()
+                    .temporary()
+                    .remove(&DataKey::DepositInProgress(match_id));
+                return Err(e);
+            }
         } else {
             env.events().publish(
                 (Symbol::new(&env, "match"), symbol_short!("deposit")),
