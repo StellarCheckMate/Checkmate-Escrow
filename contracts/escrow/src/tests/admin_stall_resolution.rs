@@ -510,3 +510,45 @@ fn test_admin_resolve_stalled_match_match_not_found() {
     let result = client.try_admin_resolve_stalled_match(&999, &admin, &Winner::Draw);
     assert_eq!(result, Err(Ok(Error::MatchNotFound)));
 }
+
+#[test]
+fn test_admin_resolve_stalled_match_emits_cancelled_event() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "m9n8o7p6"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    advance_timestamp(&env, ADMIN_STALL_WINDOW_SECONDS + 1);
+
+    client.admin_resolve_stalled_match(&id, &admin, &Winner::Draw);
+
+    // The event-indexer watches for the standard "match/cancelled" topic to
+    // detect that a match has left the Active state; admin_resolve_stalled_match
+    // must publish it alongside its own "match/adm_stall" event.
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("cancelled").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(
+        matched.is_some(),
+        "admin_resolve_stalled_match must emit a match/cancelled event"
+    );
+
+    let (_, _, data) = matched.unwrap();
+    let ev_match_id: u64 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_match_id, id);
+}

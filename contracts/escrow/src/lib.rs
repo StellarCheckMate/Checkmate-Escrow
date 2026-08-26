@@ -2522,6 +2522,14 @@ impl EscrowContract {
             (match_id, resolution),
         );
 
+        // Also publish a match/cancelled event so the event-indexer picks up
+        // the terminal state transition out of Active (it only listens for
+        // the standard lifecycle events, not "adm_stall").
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("cancelled")),
+            match_id,
+        );
+
         Ok(())
     }
 
