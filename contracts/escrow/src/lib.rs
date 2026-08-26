@@ -466,6 +466,10 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
+        if issuer == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
+
         let already_registered: bool = env
             .storage()
             .instance()
