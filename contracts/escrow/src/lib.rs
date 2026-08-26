@@ -1643,7 +1643,6 @@ impl EscrowContract {
         Self::remove_active_match_indexed(env, &m.player2, match_id);
 
         m.state = MatchState::Completed;
-        m.completed_ledger = Some(env.ledger().sequence());
         m.winner = winner.clone();
         m.vested_at = Some(env.ledger().timestamp());
 
@@ -1663,7 +1662,16 @@ impl EscrowContract {
         let dispute_period = Self::get_dispute_period(env);
 
         if dispute_period == 0 {
-            // Immediate payout (no dispute period, but still subject to vesting)
+            // Immediate payout (no dispute period, but still subject to vesting).
+            // completed_ledger is stamped only here (not unconditionally above)
+            // because the delayed branch below leaves the match in
+            // PendingResult, not Completed, until finalize_match /
+            // resolve_dispute_by_vote actually performs the transition (both
+            // of which already stamp completed_ledger themselves).
+            m.completed_ledger = Some(env.ledger().sequence());
+            env.storage()
+                .persistent()
+                .set(&DataKey::Match(match_id), &m);
             Self::record_snapshot(env, &m, SnapshotReason::Completed);
             Self::record_player_snapshot(env, &m.player1);
             Self::record_player_snapshot(env, &m.player2);
