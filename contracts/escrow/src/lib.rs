@@ -3824,7 +3824,11 @@ impl EscrowContract {
             return Err(Error::DisputeAlreadyRaised);
         }
 
-        // Calculate and collect dispute bond
+        // Calculate and collect dispute bond. The bond is floored to a minimum
+        // of 1 stroop so that tiny stakes (e.g. 1 stroop at the default 100 bps)
+        // cannot round down to a zero-cost dispute, which would let an attacker
+        // spam the dispute system for free. Small matches stay disputable, they
+        // just pay the 1-stroop minimum.
         let bond_basis_points: u32 = env
             .storage()
             .instance()
@@ -3836,8 +3840,10 @@ impl EscrowContract {
             .checked_mul(bond_basis_points as i128)
             .ok_or(Error::Overflow)?
             .checked_div(10_000)
-            .ok_or(Error::Overflow)?;
+            .ok_or(Error::Overflow)?
+            .max(1);
 
+        // Defense in depth: never allow a zero (or negative) bond through.
         if dispute_bond <= 0 {
             return Err(Error::InsufficientBond);
         }

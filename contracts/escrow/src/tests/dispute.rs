@@ -20,10 +20,22 @@ fn create_funded_active_match(
     token: &Address,
     game_id: &str,
 ) -> u64 {
+    create_funded_active_match_with_stake(client, env, player1, player2, token, game_id, 100)
+}
+
+fn create_funded_active_match_with_stake(
+    client: &EscrowContractClient,
+    env: &Env,
+    player1: &Address,
+    player2: &Address,
+    token: &Address,
+    game_id: &str,
+    stake: i128,
+) -> u64 {
     let id = client.create_match(
         player1,
         player2,
-        &100,
+        &stake,
         token,
         &String::from_str(env, game_id),
         &Platform::Lichess,
@@ -804,6 +816,79 @@ fn test_dispute_requires_bond() {
 
     let dispute = client.get_dispute(&dispute_id);
     assert_eq!(dispute.dispute_bond, 1);
+}
+
+#[test]
+fn test_dispute_bond_minimum_one_for_tiny_stake() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    // Default dispute bond is 100 bps (1% of stake).
+    client.set_dispute_bond_basis_points(&100);
+
+    // Minimum-stake match: 1 stroop per side. 1 * 100 / 10_000 rounds down
+    // to 0, so the bond must be floored up to 1 stroop — a dispute is never
+    // free, even on the smallest possible match.
+    let match_id = create_funded_active_match_with_stake(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "tiny0001",
+        1,
+    );
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+
+    let initial_p2_balance = token_client.balance(&player2);
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "evidence"));
+
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.dispute_bond, 1, "bond must be floored to 1 stroop");
+
+    // Exactly 1 stroop was collected: no zero-cost disputes.
+    let after_bond_balance = token_client.balance(&player2);
+    assert_eq!(initial_p2_balance - after_bond_balance, 1);
+    assert_eq!(token_client.balance(&contract_id), 3); // 2 stake + 1 bond
+}
+
+#[test]
+fn test_dispute_bond_minimum_one_for_sub_unit_stake() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = TokenClient::new(&env, &token);
+
+    client.set_dispute_bond_basis_points(&100);
+
+    // 99 * 100 / 10_000 = 0.99 → floors to 0, must be floored up to 1.
+    let match_id = create_funded_active_match_with_stake(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "tiny0099",
+        99,
+    );
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+
+    let initial_p2_balance = token_client.balance(&player2);
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "evidence"));
+
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.dispute_bond, 1);
+
+    let after_bond_balance = token_client.balance(&player2);
+    assert_eq!(initial_p2_balance - after_bond_balance, 1);
 }
 
 #[test]
