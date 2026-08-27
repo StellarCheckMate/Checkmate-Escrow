@@ -729,3 +729,265 @@ fn chaos_oracle_cannot_submit_on_expired_match() {
         "submit_result on an expired/cancelled match must fail"
     );
 }
+
+// ── Scenario 13: Race between deposit and cancel_match ────────────────────────
+//
+// Soroban executes transactions sequentially, so there is no true concurrency,
+// but we can model the two important interleaving orderings:
+//
+//   Ordering A: cancel_match is called BEFORE player2's second deposit
+//               → match is cancelled; both deposits (if any) are refunded.
+//
+//   Ordering B: player2's deposit completes (activating the match) BEFORE
+//               cancel_match is attempted
+//               → match is Active; cancel_match must be rejected.
+//
+// In both cases the key invariant is: total player balances after the test
+// equal the initial balances (no funds created or destroyed).
+
+/// **Ordering A** — cancel_match wins the race: called after player1 deposits
+/// but before player2 deposits.
+///
+/// Invariant: balances are fully restored; match state is Cancelled.
+#[test]
+fn chaos_cancel_before_second_deposit_refunds_player1() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Capture initial balances.
+    let p1_initial = token_client.balance(&player1);
+    let p2_initial = token_client.balance(&player2);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &STAKE,
+        &token,
+        &SorobanString::from_str(&env, "race_a001"),
+        &Platform::Lichess,
+    );
+
+    // Player1 deposits.
+    client.deposit(&match_id, &player1);
+    assert_eq!(client.get_escrow_balance(&match_id), STAKE);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Pending);
+
+    // Cancel before player2 deposits (player1 exercises their right to cancel).
+    client.cancel_match(&match_id, &player1);
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Cancelled, "match must be Cancelled");
+    assert_eq!(
+        client.get_escrow_balance(&match_id),
+        0,
+        "escrow balance must be 0 after cancel"
+    );
+
+    // Player2 never deposited, so now attempting player2's deposit must fail.
+    let late_deposit = client.try_deposit(&match_id, &player2);
+    assert!(
+        late_deposit.is_err(),
+        "depositing into a Cancelled match must be rejected"
+    );
+
+    // Balance invariant: both players end up where they started.
+    assert_eq!(
+        token_client.balance(&player1),
+        p1_initial,
+        "player1 balance must be fully restored after cancel refund"
+    );
+    assert_eq!(
+        token_client.balance(&player2),
+        p2_initial,
+        "player2 balance is unchanged (never deposited)"
+    );
+}
+
+/// **Ordering A (variant)** — cancel_match called by player2 before their own
+/// deposit, after player1 deposited.
+///
+/// Invariant: balances fully restored; match Cancelled.
+#[test]
+fn chaos_player2_cancels_before_depositing_refunds_player1() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let p1_initial = token_client.balance(&player1);
+    let p2_initial = token_client.balance(&player2);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &STAKE,
+        &token,
+        &SorobanString::from_str(&env, "race_a002"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+
+    // Player2 cancels (without having deposited) to reclaim player1's funds.
+    client.cancel_match(&match_id, &player2);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Cancelled);
+    assert_eq!(client.get_escrow_balance(&match_id), 0);
+
+    assert_eq!(token_client.balance(&player1), p1_initial);
+    assert_eq!(token_client.balance(&player2), p2_initial);
+}
+
+/// **Ordering A (neither deposited)** — cancel_match called immediately after
+/// create_match, before either deposit.
+///
+/// Invariant: no funds moved; match Cancelled.
+#[test]
+fn chaos_cancel_before_any_deposit_no_funds_moved() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let p1_initial = token_client.balance(&player1);
+    let p2_initial = token_client.balance(&player2);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &STAKE,
+        &token,
+        &SorobanString::from_str(&env, "race_a003"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&match_id, &player1);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Cancelled);
+    assert_eq!(client.get_escrow_balance(&match_id), 0);
+
+    // No funds were ever in escrow, so balances are identical.
+    assert_eq!(token_client.balance(&player1), p1_initial);
+    assert_eq!(token_client.balance(&player2), p2_initial);
+}
+
+/// **Ordering B** — second deposit completes first, activating the match.
+/// Subsequent cancel_match must be rejected because the match is Active.
+///
+/// Invariant: match stays Active; 2×stake remains locked.
+#[test]
+fn chaos_second_deposit_activates_match_then_cancel_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &STAKE,
+        &token,
+        &SorobanString::from_str(&env, "race_b001"),
+        &Platform::Lichess,
+    );
+
+    // Both deposits complete — match becomes Active.
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Active);
+    assert_eq!(client.get_escrow_balance(&match_id), 2 * STAKE);
+
+    // Late cancel_match from player1 must be rejected.
+    let cancel_result = client.try_cancel_match(&match_id, &player1);
+    assert!(
+        cancel_result.is_err(),
+        "cancel_match on an Active match must be rejected"
+    );
+
+    // Late cancel_match from player2 must also be rejected.
+    let cancel_result2 = client.try_cancel_match(&match_id, &player2);
+    assert!(
+        cancel_result2.is_err(),
+        "cancel_match on an Active match must be rejected for player2 too"
+    );
+
+    // Match remains Active; funds still locked.
+    assert_eq!(client.get_match(&match_id).state, MatchState::Active);
+    assert_eq!(
+        client.get_escrow_balance(&match_id),
+        2 * STAKE,
+        "2×stake must remain locked after failed cancel attempts"
+    );
+
+    let _ = token_client; // suppress unused warning
+}
+
+/// **Ordering B — balance invariant after oracle finalizes.**
+/// After both deposits and a failed cancel, the oracle can still finalize.
+/// Total token supply must remain conserved throughout.
+#[test]
+fn chaos_deposit_cancel_race_balance_invariant_oracle_finalizes() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let token_client = soroban_sdk::token::Client::new(&env, &token);
+
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let total_supply_before = token_client.balance(&player1) + token_client.balance(&player2);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &STAKE,
+        &token,
+        &SorobanString::from_str(&env, "race_b002"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+
+    // Attempted cancel after activation fails — match remains Active.
+    let _ = client.try_cancel_match(&match_id, &player1);
+
+    // Oracle finalizes.
+    client.submit_result(&match_id, &Winner::Player2, &oracle);
+    client.claim_vested_payout(&match_id, &player2);
+
+    // Full supply must be conserved.
+    let total_supply_after = token_client.balance(&player1)
+        + token_client.balance(&player2)
+        + token_client.balance(&contract_id);
+
+    assert_eq!(
+        total_supply_after, total_supply_before,
+        "fund conservation violated after deposit/cancel race then oracle finalization"
+    );
+}
+
+/// **Duplicate cancel — second cancel_match after first is rejected.**
+/// Once a match is Cancelled, a subsequent cancel_match must fail.
+#[test]
+fn chaos_duplicate_cancel_match_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &STAKE,
+        &token,
+        &SorobanString::from_str(&env, "race_c001"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+    client.cancel_match(&match_id, &player1);
+
+    assert_eq!(client.get_match(&match_id).state, MatchState::Cancelled);
+
+    // Second cancel on already-Cancelled match must be rejected.
+    let result = client.try_cancel_match(&match_id, &player1);
+    assert!(
+        result.is_err(),
+        "second cancel_match on a Cancelled match must be rejected"
+    );
+}

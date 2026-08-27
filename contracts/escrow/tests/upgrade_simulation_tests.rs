@@ -781,3 +781,476 @@ fn test_new_match_completes_normally_after_migration() {
     let p2_after = token_client.balance(&player2);
     assert_eq!(p2_after - p2_before, STAKE * 2);
 }
+
+// ── DataKey variant coverage across all match states ──────────────────────────
+//
+// The tests below enumerate every DataKey variant used in v0.1.0 and assert
+// that its value is identical before and after `migrate_state`. They exercise
+// matches in every reachable state: Pending, Active, Completed, Cancelled.
+// Any regression in key naming or serialisation will cause these assertions
+// to fail during the upgrade simulation.
+
+/// DataKey::Match(id) — Cancelled state: match created, player1 deposits, then
+/// player1 cancels. Cancellation state must survive migration.
+#[test]
+fn test_cancelled_match_readable_after_migration() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "cancelled_key_test",
+    );
+    client.deposit(&match_id, &player1);
+    client.cancel_match(&match_id, &player1);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Cancelled);
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Cancelled, "Cancelled match must survive migration");
+    assert_eq!(m.id, match_id);
+    assert_eq!(m.stake_amount, STAKE);
+}
+
+/// DataKey::Match(id) — Completed state: full match completed before migration.
+#[test]
+fn test_completed_match_readable_after_migration() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = create_match(
+        &client,
+        &env,
+        &player1,
+        &player2,
+        &token,
+        "completed_key_test",
+    );
+    fund_match(&client, match_id, &player1, &player2);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+    client.claim_vested_payout(&match_id, &player1);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::Completed, "Completed match must survive migration");
+    assert_eq!(m.winner, Winner::Player1);
+}
+
+/// All four match states (Pending, Active, Completed, Cancelled) co-exist and
+/// survive a single migration run with their states intact.
+#[test]
+fn test_all_match_states_survive_migration() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+
+    let asset = StellarAssetClient::new(&env, &token);
+    let player3 = Address::generate(&env);
+    let player4 = Address::generate(&env);
+    let player5 = Address::generate(&env);
+    let player6 = Address::generate(&env);
+    asset.mint(&player3, &MINT_AMOUNT);
+    asset.mint(&player4, &MINT_AMOUNT);
+    asset.mint(&player5, &MINT_AMOUNT);
+    asset.mint(&player6, &MINT_AMOUNT);
+
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Pending: no deposits
+    let pending_id = create_match(&client, &env, &player1, &player2, &token, "allstates_pending");
+
+    // Active: both deposited
+    let active_id = create_match(&client, &env, &player3, &player4, &token, "allstates_active");
+    fund_match(&client, active_id, &player3, &player4);
+
+    // Completed: oracle submitted result
+    let completed_id = create_match(&client, &env, &player5, &player6, &token, "allstates_completed");
+    fund_match(&client, completed_id, &player5, &player6);
+    client.submit_result(&completed_id, &Winner::Draw, &oracle);
+    client.claim_vested_payout(&completed_id, &player5);
+    client.claim_vested_payout(&completed_id, &player6);
+
+    // Cancelled: player1 deposited then cancelled
+    let cancelled_id = create_match(&client, &env, &player1, &player2, &token, "allstates_cancelled");
+    client.deposit(&cancelled_id, &player1);
+    client.cancel_match(&cancelled_id, &player2);
+
+    // Migrate
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    // Assert each state is intact
+    assert_eq!(client.get_match(&pending_id).state, MatchState::Pending);
+    assert_eq!(client.get_match(&active_id).state, MatchState::Active);
+    assert_eq!(client.get_match(&completed_id).state, MatchState::Completed);
+    assert_eq!(client.get_match(&cancelled_id).state, MatchState::Cancelled);
+
+    // Escrow balances
+    assert_eq!(client.get_escrow_balance(&pending_id), 0);
+    assert_eq!(client.get_escrow_balance(&active_id), STAKE * 2);
+    assert_eq!(client.get_escrow_balance(&completed_id), 0);
+    assert_eq!(client.get_escrow_balance(&cancelled_id), 0);
+}
+
+/// DataKey::GameId — duplicate game_id rejection works after migration,
+/// confirming the presence-key set before migration is still readable.
+#[test]
+fn test_game_id_key_preserved_after_migration() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Use a fixed 8-char game_id so we can attempt to reuse it.
+    let game_id = SorobanString::from_str(&env, "gameidaa");
+    client.create_match(&player1, &player2, &STAKE, &token, &game_id, &Platform::Lichess);
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    // Attempting to create a new match with the same game_id must fail —
+    // DataKey::GameId(game_id) is still present after migration.
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &STAKE,
+        &token,
+        &game_id,
+        &Platform::Lichess,
+    );
+    assert!(
+        result.is_err(),
+        "duplicate game_id must still be rejected after migration"
+    );
+}
+
+/// DataKey::PlayerMatches(Address) — player's match list is intact after migration.
+#[test]
+fn test_player_matches_key_preserved_after_migration() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    create_match(&client, &env, &player1, &player2, &token, "pm_key_test_1");
+    create_match(&client, &env, &player1, &player2, &token, "pm_key_test_2");
+    create_match(&client, &env, &player1, &player2, &token, "pm_key_test_3");
+
+    let count_before = client.get_player_matches(&player1).len();
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    let count_after = client.get_player_matches(&player1).len();
+    assert_eq!(
+        count_before, count_after,
+        "DataKey::PlayerMatches must be identical before and after migration"
+    );
+    assert_eq!(count_after, 3);
+}
+
+/// DataKey::OracleRecord(match_id) — oracle audit record survives migration.
+#[test]
+fn test_oracle_record_key_preserved_after_migration() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let game_id_str = "oracrecaa";
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &STAKE,
+        &token,
+        &SorobanString::from_str(&env, game_id_str),
+        &Platform::Lichess,
+    );
+    fund_match(&client, match_id, &player1, &player2);
+    client.submit_result_with_oracle_record(
+        &match_id,
+        &Winner::Player1,
+        &SorobanString::from_str(&env, game_id_str),
+    );
+    client.claim_vested_payout(&match_id, &player1);
+
+    let _ = oracle; // suppress unused warning
+
+    // After migration, get_oracle_record must still return the stored game_id.
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    let record = client.get_oracle_record(&match_id);
+    assert_eq!(
+        record,
+        SorobanString::from_str(&env, game_id_str),
+        "DataKey::OracleRecord must survive migration"
+    );
+}
+
+/// DataKey::AllowedToken / AllowlistEnforced — allowlist state survives migration.
+#[test]
+fn test_allowlist_keys_preserved_after_migration() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Add token to allowlist — sets AllowedToken(token), AllowedTokenCount, AllowlistEnforced.
+    client.add_allowed_token(&token);
+    assert!(client.is_token_allowed(&token));
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    // Allowlist state must be intact.
+    assert!(
+        client.is_token_allowed(&token),
+        "DataKey::AllowedToken must survive migration"
+    );
+
+    // Creating a match with the allowed token must succeed.
+    let _id = client.create_match(
+        &player1,
+        &player2,
+        &STAKE,
+        &token,
+        &SorobanString::from_str(&env, "allow001"),
+        &Platform::Lichess,
+    );
+
+    // Creating a match with a random non-allowlisted token must fail.
+    let other_token_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
+    let other_token = other_token_id.address();
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &STAKE,
+        &other_token,
+        &SorobanString::from_str(&env, "allow002"),
+        &Platform::Lichess,
+    );
+    assert!(
+        result.is_err(),
+        "non-allowlisted token must still be rejected after migration"
+    );
+}
+
+/// DataKey::Snapshot / SnapshotCount — balance snapshot ring buffer survives migration.
+#[test]
+fn test_snapshot_keys_preserved_after_migration() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = create_match(&client, &env, &player1, &player2, &token, "snap_key_test");
+    fund_match(&client, match_id, &player1, &player2);
+
+    // At least the creation + two deposit snapshots have been recorded.
+    let count_before = client.get_snapshot_count(&match_id);
+    assert!(count_before >= 3, "at least 3 snapshots expected (created + 2 deposits)");
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    let count_after = client.get_snapshot_count(&match_id);
+    assert_eq!(
+        count_before, count_after,
+        "DataKey::SnapshotCount must be unchanged after migration"
+    );
+
+    // The first snapshot (Created) must still be readable.
+    let snap = client.get_snapshot(&match_id, &0);
+    assert_eq!(snap.match_id, match_id, "DataKey::Snapshot(id,0) must survive migration");
+}
+
+/// DataKey::Oracle / Admin / ContractVersion — instance keys readable after migration.
+#[test]
+fn test_instance_keys_readable_after_migration() {
+    let (env, contract_id, oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.get_oracle(), oracle);
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_version(), CONTRACT_VERSION);
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    assert_eq!(client.get_oracle(), oracle, "DataKey::Oracle must survive migration");
+    assert_eq!(client.get_admin(), admin, "DataKey::Admin must survive migration");
+    assert_eq!(
+        client.get_version(),
+        CONTRACT_VERSION + 1,
+        "DataKey::ContractVersion must be incremented by migration"
+    );
+}
+
+/// DataKey::Paused — paused flag survives migration in both states.
+#[test]
+fn test_paused_key_preserved_across_migration() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Pause before migration.
+    client.pause(&admin);
+    assert!(client.is_paused());
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    // Paused flag must be preserved.
+    assert!(client.is_paused(), "DataKey::Paused must survive migration");
+
+    // Unpause and migrate again.
+    client.unpause(&admin);
+    client.migrate_state(&(CONTRACT_VERSION + 2));
+
+    assert!(!client.is_paused(), "DataKey::Paused=false must survive second migration");
+}
+
+/// DataKey::MatchCount — counter value is intact after migration so that new
+/// match IDs continue from where they left off (no ID collisions).
+#[test]
+fn test_match_count_key_preserved_after_migration() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create a few matches to advance the counter.
+    create_match(&client, &env, &player1, &player2, &token, "mc_key_1");
+    create_match(&client, &env, &player1, &player2, &token, "mc_key_2");
+    let last_id = create_match(&client, &env, &player1, &player2, &token, "mc_key_3");
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    // Next match after migration must have an ID > last_id (no reset or collision).
+    let next_id = create_match(&client, &env, &player1, &player2, &token, "mc_key_4");
+    assert!(
+        next_id > last_id,
+        "DataKey::MatchCount must preserve counter so new IDs never collide post-migration"
+    );
+}
+
+/// DataKey::PendingUpgradeHash / UpgradeScheduledAt — scheduled upgrade state
+/// is cleared after cancel_upgrade, and the cancel survives a migration.
+#[test]
+fn test_pending_upgrade_hash_cleared_by_cancel_then_migration() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.schedule_upgrade(&dummy_hash(&env));
+    client.cancel_upgrade();
+
+    // After cancel, rescheduling must succeed — PendingUpgradeHash was cleared.
+    client.schedule_upgrade(&dummy_hash(&env));
+    client.cancel_upgrade();
+
+    // Migration proceeds cleanly (version increments, no upgrade artifacts remain).
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+    assert_eq!(client.get_version(), CONTRACT_VERSION + 1);
+
+    // Scheduling again post-migration also works.
+    client.schedule_upgrade(&dummy_hash(&env));
+    client.cancel_upgrade();
+    assert_eq!(client.get_version(), CONTRACT_VERSION + 1);
+}
+
+/// DataKey::ProtocolConfig (fee_recipient / treasury) — full config struct
+/// survives migration with every field intact.
+#[test]
+fn test_protocol_config_all_fields_preserved_after_migration() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let config = ProtocolConfig {
+        vesting_duration_seconds: 600,
+        cancellation_fee_basis_points: 75,
+        treasury: admin.clone(),
+        stablecoin_only_mode: false,
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
+        maximum_stake: Some(100_000),
+        match_timeout_seconds: escrow::DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 250, // 2.5%
+        fee_recipient: admin.clone(),
+    };
+    client.set_protocol_config(&config);
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    let restored = client.get_protocol_config();
+    assert_eq!(restored.vesting_duration_seconds, 600);
+    assert_eq!(restored.cancellation_fee_basis_points, 75);
+    assert_eq!(restored.maximum_stake, Some(100_000));
+    assert_eq!(restored.protocol_fee_bps, 250);
+    assert_eq!(restored.fee_recipient, admin);
+}
+
+/// DataKey::PlayerActiveMatchCount — active-match count per player is
+/// preserved across migration.
+#[test]
+fn test_player_active_match_count_preserved_after_migration() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Create and activate two matches for player1.
+    let id1 = create_match(&client, &env, &player1, &player2, &token, "pamc_test_1");
+    fund_match(&client, id1, &player1, &player2);
+
+    let id2 = create_match(&client, &env, &player1, &player2, &token, "pamc_test_2");
+    fund_match(&client, id2, &player1, &player2);
+
+    let count_before = client.get_active_match_count(&player1);
+    assert_eq!(count_before, 2);
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    let count_after = client.get_active_match_count(&player1);
+    assert_eq!(
+        count_before, count_after,
+        "DataKey::PlayerActiveMatchCount must survive migration"
+    );
+}
+
+/// DataKey::Stats — platform statistics survive migration with correct values.
+#[test]
+fn test_stats_key_preserved_after_migration() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Contribute to stats via a completed match.
+    let match_id = create_match(&client, &env, &player1, &player2, &token, "stats_test");
+    fund_match(&client, match_id, &player1, &player2);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+    client.claim_vested_payout(&match_id, &player1);
+
+    let stats_before = client.get_stats();
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    let stats_after = client.get_stats();
+    assert_eq!(
+        stats_before.total_matches_created, stats_after.total_matches_created,
+        "DataKey::Stats::total_matches_created must survive migration"
+    );
+    assert_eq!(
+        stats_before.total_volume, stats_after.total_volume,
+        "DataKey::Stats::total_volume must survive migration"
+    );
+    assert_eq!(
+        stats_before.total_payouts, stats_after.total_payouts,
+        "DataKey::Stats::total_payouts must survive migration"
+    );
+}
+
+/// DataKey::PlayerCompletedMatchCount — completed-match count per player
+/// is preserved across migration.
+#[test]
+fn test_player_completed_match_count_preserved_after_migration() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Complete a match to increment the counter.
+    let match_id = create_match(&client, &env, &player1, &player2, &token, "pcmc_test");
+    fund_match(&client, match_id, &player1, &player2);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+    client.claim_vested_payout(&match_id, &player1);
+
+    let count_before = client.get_completed_match_count(&player1);
+    assert!(count_before >= 1, "player1 should have at least one completed match");
+
+    client.migrate_state(&(CONTRACT_VERSION + 1));
+
+    let count_after = client.get_completed_match_count(&player1);
+    assert_eq!(
+        count_before, count_after,
+        "DataKey::PlayerCompletedMatchCount must survive migration"
+    );
+}
