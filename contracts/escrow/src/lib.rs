@@ -233,6 +233,14 @@ impl EscrowContract {
         if caller != admin {
             return Err(Error::Unauthorized);
         }
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if already_paused {
+            return Err(Error::InvalidPauseState);
+        }
         env.storage().instance().set(&DataKey::Paused, &true);
         env.events()
             .publish((Symbol::new(&env, "admin"), symbol_short!("paused")), ());
@@ -250,6 +258,14 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         if caller != admin {
             return Err(Error::Unauthorized);
+        }
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if !already_paused {
+            return Err(Error::InvalidPauseState);
         }
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events()
@@ -1859,7 +1875,26 @@ impl EscrowContract {
 
         let mut outcomes = Vec::new(&env);
         for (match_id, winner) in results.iter() {
-            let outcome = Self::settle_result(&env, match_id, winner);
+            // A match already settled (Completed/PendingResult) in a prior
+            // call means this oracle is re-confirming a result it already
+            // submitted. Surface that explicitly instead of letting it fall
+            // through to the generic InvalidState from settle_result.
+            let already_settled = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
+                .is_some_and(|m| {
+                    matches!(
+                        m.state,
+                        MatchState::Completed | MatchState::PendingResult
+                    )
+                });
+
+            let outcome = if already_settled {
+                Err(Error::OracleAlreadyConfirmed)
+            } else {
+                Self::settle_result(&env, match_id, winner)
+            };
             outcomes.push_back(outcome.err());
         }
         Ok(outcomes)
@@ -2703,7 +2738,9 @@ impl EscrowContract {
     /// (which compares against ledger-sequence deltas).
     fn current_match_timeout(env: &Env) -> u32 {
         let seconds = Self::get_config(env).match_timeout_seconds;
-        (seconds / SECONDS_PER_LEDGER) as u32
+        // Ceiling division: floor division here would underestimate the
+        // ledger delta required, allowing the timeout to trigger early.
+        ((seconds + SECONDS_PER_LEDGER - 1) / SECONDS_PER_LEDGER) as u32
     }
 
     /// Get the cached count of completed matches for a player (O(1) lookup).
@@ -4337,8 +4374,10 @@ impl EscrowContract {
             .unwrap_or(0);
 
         let mut collected = 0u32;
+        let mut truncated = false;
         for match_id in 0..count {
             if collected >= MAX_UNBOUNDED_MATCH_RESULTS {
+                truncated = true;
                 break;
             }
             if let Some(m) = env
@@ -4351,6 +4390,15 @@ impl EscrowContract {
                     collected = collected.saturating_add(1);
                 }
             }
+        }
+
+        if truncated {
+            // Silent data loss otherwise: callers of the deprecated unbounded
+            // getters have no other signal that results were capped.
+            env.events().publish(
+                (Symbol::new(env, "match"), symbol_short!("truncated")),
+                (state, MAX_UNBOUNDED_MATCH_RESULTS),
+            );
         }
 
         Ok(matches)

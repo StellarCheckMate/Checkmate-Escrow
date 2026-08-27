@@ -97,6 +97,44 @@ fn test_submit_result_batch_partial_failure() {
 }
 
 #[test]
+fn test_submit_result_batch_already_confirmed_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_a = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "a1b2c3d4"),
+        &Platform::Lichess,
+    );
+    client.deposit(&match_a, &player1);
+    client.deposit(&match_a, &player2);
+
+    let oracle = client.get_oracle();
+
+    // First submission settles the match.
+    let first = client.submit_result_batch(
+        &soroban_sdk::vec![&env, (match_a, Winner::Player1)],
+        &oracle,
+    );
+    assert_eq!(first.get(0).unwrap(), None);
+    assert_eq!(client.get_match(&match_a).state, MatchState::Completed);
+
+    // Re-submitting a result for the same (already-settled) match must be
+    // reported as OracleAlreadyConfirmed rather than a generic InvalidState.
+    let second = client.submit_result_batch(
+        &soroban_sdk::vec![&env, (match_a, Winner::Player1)],
+        &oracle,
+    );
+    assert_eq!(
+        second.get(0).unwrap(),
+        Some(Error::OracleAlreadyConfirmed)
+    );
+}
+
+#[test]
 fn test_submit_result_batch_empty() {
     let (env, contract_id, _oracle, ..) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);

@@ -2525,6 +2525,53 @@ fn test_expire_match_before_and_after_timeout() {
     );
 }
 
+/// Regression test for the ledger-conversion off-by-one: `match_timeout_seconds`
+/// that does not divide evenly by `SECONDS_PER_LEDGER` (5) must round the
+/// ledger timeout UP, not down, or `expire_match` becomes callable one ledger
+/// too early.
+#[test]
+fn test_expire_match_timeout_ceiling_division_boundary() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // 86_403 seconds / 5 = 17_280.6 -> floor = 17_280 ledgers, ceil = 17_281.
+    client.set_match_timeout(&(MIN_MATCH_TIMEOUT_SECONDS + 3));
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "e1c204ab"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+
+    env.deployer().extend_ttl_for_contract_instance(
+        contract_id.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+    // At the floor boundary (17_280 ledgers elapsed) the match must NOT be
+    // expired yet — this is exactly the case the old floor-division bug got wrong.
+    env.ledger().set_sequence_number(100 + 17_280);
+    let floor_boundary_result = client.try_expire_match(&id);
+    assert_eq!(
+        floor_boundary_result,
+        Err(Ok(Error::MatchNotExpired)),
+        "expire_match must not succeed at the floor-division boundary"
+    );
+
+    // One ledger later (the true ceiling boundary), it must succeed.
+    env.ledger().set_sequence_number(100 + 17_281);
+    client.expire_match(&id);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+}
+
 // #1176 — cancel_match must be rejected once both players have deposited (Active state)
 #[test]
 fn test_cancel_match_rejects_when_active() {

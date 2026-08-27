@@ -88,6 +88,66 @@ fn test_player_match_pagination_zero_limit_and_offset_beyond_end() {
     assert_eq!(partial_page.get(1).unwrap(), match_ids[9]);
 }
 
+/// Regression test: the deprecated unbounded `get_pending_matches()` must cap
+/// its result at `MAX_UNBOUNDED_MATCH_RESULTS` and emit a truncation event so
+/// callers have a signal that results were silently capped, instead of
+/// looking like a complete result set.
+#[test]
+fn test_get_pending_matches_emits_truncation_event_when_capped() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Seed one real match to get a well-formed template, then clone it
+    // directly into storage well past the cap — far cheaper than driving
+    // `create_match` MAX_UNBOUNDED_MATCH_RESULTS+ times.
+    let template_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "5f6a7b8c"),
+        &Platform::Lichess,
+    );
+
+    let total: u64 = 10_005;
+    env.as_contract(&contract_id, || {
+        let template: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(template_id))
+            .unwrap();
+
+        for id in 0..total {
+            let mut m = template.clone();
+            m.id = id;
+            m.state = MatchState::Pending;
+            env.storage().persistent().set(&DataKey::Match(id), &m);
+        }
+        env.storage().instance().set(&DataKey::MatchCount, &total);
+    });
+
+    let results = client.get_pending_matches();
+    assert_eq!(
+        results.len(),
+        10_000,
+        "unbounded getter must cap at MAX_UNBOUNDED_MATCH_RESULTS"
+    );
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        symbol_short!("truncated").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(
+        matched.is_some(),
+        "truncation must emit a match/truncated event"
+    );
+}
+
 /// Test #579: player history index excludes unrelated matches for other players
 #[test]
 fn test_player_history_index_excludes_unrelated_matches() {
