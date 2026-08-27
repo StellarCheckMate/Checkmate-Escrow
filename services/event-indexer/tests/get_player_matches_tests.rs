@@ -31,7 +31,7 @@ fn app() -> axum::Router {
     );
     let cache = Arc::new(RwLock::new(EventCache::new(16)));
     let rpc = Arc::new(SorobanRpcClient::new("http://127.0.0.1:1").unwrap());
-    build_router(db, cache, rpc, Arc::new(ApiCache::disabled()))
+    build_router(db, cache, rpc, Arc::new(ApiCache::disabled()), None)
 }
 
 /// Issue a GET request to the player matches endpoint and return status and response body.

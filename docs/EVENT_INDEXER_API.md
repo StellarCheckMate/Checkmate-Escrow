@@ -41,6 +41,37 @@ REST API (Axum)
 | `EVENT_INDEXER_CACHE_SIZE` | `10000` | Maximum cache entries |
 | `EVENT_INDEXER_POLL_INTERVAL` | `5` | Event polling interval in seconds |
 | `REDIS_URL` | unset | Redis DSN for the shared response cache (`redis://…` or `rediss://…`). When unset, a process-local cache with the same TTLs is used |
+| `EVENT_INDEXER_API_KEY` | *(fail closed)* | Shared secret gating the admin-like endpoints; see [Authentication](#authentication). Without it those endpoints refuse every request with `401` |
+
+## Authentication
+
+Three endpoint groups expose sensitive financial data or expensive
+whole-table aggregates and are gated by a shared secret:
+
+- `GET /stats`
+- `GET /analytics/*`
+- `GET /transactions/player/*`
+
+Clients present the secret configured via `EVENT_INDEXER_API_KEY` in the
+`X-Api-Key` header:
+
+```bash
+curl -H "X-Api-Key: $EVENT_INDEXER_API_KEY" "http://localhost:8080/stats"
+```
+
+Behaviour:
+
+- **Fail closed**: if `EVENT_INDEXER_API_KEY` is not set, protected endpoints
+  refuse **every** request with `401` rather than leak sensitive balance data.
+  Operators see a warning in the startup log until a key is configured.
+- A missing or wrong header is rejected with `401` and a
+  `WWW-Authenticate: ApiKey` challenge.
+- Keys must be at least 16 characters (`openssl rand -hex 32` is suggested).
+- The header is compared in constant time, so response timing cannot be used
+  to guess the key.
+- All other endpoints (`/health`, `/events`, `/matches`, `/match/:id`,
+  `/players/:address/matches`, `/api/docs`, `/api/openapi.yaml`) stay public
+  so the frontend and websocket-server can consume them without credentials.
 
 ## API Endpoints
 
@@ -270,8 +301,11 @@ curl "http://localhost:8080/match/1"
 
 **Example Request:**
 ```bash
-curl "http://localhost:8080/stats"
+curl -H "X-Api-Key: $EVENT_INDEXER_API_KEY" "http://localhost:8080/stats"
 ```
+
+**Authentication:** requires a valid `X-Api-Key` header (see
+[Authentication](#authentication)).
 
 **Response:**
 ```json
@@ -320,8 +354,11 @@ fees. Lifecycle-only events (`match:created`, `match:paused`, …) are excluded.
 
 **Example Request:**
 ```bash
-curl "http://localhost:8080/transactions/player/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN?type=payout&from_date=2026-01-01&limit=50"
+curl -H "X-Api-Key: $EVENT_INDEXER_API_KEY" "http://localhost:8080/transactions/player/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN?type=payout&from_date=2026-01-01&limit=50"
 ```
+
+**Authentication:** requires a valid `X-Api-Key` header (see
+[Authentication](#authentication)).
 
 **Response:**
 ```json
@@ -502,7 +539,7 @@ Until rate limiting is enabled, operators deploying this service publicly should
 1. **Input Validation**: All query parameters are validated before database queries
 2. **SQL Injection Prevention**: Using parameterized queries with rusqlite
 3. **CORS**: Disabled by default (enable via `tower-http` if needed)
-4. **Authentication**: Add API key validation layer if needed
+4. **Authentication**: The admin-like endpoints (`/stats`, `/analytics/*`, `/transactions/*`) require an `X-Api-Key` header backed by `EVENT_INDEXER_API_KEY`, and fail closed when no key is configured (see [Authentication](#authentication))
 
 ## Deployment
 

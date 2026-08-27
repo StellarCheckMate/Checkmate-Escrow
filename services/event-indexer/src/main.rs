@@ -4,7 +4,7 @@ use anyhow::Result;
 use config::Config;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,6 +25,20 @@ async fn main() -> Result<()> {
         "Event Indexer starting — instance_id={}",
         config.instance_id
     );
+
+    // The admin-like endpoints (analytics, transaction history, stats) are
+    // gated by a shared secret.  Fail closed: without a configured key they
+    // answer 401 rather than leak sensitive balance data.
+    match config.api_key.as_deref() {
+        Some(_) => info!(
+            "Admin-like endpoints (/analytics/*, /transactions/*, /stats) require an X-Api-Key header"
+        ),
+        None => warn!(
+            "EVENT_INDEXER_API_KEY is not set — admin-like endpoints \
+             (/analytics/*, /transactions/*, /stats) are refusing all requests \
+             with 401 until a key is configured"
+        ),
+    }
 
     // ── PostgreSQL pools ──────────────────────────────────────────────────
     let database = Arc::new(db::Database::from_dsns(
@@ -68,9 +82,18 @@ async fn main() -> Result<()> {
         let response_cache = response_cache.clone();
         let bind_addr = config.bind_addr.clone();
         let bind_port = config.bind_port;
+        let api_key = config.api_key.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                api::start_server(&bind_addr, bind_port, db, cache, rpc, response_cache).await
+            if let Err(e) = api::start_server(
+                &bind_addr,
+                bind_port,
+                db,
+                cache,
+                rpc,
+                response_cache,
+                api_key,
+            )
+            .await
             {
                 error!("API server error: {}", e);
             }

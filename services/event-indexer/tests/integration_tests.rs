@@ -413,6 +413,7 @@ use axum::body::to_bytes;
 use axum::http::{Request, StatusCode};
 use event_indexer::api::{build_router, ApiResponse};
 use event_indexer::api_cache::ApiCache;
+use event_indexer::auth::API_KEY_HEADER;
 use tower::ServiceExt;
 
 /// Checksum-valid account addresses. The validation middleware verifies the
@@ -421,6 +422,11 @@ use tower::ServiceExt;
 const PLAYER_X: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 const PLAYER_Y: &str = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
 const OTHER_PLAYER: &str = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
+
+/// Shared secret configured on the test router.  The analytics endpoints
+/// (`/analytics/*`) are gated by the API-key middleware, so requests to them
+/// carry it in the header.
+const TEST_API_KEY: &str = "test-api-key-0123456789abcdef";
 
 /// Response caching is exercised in `api_cache_tests.rs`; the shape tests here
 /// use a disabled cache so every request reaches the database.
@@ -451,7 +457,7 @@ async fn api_unknown_status_returns_400() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc, no_cache());
+    let app = build_router(db, cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
 
     for uri in ["/events?status=bogus", "/matches?status=bogus"] {
         let response = app
@@ -509,7 +515,7 @@ async fn api_get_events_by_player_returns_correct_subset() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db.clone(), cache, rpc, no_cache());
+    let app = build_router(db.clone(), cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
 
     let response = app
         .oneshot(
@@ -554,7 +560,7 @@ async fn api_match_info_not_found_returns_404() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc, no_cache());
+    let app = build_router(db, cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
 
     let response = app
         .oneshot(
@@ -865,12 +871,13 @@ async fn analytics_overview_returns_200_with_correct_shape() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc, no_cache());
+    let app = build_router(db, cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
 
     let response = app
         .oneshot(
             Request::builder()
                 .uri("/analytics/overview")
+                .header(API_KEY_HEADER, TEST_API_KEY)
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -905,12 +912,13 @@ async fn analytics_overview_accepts_time_range_params() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc, no_cache());
+    let app = build_router(db, cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
 
     let response = app
         .oneshot(
             Request::builder()
                 .uri("/analytics/overview?start_date=2025-01-01T00:00:00Z&end_date=2026-12-31T23:59:59Z")
+                .header(API_KEY_HEADER, TEST_API_KEY)
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -938,12 +946,13 @@ async fn analytics_player_returns_200_with_correct_shape() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc, no_cache());
+    let app = build_router(db, cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
 
     let response = app
         .oneshot(
             Request::builder()
                 .uri("/analytics/player/GABC1234XYZ")
+                .header(API_KEY_HEADER, TEST_API_KEY)
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -982,12 +991,13 @@ async fn analytics_player_accepts_pagination_params() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc, no_cache());
+    let app = build_router(db, cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
 
     let response = app
         .oneshot(
             Request::builder()
                 .uri("/analytics/player/GABC?limit=10&offset=0")
+                .header(API_KEY_HEADER, TEST_API_KEY)
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1011,12 +1021,13 @@ async fn analytics_token_returns_200_with_correct_shape() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc, no_cache());
+    let app = build_router(db, cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
 
     let response = app
         .oneshot(
             Request::builder()
                 .uri("/analytics/token/USDC_TOKEN_ADDRESS")
+                .header(API_KEY_HEADER, TEST_API_KEY)
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1052,12 +1063,13 @@ async fn analytics_token_accepts_pagination_and_time_range() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db, cache, rpc, no_cache());
+    let app = build_router(db, cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
 
     let response = app
         .oneshot(
             Request::builder()
                 .uri("/analytics/token/XLM_ADDRESS?limit=20&offset=0&start_date=2025-01-01T00:00:00Z")
+                .header(API_KEY_HEADER, TEST_API_KEY)
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

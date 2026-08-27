@@ -37,6 +37,7 @@ use tracing::info;
 
 use crate::{
     api_cache::{self, ApiCache},
+    auth,
     cache::EventCache,
     db::Database,
     models::{
@@ -61,6 +62,10 @@ pub struct AppState {
     pub rpc: Arc<SorobanRpcClient>,
     /// Shared TTL response cache (Redis, or process-local when unconfigured).
     pub api_cache: Arc<ApiCache>,
+    /// Shared secret guarding the admin-like endpoints (`/analytics/*`,
+    /// `/transactions/*`, `/stats`).  `None` fails closed: those endpoints
+    /// answer `401` until an operator configures `EVENT_INDEXER_API_KEY`.
+    pub api_key: Option<String>,
 }
 
 // ── Response envelope ─────────────────────────────────────────────────────────
@@ -244,12 +249,14 @@ pub fn build_router(
     cache: Arc<RwLock<EventCache>>,
     rpc: Arc<SorobanRpcClient>,
     api_cache: Arc<ApiCache>,
+    api_key: Option<String>,
 ) -> Router {
     let state = AppState {
         db,
         cache,
         rpc,
         api_cache,
+        api_key,
     };
     Router::new()
         .route("/health", get(health_check))
@@ -271,13 +278,23 @@ pub fn build_router(
         .route("/analytics/player/:player_address", get(analytics_player))
         .route("/analytics/token/:token_address", get(analytics_token))
         .route("/stats", get(get_stats))
-        // Request ID middleware must run first (outermost) to capture all requests
+        // Layers wrap the router built so far, so the last `.layer()` call is
+        // the outermost.  Order here: logging → auth → validation → request id.
+        // Request ID is innermost so every other layer can attach it to logs.
         .layer(axum::middleware::from_fn(request_id::request_id_middleware))
         // Validation runs before routing dispatches to a handler, so malformed
         // input never reaches the database.
         .layer(axum::middleware::from_fn(validation::validate_request))
+        // API-key gate for the admin-like endpoints.  Runs *before* validation
+        // so unauthenticated callers are rejected without revealing whether
+        // their input was well-formed.  Fail-closed when no key is configured.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_api_key,
+        ))
         // Outermost layer: logs every request, including ones rejected by
-        // validation above, with the status and latency the caller observed.
+        // validation and auth above, with the status and latency the caller
+        // observed.
         .layer(axum::middleware::from_fn(request_logging_middleware))
         .with_state(state)
 }
@@ -289,8 +306,9 @@ pub async fn start_server(
     cache: Arc<RwLock<EventCache>>,
     rpc: Arc<SorobanRpcClient>,
     api_cache: Arc<ApiCache>,
+    api_key: Option<String>,
 ) -> anyhow::Result<()> {
-    let app = build_router(db, cache, rpc, api_cache);
+    let app = build_router(db, cache, rpc, api_cache, api_key);
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", bind_addr, bind_port)).await?;
 

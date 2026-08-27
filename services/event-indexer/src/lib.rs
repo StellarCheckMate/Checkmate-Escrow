@@ -1,5 +1,6 @@
 pub mod api;
 pub mod api_cache;
+pub mod auth;
 pub mod cache;
 pub mod config;
 pub mod db;
