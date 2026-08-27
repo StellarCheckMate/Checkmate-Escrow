@@ -1938,6 +1938,36 @@ fn test_is_funded_returns_true_after_payout() {
 }
 
 #[test]
+fn test_is_currently_escrowed_false_for_completed_match() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "e5f6a7b8"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert!(client.is_currently_escrowed(&id));
+
+    client.submit_result(&id, &Winner::Player1, &oracle);
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+
+    // is_funded stays true (historical deposit flags), but
+    // is_currently_escrowed reflects that funds are no longer held.
+    assert!(client.is_funded(&id));
+    assert!(
+        !client.is_currently_escrowed(&id),
+        "is_currently_escrowed must be false once a match is Completed"
+    );
+}
+
+#[test]
 fn test_get_escrow_balance_zero_for_completed_match() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);

@@ -85,6 +85,26 @@ fn test_set_fee_tiers_rejects_duplicate_max_stake() {
 }
 
 #[test]
+fn test_set_fee_tiers_rejects_fee_basis_points_over_10000() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // 10_001 bps (> 100%) must be rejected — a tier fee can never exceed
+    // the total pot.
+    let t = tiers_vec(&env, &[(i128::MAX, 10_001)]);
+    let result = client.try_set_fee_tiers(&t);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidAmount)),
+        "fee_basis_points > 10_000 must be rejected"
+    );
+
+    // Exactly 10_000 bps (100%) is the allowed boundary.
+    let t_ok = tiers_vec(&env, &[(i128::MAX, 10_000)]);
+    assert!(client.try_set_fee_tiers(&t_ok).is_ok());
+}
+
+#[test]
 fn test_set_fee_tiers_empty_clears_schedule() {
     let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);

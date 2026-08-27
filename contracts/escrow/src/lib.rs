@@ -755,6 +755,8 @@ impl EscrowContract {
     /// `tiers` must be ordered by `max_stake` ascending.  The last entry acts
     /// as the open-ended catch-all (set `max_stake = i128::MAX`).  Pass an
     /// empty `Vec` to clear the schedule and fall back to zero protocol fees.
+    /// Each tier's `fee_basis_points` must be in the range `0..=10_000`
+    /// (0% to 100%).
     pub fn set_fee_tiers(env: Env, tiers: soroban_sdk::Vec<FeeTier>) -> Result<(), Error> {
         extend_instance_ttl(&env);
         let admin: Address = env
@@ -769,6 +771,9 @@ impl EscrowContract {
         let mut prev_max: i128 = -1;
         for tier in tiers.iter() {
             if tier.max_stake <= prev_max {
+                return Err(Error::InvalidAmount);
+            }
+            if tier.fee_basis_points > 10_000 {
                 return Err(Error::InvalidAmount);
             }
             prev_max = tier.max_stake;
@@ -2544,6 +2549,14 @@ impl EscrowContract {
             (match_id, resolution),
         );
 
+        // Also publish a match/cancelled event so the event-indexer picks up
+        // the terminal state transition out of Active (it only listens for
+        // the standard lifecycle events, not "adm_stall").
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("cancelled")),
+            match_id,
+        );
+
         Ok(())
     }
 
@@ -3007,6 +3020,22 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
         Ok(Self::escrow_balance_of(&m))
+    }
+
+    /// Return `true` only if funds are currently held in escrow for this
+    /// match, i.e. it is funded AND not yet Completed or Cancelled.
+    ///
+    /// Unlike [`Self::is_funded`], this reflects the *current* balance state
+    /// rather than historical deposit flags.
+    pub fn is_currently_escrowed(env: Env, match_id: u64) -> Result<bool, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        let funded = m.player1_deposited && m.player2_deposited;
+        let terminal = matches!(m.state, MatchState::Completed | MatchState::Cancelled);
+        Ok(funded && !terminal)
     }
 
     fn depositor_count(m: &Match) -> i128 {
