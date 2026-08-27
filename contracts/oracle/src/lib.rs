@@ -236,6 +236,7 @@ impl OracleContract {
         platform: Platform,
         result: Winner,
         response_time_ms: u64,
+        confidence: Option<u8>,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
         // Check if contract is paused first
@@ -284,6 +285,7 @@ impl OracleContract {
                 result: result.clone(),
                 submitted_ledger: env.ledger().sequence(),
                 submitter: admin.clone(),
+                confidence: confidence.clone(),
             },
         );
         env.storage().persistent().extend_ttl(
@@ -397,6 +399,7 @@ impl OracleContract {
                     result: entry.result.clone(),
                     submitted_ledger: current_ledger,
                     submitter: admin.clone(),
+                    confidence: entry.confidence.clone(),
                 },
             );
             env.storage().persistent().extend_ttl(

@@ -28,6 +28,8 @@ pub struct ResultEntry {
     pub submitted_ledger: u32,
     /// Address of the admin who submitted this result.
     pub submitter: Address,
+    /// Optional confidence score (0-100) indicating result certainty.
+    pub confidence: Option<u8>,
 }
 
 /// A single entry in a batch result submission.
@@ -38,6 +40,8 @@ pub struct BatchResultEntry {
     pub game_id: String,
     pub platform: Platform,
     pub result: Winner,
+    /// Optional confidence score (0-100) indicating result certainty.
+    pub confidence: Option<u8>,
 }
 
 #[contracttype]
