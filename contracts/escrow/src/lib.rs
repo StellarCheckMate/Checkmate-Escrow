@@ -466,6 +466,10 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
+        if issuer == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
+
         let already_registered: bool = env
             .storage()
             .instance()
@@ -1529,8 +1533,18 @@ impl EscrowContract {
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
             );
-            Self::add_active_match(&env, &m.player1, match_id)?;
-            Self::add_active_match(&env, &m.player2, match_id)?;
+            if let Err(e) = Self::add_active_match(&env, &m.player1, match_id) {
+                env.storage()
+                    .temporary()
+                    .remove(&DataKey::DepositInProgress(match_id));
+                return Err(e);
+            }
+            if let Err(e) = Self::add_active_match(&env, &m.player2, match_id) {
+                env.storage()
+                    .temporary()
+                    .remove(&DataKey::DepositInProgress(match_id));
+                return Err(e);
+            }
         } else {
             env.events().publish(
                 (Symbol::new(&env, "match"), symbol_short!("deposit")),
@@ -1633,7 +1647,6 @@ impl EscrowContract {
         Self::remove_active_match_indexed(env, &m.player2, match_id);
 
         m.state = MatchState::Completed;
-        m.completed_ledger = Some(env.ledger().sequence());
         m.winner = winner.clone();
         m.vested_at = Some(env.ledger().timestamp());
 
@@ -1653,7 +1666,16 @@ impl EscrowContract {
         let dispute_period = Self::get_dispute_period(env);
 
         if dispute_period == 0 {
-            // Immediate payout (no dispute period, but still subject to vesting)
+            // Immediate payout (no dispute period, but still subject to vesting).
+            // completed_ledger is stamped only here (not unconditionally above)
+            // because the delayed branch below leaves the match in
+            // PendingResult, not Completed, until finalize_match /
+            // resolve_dispute_by_vote actually performs the transition (both
+            // of which already stamp completed_ledger themselves).
+            m.completed_ledger = Some(env.ledger().sequence());
+            env.storage()
+                .persistent()
+                .set(&DataKey::Match(match_id), &m);
             Self::record_snapshot(env, &m, SnapshotReason::Completed);
             Self::record_player_snapshot(env, &m.player1);
             Self::record_player_snapshot(env, &m.player2);
@@ -2919,6 +2941,9 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::Admin, &proposal.pending_admin);
+        // Audited: PendingAdmin is removed here, so a second accept_admin()
+        // call has nothing to load (Error::Unauthorized) and cannot replay
+        // this proposal.
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("xfer")),
