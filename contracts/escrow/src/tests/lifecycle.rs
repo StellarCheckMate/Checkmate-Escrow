@@ -2372,6 +2372,37 @@ fn test_double_deposit_rejected() {
     assert_eq!(result, Err(Ok(Error::AlreadyFunded)));
 }
 
+// #1306 — deposit must reject re-deposit attempts once a match is already
+// fully funded (both players deposited, match Active), for either player,
+// with the specific `AlreadyFunded` error rather than a generic one.
+#[test]
+fn test_redeposit_on_fully_funded_active_match_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "redeposit_active"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Active);
+
+    let result_p1 = client.try_deposit(&match_id, &player1);
+    assert_eq!(result_p1, Err(Ok(Error::AlreadyFunded)));
+
+    let result_p2 = client.try_deposit(&match_id, &player2);
+    assert_eq!(result_p2, Err(Ok(Error::AlreadyFunded)));
+
+    // No double-counting: escrow still holds exactly one stake per player.
+    assert_eq!(client.get_escrow_balance(&match_id), 200);
+}
+
 // ── Issue #900: combined before/after timeout test ───────────────────────────
 
 /// Verifies that `expire_match` fails before the timeout elapses and succeeds

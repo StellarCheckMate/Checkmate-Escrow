@@ -1471,6 +1471,18 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
+        // Explicit "already fully funded" guard, independent of `state`: even
+        // if some future code path left `state` as `Pending` while both
+        // deposits had already landed, this still closes the door on a
+        // double-count. Checked before the state check so the caller gets
+        // the more specific `AlreadyFunded` instead of `InvalidState`.
+        if m.player1_deposited && m.player2_deposited {
+            env.storage()
+                .temporary()
+                .remove(&DataKey::DepositInProgress(match_id));
+            return Err(Error::AlreadyFunded);
+        }
+
         if m.state != MatchState::Pending {
             // Clear guard before returning on error.
             env.storage()
