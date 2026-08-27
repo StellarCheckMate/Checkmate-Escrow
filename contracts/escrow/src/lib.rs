@@ -1502,6 +1502,18 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
+        // Explicit "already fully funded" guard, independent of `state`: even
+        // if some future code path left `state` as `Pending` while both
+        // deposits had already landed, this still closes the door on a
+        // double-count. Checked before the state check so the caller gets
+        // the more specific `AlreadyFunded` instead of `InvalidState`.
+        if m.player1_deposited && m.player2_deposited {
+            env.storage()
+                .temporary()
+                .remove(&DataKey::DepositInProgress(match_id));
+            return Err(Error::AlreadyFunded);
+        }
+
         if m.state != MatchState::Pending {
             // Clear guard before returning on error.
             env.storage()
@@ -1662,12 +1674,17 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state != MatchState::Active {
-            return Err(Error::InvalidState);
+        // A still-Pending match is inherently not (fully) funded — surface
+        // `NotFunded` for it specifically, rather than the generic
+        // `InvalidState`, so `submit_result_batch` callers can distinguish
+        // "needs more deposits" from other invalid transitions (Completed,
+        // Cancelled, PendingResult, Paused).
+        if m.state == MatchState::Pending || !m.player1_deposited || !m.player2_deposited {
+            return Err(Error::NotFunded);
         }
 
-        if !m.player1_deposited || !m.player2_deposited {
-            return Err(Error::NotFunded);
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
         }
 
         Self::remove_active_match_indexed(env, &m.player1, match_id);
@@ -2145,6 +2162,19 @@ impl EscrowContract {
         }
 
         let is_multi_token = m.token_b.is_some() && m.conversion_rate.is_some_and(|r| r > 0);
+
+        // The match's token(s) may have been blacklisted after creation but
+        // before expiry. Refuse to attempt a refund transfer into a token
+        // contract that's since been flagged as broken or malicious — that
+        // could fail unpredictably or panic instead of cleanly erroring, and
+        // leaves the match state untouched so it can be resolved another way
+        // (e.g. admin intervention) rather than getting stuck mid-transfer.
+        let token_b_for_check = m.token_b.clone().unwrap_or_else(|| m.token.clone());
+        if Self::is_token_blacklisted(env.clone(), m.token.clone())
+            || (is_multi_token && Self::is_token_blacklisted(env.clone(), token_b_for_check))
+        {
+            return Err(Error::TokenNotAllowed);
+        }
 
         if m.player1_deposited {
             let client_a = token::Client::new(&env, &m.token);

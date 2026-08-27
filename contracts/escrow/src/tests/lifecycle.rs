@@ -1568,6 +1568,60 @@ fn test_expire_match_refunds_depositor_after_timeout() {
     assert_eq!(p1_balance_after - p1_balance_before, 100);
 }
 
+// #1307 — expire_match must not attempt a refund transfer into a token
+// that's been blacklisted since the match was created; it should fail
+// cleanly with TokenNotAllowed instead of calling into the (potentially
+// broken/malicious) token contract.
+#[test]
+fn test_expire_match_with_delisted_token_returns_token_not_allowed() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
+    env.ledger().set_sequence_number(100);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "expire_delisted"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    let p1_balance_before = token::Client::new(&env, &token).balance(&player1);
+
+    // Token gets blacklisted mid-flight, after the deposit was already made.
+    client.add_token_to_blacklist(&token, &String::from_str(&env, "compromised"));
+
+    env.deployer().extend_ttl_for_contract_instance(
+        contract_id.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(contract_id.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+    env.deployer().extend_ttl_for_contract_instance(
+        token.clone(),
+        MATCH_TTL_LEDGERS,
+        MATCH_TTL_LEDGERS,
+    );
+    env.deployer()
+        .extend_ttl_for_code(token.clone(), MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+    env.ledger().set_sequence_number(100 + 17_280);
+
+    let result = client.try_expire_match(&id);
+    assert_eq!(result, Err(Ok(Error::TokenNotAllowed)));
+
+    // No refund happened, and the match is untouched (still Pending) so it
+    // can be resolved another way (e.g. admin intervention).
+    let p1_balance_after = token::Client::new(&env, &token).balance(&player1);
+    assert_eq!(p1_balance_after, p1_balance_before);
+    assert_eq!(client.get_match(&id).state, MatchState::Pending);
+}
+
 #[test]
 fn test_expire_match_fails_before_timeout() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
@@ -2400,6 +2454,37 @@ fn test_double_deposit_rejected() {
 
     let result = client.try_deposit(&match_id, &player1);
     assert_eq!(result, Err(Ok(Error::AlreadyFunded)));
+}
+
+// #1306 — deposit must reject re-deposit attempts once a match is already
+// fully funded (both players deposited, match Active), for either player,
+// with the specific `AlreadyFunded` error rather than a generic one.
+#[test]
+fn test_redeposit_on_fully_funded_active_match_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "redeposit_active"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Active);
+
+    let result_p1 = client.try_deposit(&match_id, &player1);
+    assert_eq!(result_p1, Err(Ok(Error::AlreadyFunded)));
+
+    let result_p2 = client.try_deposit(&match_id, &player2);
+    assert_eq!(result_p2, Err(Ok(Error::AlreadyFunded)));
+
+    // No double-counting: escrow still holds exactly one stake per player.
+    assert_eq!(client.get_escrow_balance(&match_id), 200);
 }
 
 // ── Issue #900: combined before/after timeout test ───────────────────────────
