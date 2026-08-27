@@ -77,7 +77,8 @@ docker-compose logs event-indexer-1 event-indexer-2 | grep "Became leader"
 - `/events/:match_id` — all events for a match (cache-first)
 - `/match/:match_id` — full match summary
 - `/matches?status=active` — list matches by status
-- `/stats` — total events + cache size
+- `/stats` — total events + cache size *(requires `X-Api-Key` header)*
+- `/analytics/*`, `/transactions/player/:address` — analytics & transaction history *(require `X-Api-Key` header)*
 
 See [EVENT_INDEXER_API.md](../../docs/EVENT_INDEXER_API.md) for complete documentation.
 
@@ -161,6 +162,7 @@ Environment variables:
 | `EVENT_INDEXER_BIND_ADDR` | `127.0.0.1` | API listen address |
 | `EVENT_INDEXER_PORT` | `8080` | API port |
 | `EVENT_INDEXER_CACHE_SIZE` | `10000` | LRU cache capacity |
+| `EVENT_INDEXER_API_KEY` | *(fail closed)* | Shared secret for the admin-like endpoints (`/stats`, `/analytics/*`, `/transactions/*`). Without it they refuse every request with `401` |
 | `EVENT_INDEXER_POLL_INTERVAL` | `5` | Polling interval (1–60 seconds) |
 | `EVENT_INDEXER_LOG_LEVEL` | `info` | Log level (`error`, `warn`, `info`, `debug`, `trace`) |
 | `EVENT_INDEXER_LEADER_TTL_SECS` | `30` | Leader lease validity (seconds) |

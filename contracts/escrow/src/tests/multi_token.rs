@@ -405,6 +405,32 @@ fn test_create_match_with_conversion_rate_boundary_high() {
 }
 
 #[test]
+fn test_create_match_with_conversion_rate_zero_rejected() {
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    let oracle_rate = 50_000_000;
+    oracle_client.set_rate(&token_a, &token_b, &oracle_rate);
+
+    let result = escrow_client.try_create_match_with_conversion(
+        &player1,
+        &player2,
+        &100,
+        &token_a,
+        &token_b,
+        &0,
+        &String::from_str(&env, "a1b2c3d4"),
+        &Platform::Lichess,
+    );
+
+    assert!(
+        result.is_err(),
+        "match creation with conversion_rate = 0 must be rejected to avoid \
+         division-by-zero in claim_vested_payout"
+    );
+}
+
+#[test]
 #[should_panic]
 fn test_create_match_with_conversion_rate_below_boundary() {
     let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =

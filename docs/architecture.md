@@ -355,6 +355,10 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `set_minimum_stake` | `(amount: i128)` | Admin-only. Sets the minimum stake accepted by `create_match` and friends. |
 | `set_oracle` | `(oracle: Address)` | Admin-only. Alias for `update_oracle`. |
 | `get_oracle_address` | `() -> Result<Address, Error>` | View function; returns the currently configured oracle address without requiring authentication (unlike `get_oracle`). |
+| `admin_freeze_player` | `(player: Address, reason: String)` | Admin-only. Freezes a single player: they can no longer `create_match` (any variant) or `deposit`, while every other user is unaffected. The `reason` is stored on-chain for auditability. Does **not** block fund recovery (cancel/expire/claim still work) or oracle settlement of existing matches. Reuses `Error::ContractPaused` (the error enum is at its 50-variant XDR cap). See [Freeze Mechanism](security.md#freeze-mechanism). |
+| `admin_unfreeze_player` | `(player: Address)` | Admin-only. Reverses `admin_freeze_player`, restoring the player's ability to create matches and deposit. |
+| `is_player_frozen` | `(player: Address) -> bool` | Returns whether `player` is currently frozen. |
+| `get_frozen_players` | `() -> Vec<Address>` | Returns all currently frozen player addresses. |
 
 #### Token Allowlist
 
@@ -563,6 +567,14 @@ Off-chain indexers should not rely solely on these on-chain values for long-term
 let all_ids = client.get_player_matches(&player);
 let page: Vec<u64> = all_ids.iter().skip(40).take(20).collect();
 ```
+
+## Storage Layout
+
+For a complete mapping of every `DataKey` variant to its value type, storage scope (instance vs persistent vs temporary), TTL behaviour, and description, see the dedicated reference document:
+
+- [**Storage Layout Reference**](storage-layout.md) — full `DataKey` and `OracleConsensusKey` tables, upgrade safety checklist
+
+This is the recommended starting point for anyone performing a contract upgrade or building tooling that reads contract storage directly.
 
 ## Glossary
 

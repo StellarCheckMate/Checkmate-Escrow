@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
 use std::env;
 
+/// Shared-secret API keys shorter than this are rejected at start-up.
+pub const MIN_API_KEY_LENGTH: usize = 16;
+
 /// Top-level configuration for the event-indexer service.
 ///
 /// All fields are populated from environment variables so that the binary is
@@ -36,6 +39,14 @@ pub struct Config {
     // ── API server ────────────────────────────────────────────────────────
     pub bind_addr: String,
     pub bind_port: u16,
+    /// Optional shared secret that gates the admin-like endpoints
+    /// (`/analytics/*`, `/transactions/*`, `/stats`).
+    ///
+    /// When set, those endpoints require an `X-Api-Key` header carrying this
+    /// value.  When unset, the endpoints refuse every request with `401`
+    /// (fail closed) until an operator configures a key — a misconfigured
+    /// server must not leak sensitive balance data.
+    pub api_key: Option<String>,
 
     // ── Cache ─────────────────────────────────────────────────────────────
     pub cache_size: usize,
@@ -132,6 +143,26 @@ impl Config {
             .unwrap_or_else(|_| "8080".to_string())
             .parse::<u16>()?;
 
+        // Blank is treated as unset so `EVENT_INDEXER_API_KEY=` in an env file
+        // disables auth instead of failing to connect on every start-up.
+        let api_key = env::var("EVENT_INDEXER_API_KEY")
+            .ok()
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty());
+
+        // A short shared secret offers no real protection; refuse to boot with
+        // one rather than pretending the endpoints are secured.
+        if let Some(ref key) = api_key {
+            if key.len() < MIN_API_KEY_LENGTH {
+                return Err(anyhow!(
+                    "EVENT_INDEXER_API_KEY must be at least {} characters, got {} \
+                     (generate one with: openssl rand -hex 32)",
+                    MIN_API_KEY_LENGTH,
+                    key.len()
+                ));
+            }
+        }
+
         // ── Cache ─────────────────────────────────────────────────────────
         let cache_size = env::var("EVENT_INDEXER_CACHE_SIZE")
             .unwrap_or_else(|_| "10000".to_string())
@@ -184,6 +215,7 @@ impl Config {
             leader_heartbeat_secs,
             bind_addr,
             bind_port,
+            api_key,
             cache_size,
             redis_url,
             poll_interval_secs,
@@ -354,5 +386,47 @@ mod tests {
         env::set_var("REDIS_URL", "http://localhost:6379");
         assert!(Config::from_env().is_err());
         env::remove_var("REDIS_URL");
+    }
+
+    // ── API key (admin-like endpoint auth) ────────────────────────────────
+
+    const VALID_API_KEY: &str = "a-very-long-test-api-key-1234567890";
+
+    #[test]
+    fn api_key_is_optional() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
+        env::remove_var("EVENT_INDEXER_API_KEY");
+        let cfg = Config::from_env().unwrap();
+        assert!(cfg.api_key.is_none(), "no key is a supported (fail-closed) setup");
+    }
+
+    #[test]
+    fn blank_api_key_is_treated_as_unset() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
+        env::set_var("EVENT_INDEXER_API_KEY", "   ");
+        let cfg = Config::from_env().unwrap();
+        assert!(cfg.api_key.is_none());
+        env::remove_var("EVENT_INDEXER_API_KEY");
+    }
+
+    #[test]
+    fn valid_api_key_is_accepted() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
+        env::set_var("EVENT_INDEXER_API_KEY", VALID_API_KEY);
+        let cfg = Config::from_env().unwrap();
+        assert_eq!(cfg.api_key.as_deref(), Some(VALID_API_KEY));
+        env::remove_var("EVENT_INDEXER_API_KEY");
+    }
+
+    #[test]
+    fn short_api_key_is_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        set_base_env();
+        env::set_var("EVENT_INDEXER_API_KEY", "too-short");
+        assert!(Config::from_env().is_err());
+        env::remove_var("EVENT_INDEXER_API_KEY");
     }
 }

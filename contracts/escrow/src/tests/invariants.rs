@@ -351,6 +351,47 @@ fn test_escrow_balance_is_zero_in_all_terminal_states() {
     );
 }
 
+// #1309 — get_escrow_balance must not report a stale non-zero value after
+// cancel_match refunds a partially-funded match (only one player deposited).
+#[test]
+fn test_escrow_balance_is_zero_after_cancel_for_every_deposit_state() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // No deposits at all.
+    let no_deposit_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancel_bal_none"),
+        &Platform::Lichess,
+    );
+    client.cancel_match(&no_deposit_id, &player1);
+    assert_eq!(
+        client.get_escrow_balance(&no_deposit_id),
+        0,
+        "escrow balance must be 0 after cancelling a match with no deposits"
+    );
+
+    // Single (partial) deposit — the scenario the issue calls out explicitly.
+    let partial_deposit_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "cancel_bal_partial"),
+        &Platform::Lichess,
+    );
+    client.deposit(&partial_deposit_id, &player1);
+    client.cancel_match(&partial_deposit_id, &player1);
+    assert_eq!(
+        client.get_escrow_balance(&partial_deposit_id),
+        0,
+        "escrow balance must be 0 after cancelling a partially-funded match"
+    );
+}
+
 #[test]
 fn test_snapshot_count_monotonic() {
     let (env, contract_id, oracle, player1, player2, token, _admin) = setup();

@@ -4,12 +4,15 @@ use std::time::Duration;
 use contracts_oracle::types::Winner;
 use reqwest::Client;
 use serde::Deserialize;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, RwLock, Semaphore};
 
 use super::errors::ChessComError;
 use super::provider::GameProvider;
 use super::provider_error::ProviderError;
 use super::rate_limiter::{RateLimiter, RateLimiterConfig};
+
+const MAX_RETRIES: u32 = 3;
+const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChessComGameResult {
@@ -67,6 +70,7 @@ pub struct ChessComClient {
     api_base: String,
     rate_limiter: RateLimiter,
     semaphore: Arc<Semaphore>,
+    api_key: Arc<RwLock<Option<String>>>,
 }
 
 impl Default for ChessComClient {
@@ -93,6 +97,7 @@ impl ChessComClient {
             api_base: cfg.api_base,
             rate_limiter: RateLimiter::new(cfg.rate_limiter),
             semaphore: Arc::new(Semaphore::new(cfg.max_concurrent)),
+            api_key: Arc::new(RwLock::new(Self::load_api_key())),
         })
     }
 
@@ -110,6 +115,17 @@ impl ChessComClient {
     }
 
     /// Validate that `game_id` is a non-empty numeric string.
+
+    fn load_api_key() -> Option<String> {
+        std::env::var("CHESSDOTCOM_API_KEY")
+            .ok()
+            .filter(|key| !key.is_empty())
+    }
+
+    async fn reload_api_key(&self) {
+        *self.api_key.write().await = Self::load_api_key();
+    }
+
     pub fn validate_game_id(game_id: &str) -> Result<(), ChessComError> {
         if game_id.is_empty() || !game_id.chars().all(|c| c.is_ascii_digit()) {
             return Err(ChessComError::InvalidGameId);
@@ -140,13 +156,44 @@ impl ChessComClient {
             game_id
         );
 
-        let resp = self.http.get(&url).send().await.map_err(|e| {
-            if e.is_timeout() {
-                ChessComError::Timeout
-            } else {
-                ChessComError::Http(e)
+        let mut retry_count = 0;
+        let mut auth_retry_count = 0;
+        let resp = loop {
+            let api_key = self.api_key.read().await.clone();
+            let request = self.http.get(&url);
+            let request = match api_key {
+                Some(api_key) => request.bearer_auth(api_key),
+                None => request,
+            };
+            let resp = request.send().await.map_err(|e| {
+                if e.is_timeout() {
+                    ChessComError::Timeout
+                } else {
+                    ChessComError::Http(e)
+                }
+            })?;
+
+            if resp.status() == reqwest::StatusCode::UNAUTHORIZED && auth_retry_count == 0 {
+                auth_retry_count += 1;
+                self.reload_api_key().await;
+                continue;
             }
-        })?;
+
+            if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS || retry_count >= MAX_RETRIES {
+                break resp;
+            }
+
+            let retry_after = resp
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+                .map(Duration::from_secs)
+                .unwrap_or_else(|| INITIAL_BACKOFF * 2u32.pow(retry_count));
+
+            retry_count += 1;
+            tokio::time::sleep(retry_after).await;
+        };
 
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {

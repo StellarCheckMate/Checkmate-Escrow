@@ -29,6 +29,7 @@ mod multi_token;
 mod oracle_validation;
 mod pagination;
 mod player_balance_history;
+mod player_freeze;
 mod referral;
 mod security;
 mod snapshots;
