@@ -122,6 +122,10 @@ pub const DEFAULT_QUORUM_BASIS_POINTS: u32 = 2000;
 /// Both formats fit well within this limit.
 const MAX_GAME_ID_LEN: u32 = 64;
 
+/// Default confidence threshold for oracle results (0-100).
+/// Results below this threshold trigger PendingResult state for dispute.
+const DEFAULT_CONFIDENCE_THRESHOLD: u8 = 50;
+
 /// Exact game ID length required for Lichess (8 alphanumeric characters).
 const LICHESS_GAME_ID_LEN: u32 = 8;
 
@@ -1026,6 +1030,7 @@ impl EscrowContract {
             total_pause_duration: 0,
             referrer: None,
             last_heartbeat: env.ledger().timestamp(),
+            bracket_id: None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1086,6 +1091,198 @@ impl EscrowContract {
         );
 
         Ok(id)
+    }
+
+    /// Create a new match for tournament brackets.
+    ///
+    /// This variant allows bracket matches to be linked on-chain, enabling
+    /// automated bracket progression for multi-game tournaments.
+    pub fn create_match_tournament(
+        env: Env,
+        bracket_id: u64,
+        round: u32,
+        player1: Address,
+        player2: Address,
+        stake_amount: i128,
+        token: Address,
+        game_id: String,
+        platform: Platform,
+    ) -> Result<u64, Error> {
+        extend_instance_ttl(&env);
+        player1.require_auth();
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        // Blacklisted tokens are permanently rejected, regardless of allowlist status.
+        if Self::is_token_blacklisted(env.clone(), token.clone()) {
+            return Err(Error::TokenNotAllowed);
+        }
+
+        // Check allowlist enforcement
+        let allowlist_enforced: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowlistEnforced)
+            .unwrap_or(false);
+        if allowlist_enforced && !Self::is_token_allowed(env.clone(), token.clone()) {
+            return Err(Error::TokenNotAllowed);
+        }
+
+        // Stablecoin-only mode: reject non-stablecoin tokens when enabled
+        let protocol_cfg = Self::get_config(&env);
+        if protocol_cfg.stablecoin_only_mode && !Self::check_is_stablecoin(&env, &token) {
+            return Err(Error::NotStablecoin);
+        }
+
+        if stake_amount < protocol_cfg.minimum_stake {
+            return Err(Error::InvalidAmount);
+        }
+        if let Some(max_stake) = protocol_cfg.maximum_stake {
+            if stake_amount > max_stake {
+                return Err(Error::InvalidAmount);
+            }
+        }
+        Self::require_player_tier_for_stake(&env, &player1, stake_amount)?;
+        Self::require_player_tier_for_stake(&env, &player2, stake_amount)?;
+        Self::validate_game_id_format(&game_id, &platform)?;
+
+        // Reject if either player is invalid
+        if player1 == player2 {
+            return Err(Error::InvalidPlayers);
+        }
+        if player2 == env.current_contract_address() {
+            return Err(Error::InvalidPlayers);
+        }
+
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GameId(game_id.clone()))
+        {
+            return Err(Error::DuplicateGameId);
+        }
+
+        let id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+
+        if env.storage().persistent().has(&DataKey::Match(id)) {
+            return Err(Error::AlreadyExists);
+        }
+
+        let m = Match {
+            id,
+            player1: player1.clone(),
+            player2: player2.clone(),
+            stake_amount,
+            token,
+            game_id,
+            platform,
+            state: MatchState::Pending,
+            player1_deposited: false,
+            player2_deposited: false,
+            created_ledger: env.ledger().sequence(),
+            completed_ledger: None,
+            winner: Winner::None,
+            vested_at: None,
+            player1_claimed: false,
+            player2_claimed: false,
+            conversion_rate: None,
+            token_b: None,
+            conversion_rate_ledger: None,
+            paused_ledger: None,
+            total_pause_duration: 0,
+            referrer: None,
+            last_heartbeat: env.ledger().timestamp(),
+            bracket_id: Some(bracket_id),
+        };
+
+        env.storage().persistent().set(&DataKey::Match(id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage().instance().set(&DataKey::MatchCount, &next_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::GameId(m.game_id.clone()), &true);
+        env.storage().persistent().extend_ttl(
+            &DataKey::GameId(m.game_id.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        // Add match ID to both players' match lists
+        let mut player1_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player1.clone()))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        player1_matches.push_back(id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerMatches(player1.clone()), &player1_matches);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerMatches(player1),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let mut player2_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player2.clone()))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        player2_matches.push_back(id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerMatches(player2.clone()), &player2_matches);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerMatches(player2),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Created);
+        Self::record_platform_match_created(&env, stake_amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("bracket_created")),
+            (id, bracket_id, round, m.player1, m.player2, stake_amount),
+        );
+
+        Ok(id)
+    }
+
+    /// Get all matches for a specific tournament bracket.
+    pub fn get_bracket_matches(env: Env, bracket_id: u64) -> soroban_sdk::Vec<Match> {
+        let match_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+        let mut bracket_matches = soroban_sdk::vec![&env];
+
+        for i in 0..match_count {
+            if let Some(m) = env.storage().persistent().get::<_, Match>(&DataKey::Match(i)) {
+                if m.bracket_id == Some(bracket_id) {
+                    bracket_matches.push_back(m);
+                }
+            }
+        }
+
+        bracket_matches
     }
 
     /// Create a new match with multi-token support and conversion rates.
@@ -1234,6 +1431,7 @@ impl EscrowContract {
             total_pause_duration: 0,
             referrer: None,
             last_heartbeat: env.ledger().timestamp(),
+            bracket_id: None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1403,6 +1601,7 @@ impl EscrowContract {
             total_pause_duration: 0,
             referrer: Some(referrer.clone()),
             last_heartbeat: env.ledger().timestamp(),
+            bracket_id: None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1617,6 +1816,7 @@ impl EscrowContract {
         match_id: u64,
         winner: Winner,
         oracle: Address,
+        confidence: Option<u8>,
     ) -> Result<(), Error> {
         if env
             .storage()
@@ -1633,12 +1833,12 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        Self::settle_result(&env, match_id, winner)
+        Self::settle_result(&env, match_id, winner, confidence)
     }
 
     /// Submit a draw result — oracle only. This is a convenience wrapper
     /// around `settle_result` with `Winner::Draw`.
-    pub fn submit_draw(env: Env, match_id: u64, oracle: Address) -> Result<(), Error> {
+    pub fn submit_draw(env: Env, match_id: u64, oracle: Address, confidence: Option<u8>) -> Result<(), Error> {
         if env
             .storage()
             .instance()
@@ -1654,7 +1854,7 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        Self::settle_result(&env, match_id, Winner::Draw)
+        Self::settle_result(&env, match_id, Winner::Draw, confidence)
     }
 
     /// Core result-settlement logic shared by `submit_result` and
@@ -1663,7 +1863,7 @@ impl EscrowContract {
     /// `submit_result_batch` authorize the oracle once for the whole batch
     /// instead of once per match (repeated `require_auth` calls for the same
     /// address within a single invocation are rejected by the host).
-    fn settle_result(env: &Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+    fn settle_result(env: &Env, match_id: u64, winner: Winner, confidence: Option<u8>) -> Result<(), Error> {
         if winner == Winner::None {
             return Err(Error::InvalidState);
         }
@@ -1697,6 +1897,8 @@ impl EscrowContract {
         Self::record_completed_match(env, &m.player1);
         Self::record_completed_match(env, &m.player2);
         Self::record_platform_payout(env);
+        Self::update_player_stats(env, &m.player1, &winner, m.stake_amount);
+        Self::update_player_stats(env, &m.player2, &winner, m.stake_amount);
 
         env.storage()
             .persistent()
@@ -2701,6 +2903,21 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)
     }
 
+    /// Return the current oracle rotation state for monitoring.
+    ///
+    /// This is a lightweight view function that returns the current
+    /// OracleRotationState without requiring admin rights. Returns None
+    /// if no rotation is pending. Monitoring tools can use this to observe
+    /// rotation progress without triggering auth.
+    pub fn get_oracle_rotation_state(env: Env) -> Option<OracleRotationState> {
+        let state = Self::get_rotation_state(&env);
+        if state.is_empty() {
+            None
+        } else {
+            Some(state)
+        }
+    }
+
     // ── Platform Statistics (for analytics without full indexing) ─────────────
 
     /// Retrieve platform-wide aggregated statistics.
@@ -3073,6 +3290,58 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
         Ok(m.player1_deposited && m.player2_deposited)
+    }
+
+    /// Return player statistics for a given address.
+    ///
+    /// Returns cumulative stats including total matches, wins, losses, draws,
+    /// and total volume staked. These statistics are maintained on-chain
+    /// to enable off-chain analytics without requiring full event indexing.
+    pub fn get_player_stats(env: Env, player: Address) -> PlayerStats {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PlayerStats(player))
+            .unwrap_or(PlayerStats {
+                total_matches: 0,
+                wins: 0,
+                losses: 0,
+                draws: 0,
+                total_volume_staked: 0,
+            })
+    }
+
+    /// Internal helper to update player statistics on match completion.
+    fn update_player_stats(env: &Env, player: &Address, winner: &Winner, stake_amount: i128) {
+        let mut stats: PlayerStats = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerStats(player.clone()))
+            .unwrap_or(PlayerStats {
+                total_matches: 0,
+                wins: 0,
+                losses: 0,
+                draws: 0,
+                total_volume_staked: 0,
+            });
+
+        stats.total_matches = stats.total_matches.saturating_add(1);
+        stats.total_volume_staked = stats.total_volume_staked.saturating_add(stake_amount);
+
+        match winner {
+            Winner::Player1 => stats.wins = stats.wins.saturating_add(1),
+            Winner::Player2 => stats.losses = stats.losses.saturating_add(1),
+            Winner::Draw => stats.draws = stats.draws.saturating_add(1),
+            Winner::None => {}
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerStats(player.clone()), &stats);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerStats(player.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
     }
 
     /// Return the number of players who have deposited for a match (0, 1, or 2).

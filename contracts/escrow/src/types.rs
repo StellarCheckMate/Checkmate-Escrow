@@ -119,6 +119,8 @@ pub struct Match {
     /// `dispute_and_rollback_match` can enforce the 24h dispute window based
     /// on the most recent in-game activity.
     pub last_heartbeat: u64,
+    /// Optional tournament bracket ID for tournament matches.
+    pub bracket_id: Option<u64>,
 }
 
 #[contracttype]
@@ -281,6 +283,8 @@ pub enum DataKey {
     PlayerPreferredToken(Address),
     /// Platform-wide aggregated statistics (total matches, volume, payouts).
     Stats,
+    /// Player statistics (wins, losses, draws, total matches, volume staked).
+    PlayerStats(Address),
     /// Stores the number of oracle confirmations received for a given match.
     OracleConfirmations(u64),
     /// Tracks the result (Winner) submitted by a specific oracle for a match.
@@ -463,6 +467,16 @@ pub struct PlatformStats {
     pub total_volume: i128,
     /// Total number of successful payouts (winner or draw completed matches).
     pub total_payouts: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlayerStats {
+    pub total_matches: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub draws: u64,
+    pub total_volume_staked: i128,
 }
 
 #[cfg(test)]
