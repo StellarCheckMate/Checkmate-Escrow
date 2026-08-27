@@ -1574,7 +1574,7 @@ fn test_expire_match_refunds_depositor_after_timeout() {
 // broken/malicious) token contract.
 #[test]
 fn test_expire_match_with_delisted_token_returns_token_not_allowed() {
-    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
@@ -1593,7 +1593,6 @@ fn test_expire_match_with_delisted_token_returns_token_not_allowed() {
     let p1_balance_before = token::Client::new(&env, &token).balance(&player1);
 
     // Token gets blacklisted mid-flight, after the deposit was already made.
-    let _ = admin;
     client.add_token_to_blacklist(&token, &String::from_str(&env, "compromised"));
 
     env.deployer().extend_ttl_for_contract_instance(
