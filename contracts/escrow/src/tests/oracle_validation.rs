@@ -207,6 +207,34 @@ fn test_get_oracle_address_uninitialized_contract() {
 }
 
 #[test]
+fn test_update_oracle_rejects_self_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, EscrowContract);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.initialize(&oracle, &admin);
+
+    // The oracle must never be set to the contract's own address, since
+    // `require_auth` on a contract address without a custom account
+    // implementation can never succeed, permanently bricking result
+    // submission.
+    let result = client.try_update_oracle(&contract_id);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidAddress)),
+        "update_oracle must reject the contract's own address"
+    );
+
+    // Oracle must remain unchanged.
+    assert_eq!(client.get_oracle_address(), oracle);
+}
+
+#[test]
 fn test_submit_result_rejects_non_oracle() {
     let (env, contract_id, _oracle, _player1, _player2, _token, _admin, match_id) =
         setup_with_funded_match();

@@ -237,6 +237,14 @@ impl EscrowContract {
         if caller != admin {
             return Err(Error::Unauthorized);
         }
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if already_paused {
+            return Err(Error::InvalidPauseState);
+        }
         env.storage().instance().set(&DataKey::Paused, &true);
         env.events()
             .publish((Symbol::new(&env, "admin"), symbol_short!("paused")), ());
@@ -254,6 +262,14 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         if caller != admin {
             return Err(Error::Unauthorized);
+        }
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if !already_paused {
+            return Err(Error::InvalidPauseState);
         }
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events()
@@ -469,6 +485,10 @@ impl EscrowContract {
             .get(&DataKey::Admin)
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
+
+        if issuer == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
 
         let already_registered: bool = env
             .storage()
@@ -755,6 +775,8 @@ impl EscrowContract {
     /// `tiers` must be ordered by `max_stake` ascending.  The last entry acts
     /// as the open-ended catch-all (set `max_stake = i128::MAX`).  Pass an
     /// empty `Vec` to clear the schedule and fall back to zero protocol fees.
+    /// Each tier's `fee_basis_points` must be in the range `0..=10_000`
+    /// (0% to 100%).
     pub fn set_fee_tiers(env: Env, tiers: soroban_sdk::Vec<FeeTier>) -> Result<(), Error> {
         extend_instance_ttl(&env);
         let admin: Address = env
@@ -769,6 +791,9 @@ impl EscrowContract {
         let mut prev_max: i128 = -1;
         for tier in tiers.iter() {
             if tier.max_stake <= prev_max {
+                return Err(Error::InvalidAmount);
+            }
+            if tier.fee_basis_points > 10_000 {
                 return Err(Error::InvalidAmount);
             }
             prev_max = tier.max_stake;
@@ -1261,6 +1286,12 @@ impl EscrowContract {
     }
 
     /// Create a new match with multi-token support and conversion rates.
+    ///
+    /// `rate` is the token_b-per-token_a conversion rate, scaled by 1e7
+    /// (e.g. a 1:1 rate is `10_000_000`). It must be strictly positive —
+    /// `rate <= 0` (including `0`) is rejected with `Error::InvalidAmount`,
+    /// since a zero or negative rate would later cause a division-by-zero
+    /// or nonsensical payout when converting amounts in `claim_vested_payout`.
     pub fn create_match_with_conversion(
         env: Env,
         player1: Address,
@@ -1670,6 +1701,18 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
+        // Explicit "already fully funded" guard, independent of `state`: even
+        // if some future code path left `state` as `Pending` while both
+        // deposits had already landed, this still closes the door on a
+        // double-count. Checked before the state check so the caller gets
+        // the more specific `AlreadyFunded` instead of `InvalidState`.
+        if m.player1_deposited && m.player2_deposited {
+            env.storage()
+                .temporary()
+                .remove(&DataKey::DepositInProgress(match_id));
+            return Err(Error::AlreadyFunded);
+        }
+
         if m.state != MatchState::Pending {
             // Clear guard before returning on error.
             env.storage()
@@ -1728,8 +1771,18 @@ impl EscrowContract {
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
             );
-            Self::add_active_match(&env, &m.player1, match_id)?;
-            Self::add_active_match(&env, &m.player2, match_id)?;
+            if let Err(e) = Self::add_active_match(&env, &m.player1, match_id) {
+                env.storage()
+                    .temporary()
+                    .remove(&DataKey::DepositInProgress(match_id));
+                return Err(e);
+            }
+            if let Err(e) = Self::add_active_match(&env, &m.player2, match_id) {
+                env.storage()
+                    .temporary()
+                    .remove(&DataKey::DepositInProgress(match_id));
+                return Err(e);
+            }
         } else {
             env.events().publish(
                 (Symbol::new(&env, "match"), symbol_short!("deposit")),
@@ -1821,31 +1874,25 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state != MatchState::Active {
-            return Err(Error::InvalidState);
+        // A still-Pending match is inherently not (fully) funded — surface
+        // `NotFunded` for it specifically, rather than the generic
+        // `InvalidState`, so `submit_result_batch` callers can distinguish
+        // "needs more deposits" from other invalid transitions (Completed,
+        // Cancelled, PendingResult, Paused).
+        if m.state == MatchState::Pending || !m.player1_deposited || !m.player2_deposited {
+            return Err(Error::NotFunded);
         }
 
-        if !m.player1_deposited || !m.player2_deposited {
-            return Err(Error::NotFunded);
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
         }
 
         Self::remove_active_match_indexed(env, &m.player1, match_id);
         Self::remove_active_match_indexed(env, &m.player2, match_id);
 
-        // Check confidence threshold - low confidence results go to PendingResult for dispute
-        let confidence_threshold = DEFAULT_CONFIDENCE_THRESHOLD;
-        let use_dispute_window = confidence.is_some_and(|c| c < confidence_threshold);
-
-        if use_dispute_window {
-            m.state = MatchState::PendingResult;
-            m.completed_ledger = Some(env.ledger().sequence());
-            m.winner = winner.clone();
-        } else {
-            m.state = MatchState::Completed;
-            m.completed_ledger = Some(env.ledger().sequence());
-            m.winner = winner.clone();
-            m.vested_at = Some(env.ledger().timestamp());
-        }
+        m.state = MatchState::Completed;
+        m.winner = winner.clone();
+        m.vested_at = Some(env.ledger().timestamp());
 
         Self::record_completed_match(env, &m.player1);
         Self::record_completed_match(env, &m.player2);
@@ -1864,40 +1911,17 @@ impl EscrowContract {
 
         let dispute_period = Self::get_dispute_period(env);
 
-        if use_dispute_window {
-            // Low confidence: always use dispute window regardless of dispute_period
-            let deadline = env
-                .ledger()
-                .sequence()
-                .checked_add(dispute_period.max(VOTING_PERIOD_LEDGERS))
-                .ok_or(Error::Overflow)?;
-
+        if dispute_period == 0 {
+            // Immediate payout (no dispute period, but still subject to vesting).
+            // completed_ledger is stamped only here (not unconditionally above)
+            // because the delayed branch below leaves the match in
+            // PendingResult, not Completed, until finalize_match /
+            // resolve_dispute_by_vote actually performs the transition (both
+            // of which already stamp completed_ledger themselves).
+            m.completed_ledger = Some(env.ledger().sequence());
             env.storage()
                 .persistent()
-                .set(&DataKey::PendingWinner(match_id), &winner);
-            env.storage().persistent().extend_ttl(
-                &DataKey::PendingWinner(match_id),
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-
-            env.storage()
-                .persistent()
-                .set(&DataKey::ResultDeadline(match_id), &deadline);
-            env.storage().persistent().extend_ttl(
-                &DataKey::ResultDeadline(match_id),
-                MATCH_TTL_LEDGERS,
-                MATCH_TTL_LEDGERS,
-            );
-
-            Self::record_snapshot(env, &m, SnapshotReason::ResultSubmitted);
-            env.events().publish(
-                (Symbol::new(env, "match"), Symbol::new(env, "low_confidence")),
-                (match_id, winner, confidence),
-            );
-            Ok(())
-        } else if dispute_period == 0 {
-            // Immediate payout (no dispute period, but still subject to vesting)
+                .set(&DataKey::Match(match_id), &m);
             Self::record_snapshot(env, &m, SnapshotReason::Completed);
             Self::record_player_snapshot(env, &m.player1);
             Self::record_player_snapshot(env, &m.player2);
@@ -2076,7 +2100,26 @@ impl EscrowContract {
 
         let mut outcomes = Vec::new(&env);
         for (match_id, winner) in results.iter() {
-            let outcome = Self::settle_result(&env, match_id, winner);
+            // A match already settled (Completed/PendingResult) in a prior
+            // call means this oracle is re-confirming a result it already
+            // submitted. Surface that explicitly instead of letting it fall
+            // through to the generic InvalidState from settle_result.
+            let already_settled = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
+                .is_some_and(|m| {
+                    matches!(
+                        m.state,
+                        MatchState::Completed | MatchState::PendingResult
+                    )
+                });
+
+            let outcome = if already_settled {
+                Err(Error::OracleAlreadyConfirmed)
+            } else {
+                Self::settle_result(&env, match_id, winner)
+            };
             outcomes.push_back(outcome.err());
         }
         Ok(outcomes)
@@ -2321,6 +2364,19 @@ impl EscrowContract {
         }
 
         let is_multi_token = m.token_b.is_some() && m.conversion_rate.is_some_and(|r| r > 0);
+
+        // The match's token(s) may have been blacklisted after creation but
+        // before expiry. Refuse to attempt a refund transfer into a token
+        // contract that's since been flagged as broken or malicious — that
+        // could fail unpredictably or panic instead of cleanly erroring, and
+        // leaves the match state untouched so it can be resolved another way
+        // (e.g. admin intervention) rather than getting stuck mid-transfer.
+        let token_b_for_check = m.token_b.clone().unwrap_or_else(|| m.token.clone());
+        if Self::is_token_blacklisted(env.clone(), m.token.clone())
+            || (is_multi_token && Self::is_token_blacklisted(env.clone(), token_b_for_check))
+        {
+            return Err(Error::TokenNotAllowed);
+        }
 
         if m.player1_deposited {
             let client_a = token::Client::new(&env, &m.token);
@@ -2766,6 +2822,14 @@ impl EscrowContract {
             (match_id, resolution),
         );
 
+        // Also publish a match/cancelled event so the event-indexer picks up
+        // the terminal state transition out of Active (it only listens for
+        // the standard lifecycle events, not "adm_stall").
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("cancelled")),
+            match_id,
+        );
+
         Ok(())
     }
 
@@ -2927,7 +2991,9 @@ impl EscrowContract {
     /// (which compares against ledger-sequence deltas).
     fn current_match_timeout(env: &Env) -> u32 {
         let seconds = Self::get_config(env).match_timeout_seconds;
-        (seconds / SECONDS_PER_LEDGER) as u32
+        // Ceiling division: floor division here would underestimate the
+        // ledger delta required, allowing the timeout to trigger early.
+        ((seconds + SECONDS_PER_LEDGER - 1) / SECONDS_PER_LEDGER) as u32
     }
 
     /// Get the cached count of completed matches for a player (O(1) lookup).
@@ -3178,6 +3244,9 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::Admin, &proposal.pending_admin);
+        // Audited: PendingAdmin is removed here, so a second accept_admin()
+        // call has nothing to load (Error::Unauthorized) and cannot replay
+        // this proposal.
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("xfer")),
@@ -3293,6 +3362,22 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
         Ok(Self::escrow_balance_of(&m))
+    }
+
+    /// Return `true` only if funds are currently held in escrow for this
+    /// match, i.e. it is funded AND not yet Completed or Cancelled.
+    ///
+    /// Unlike [`Self::is_funded`], this reflects the *current* balance state
+    /// rather than historical deposit flags.
+    pub fn is_currently_escrowed(env: Env, match_id: u64) -> Result<bool, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        let funded = m.player1_deposited && m.player2_deposited;
+        let terminal = matches!(m.state, MatchState::Completed | MatchState::Cancelled);
+        Ok(funded && !terminal)
     }
 
     fn depositor_count(m: &Match) -> i128 {
@@ -4594,8 +4679,10 @@ impl EscrowContract {
             .unwrap_or(0);
 
         let mut collected = 0u32;
+        let mut truncated = false;
         for match_id in 0..count {
             if collected >= MAX_UNBOUNDED_MATCH_RESULTS {
+                truncated = true;
                 break;
             }
             if let Some(m) = env
@@ -4608,6 +4695,15 @@ impl EscrowContract {
                     collected = collected.saturating_add(1);
                 }
             }
+        }
+
+        if truncated {
+            // Silent data loss otherwise: callers of the deprecated unbounded
+            // getters have no other signal that results were capped.
+            env.events().publish(
+                (Symbol::new(env, "match"), symbol_short!("truncated")),
+                (state, MAX_UNBOUNDED_MATCH_RESULTS),
+            );
         }
 
         Ok(matches)
