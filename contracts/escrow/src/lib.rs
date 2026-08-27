@@ -340,6 +340,32 @@ impl EscrowContract {
             .unwrap_or(2000u32)
     }
 
+    /// Set the minimum stake amount — admin only.
+    ///
+    /// Enforces a global minimum stake floor for all matches. Default is 1.
+    pub fn set_minimum_stake(env: Env, amount: i128) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        if amount < 1 {
+            return Err(Error::InvalidAmount);
+        }
+        let mut config = Self::get_config(&env);
+        config.minimum_stake = amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::ProtocolConfig, &config);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("min_stake")),
+            amount,
+        );
+        Ok(())
+    }
+
     /// Set the caller's preferred payout token — player only.
     ///
     /// When a player has a preferred payout token set and it differs from the
@@ -1806,6 +1832,11 @@ impl EscrowContract {
         env.storage()
             .temporary()
             .remove(&DataKey::DepositInProgress(match_id));
+
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), symbol_short!("deposit")),
+            (match_id, player, m.stake_amount),
+        );
 
         Ok(())
     }
@@ -4820,6 +4851,18 @@ impl EscrowContract {
         limit: u32,
     ) -> Result<soroban_sdk::Vec<Match>, Error> {
         Self::collect_matches_by_state_paginated(&env, MatchState::Completed, offset, limit)
+    }
+
+    /// Return a paginated page of cancelled matches ordered by match ID ascending.
+    ///
+    /// `offset` — number of cancelled matches to skip before collecting results.
+    /// `limit`  — maximum number of cancelled matches to return (0 returns an empty vec).
+    pub fn get_cancelled_matches_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state_paginated(&env, MatchState::Cancelled, offset, limit)
     }
 
     /// Return the total number of matches created.
