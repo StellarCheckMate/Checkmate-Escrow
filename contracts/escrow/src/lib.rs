@@ -46,8 +46,8 @@ use soroban_sdk::{
 use types::{
     BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeState, FeeTier, Match,
     MatchState, OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform,
-    PlatformStats, PlayerBalanceSnapshot, PlayerTier, ProtocolConfig, SnapshotReason,
-    TempOracleRotation, Winner,
+    PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey, PlayerTier, ProtocolConfig,
+    SnapshotReason, TempOracleRotation, Winner,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -744,6 +744,141 @@ impl EscrowContract {
             .unwrap_or_else(|| soroban_sdk::vec![&env])
     }
 
+    // ── Player Freeze ────────────────────────────────────────────────────────
+
+    /// Freeze a player — admin only.
+    ///
+    /// A frozen player cannot create new matches (`create_match` and its
+    /// variants) or deposit into existing ones, while every other user on the
+    /// contract is completely unaffected — unlike a contract-wide `pause`.
+    /// The `reason` string (stored on-chain for auditability) documents why
+    /// the player was frozen (e.g. cheating, stalling, harassment).
+    ///
+    /// Freezing deliberately does **not** block fund-recovery paths: the
+    /// frozen player can still cancel/expire their own `Pending` matches and
+    /// claim vested payouts from already-funded matches, and the oracle can
+    /// still settle `Active` matches normally. See `admin_unfreeze_player` to
+    /// reverse a freeze.
+    ///
+    /// The `Error` enum is at the XDR-enforced cap of 50 variants, so the
+    /// existing `Error::ContractPaused` is reused for frozen-player rejections
+    /// (mirroring how the token blacklist reuses `Error::TokenNotAllowed`).
+    pub fn admin_freeze_player(env: Env, player: Address, reason: String) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let is_new = !env
+            .storage()
+            .instance()
+            .has(&PlayerFreezeKey::FrozenPlayer(player.clone()));
+
+        env.storage()
+            .instance()
+            .set(&PlayerFreezeKey::FrozenPlayer(player.clone()), &reason);
+
+        if is_new {
+            let mut list: soroban_sdk::Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&PlayerFreezeKey::FrozenPlayers)
+                .unwrap_or_else(|| soroban_sdk::vec![&env]);
+            list.push_back(player.clone());
+            env.storage()
+                .persistent()
+                .set(&PlayerFreezeKey::FrozenPlayers, &list);
+            env.storage().persistent().extend_ttl(
+                &PlayerFreezeKey::FrozenPlayers,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("freeze")),
+            player,
+        );
+        Ok(())
+    }
+
+    /// Unfreeze a player — admin only.
+    ///
+    /// Removes the freeze record and list entry so the player can create
+    /// matches and deposit again.
+    pub fn admin_unfreeze_player(env: Env, player: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .remove(&PlayerFreezeKey::FrozenPlayer(player.clone()));
+
+        // Remove from the persistent list.
+        if let Some(list) = env
+            .storage()
+            .persistent()
+            .get::<PlayerFreezeKey, soroban_sdk::Vec<Address>>(&PlayerFreezeKey::FrozenPlayers)
+        {
+            let mut updated: soroban_sdk::Vec<Address> = soroban_sdk::vec![&env];
+            for existing in list.iter() {
+                if existing != player {
+                    updated.push_back(existing.clone());
+                }
+            }
+            env.storage()
+                .persistent()
+                .set(&PlayerFreezeKey::FrozenPlayers, &updated);
+            env.storage().persistent().extend_ttl(
+                &PlayerFreezeKey::FrozenPlayers,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("unfreeze")),
+            player,
+        );
+        Ok(())
+    }
+
+    /// Returns `true` when `player` is currently frozen.
+    pub fn is_player_frozen(env: Env, player: Address) -> bool {
+        env.storage()
+            .instance()
+            .has(&PlayerFreezeKey::FrozenPlayer(player))
+    }
+
+    /// Returns all currently frozen player addresses.
+    pub fn get_frozen_players(env: Env) -> soroban_sdk::Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&PlayerFreezeKey::FrozenPlayers)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
+    /// Internal helper — rejects `player` with `Error::ContractPaused` when
+    /// frozen. Used by `create_match` (all variants) and `deposit`.
+    fn require_player_not_frozen(env: &Env, player: &Address) -> Result<(), Error> {
+        if env
+            .storage()
+            .instance()
+            .has(&PlayerFreezeKey::FrozenPlayer(player.clone()))
+        {
+            return Err(Error::ContractPaused);
+        }
+        Ok(())
+    }
+
     // ── Dynamic Fee Tiers (issue #963) ───────────────────────────────────────
 
     /// Set the dynamic fee tier schedule — admin only.
@@ -918,6 +1053,11 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
+        // Frozen players cannot create or join new matches — targeted
+        // intervention without pausing the whole contract.
+        Self::require_player_not_frozen(&env, &player1)?;
+        Self::require_player_not_frozen(&env, &player2)?;
+
         // Blacklisted tokens are permanently rejected, regardless of allowlist status.
         if Self::is_token_blacklisted(env.clone(), token.clone()) {
             return Err(Error::TokenNotAllowed);
@@ -1086,6 +1226,11 @@ impl EscrowContract {
         {
             return Err(Error::ContractPaused);
         }
+
+        // Frozen players cannot create or join new matches — targeted
+        // intervention without pausing the whole contract.
+        Self::require_player_not_frozen(&env, &player1)?;
+        Self::require_player_not_frozen(&env, &player2)?;
 
         // Blacklisted tokens are permanently rejected, regardless of allowlist status.
         if Self::is_token_blacklisted(env.clone(), token_a.clone())
@@ -1296,6 +1441,11 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
+        // Frozen players cannot create or join new matches — targeted
+        // intervention without pausing the whole contract.
+        Self::require_player_not_frozen(&env, &player1)?;
+        Self::require_player_not_frozen(&env, &player2)?;
+
         // Blacklisted tokens are permanently rejected, regardless of allowlist status.
         if Self::is_token_blacklisted(env.clone(), token.clone()) {
             return Err(Error::TokenNotAllowed);
@@ -1445,6 +1595,12 @@ impl EscrowContract {
         {
             return Err(Error::ContractPaused);
         }
+
+        // Frozen players cannot fund matches — targeted intervention without
+        // pausing the whole contract. Existing matches are unaffected: the
+        // counterpart can still cancel/expire a Pending match, and Active
+        // matches still settle normally.
+        Self::require_player_not_frozen(&env, &player)?;
 
         // ── Cross-contract reentrancy guard ──────────────────────────────────
         // If a malicious (or callback-capable) token contract re-enters
