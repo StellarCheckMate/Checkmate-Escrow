@@ -1633,12 +1633,17 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state != MatchState::Active {
-            return Err(Error::InvalidState);
+        // A still-Pending match is inherently not (fully) funded — surface
+        // `NotFunded` for it specifically, rather than the generic
+        // `InvalidState`, so `submit_result_batch` callers can distinguish
+        // "needs more deposits" from other invalid transitions (Completed,
+        // Cancelled, PendingResult, Paused).
+        if m.state == MatchState::Pending || !m.player1_deposited || !m.player2_deposited {
+            return Err(Error::NotFunded);
         }
 
-        if !m.player1_deposited || !m.player2_deposited {
-            return Err(Error::NotFunded);
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
         }
 
         Self::remove_active_match_indexed(env, &m.player1, match_id);

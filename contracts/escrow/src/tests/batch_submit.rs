@@ -62,7 +62,7 @@ fn test_submit_result_batch_partial_failure() {
     client.deposit(&match_a, &player2);
 
     // match_b only has one deposit, so it's still Pending — submit_result
-    // will fail with InvalidState (not yet Active).
+    // fails with NotFunded (not yet fully funded).
     let match_b = client.create_match(
         &player1,
         &player2,
@@ -88,12 +88,72 @@ fn test_submit_result_batch_partial_failure() {
 
     assert_eq!(outcomes.len(), 3);
     assert_eq!(outcomes.get(0).unwrap(), None);
-    assert_eq!(outcomes.get(1).unwrap(), Some(Error::InvalidState));
+    assert_eq!(outcomes.get(1).unwrap(), Some(Error::NotFunded));
     assert_eq!(outcomes.get(2).unwrap(), Some(Error::MatchNotFound));
 
     // The successful match settled, and the failing matches were left untouched.
     assert_eq!(client.get_match(&match_a).state, MatchState::Completed);
     assert_eq!(client.get_match(&match_b).state, MatchState::Pending);
+}
+
+// #1308 — NotFunded must be reported per-entry for every unfunded match in a
+// batch, not just skipped or mislabeled as InvalidState.
+#[test]
+fn test_submit_result_batch_mixed_funded_and_unfunded_reports_not_funded() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Fully funded — should settle successfully.
+    let funded = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "batch_funded1"),
+        &Platform::Lichess,
+    );
+    client.deposit(&funded, &player1);
+    client.deposit(&funded, &player2);
+
+    // No deposits at all — still Pending.
+    let unfunded_none = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "batch_unfunded_none"),
+        &Platform::Lichess,
+    );
+
+    // Only one side deposited — still Pending.
+    let unfunded_partial = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "batch_unfunded_partial"),
+        &Platform::Lichess,
+    );
+    client.deposit(&unfunded_partial, &player1);
+
+    let oracle = client.get_oracle();
+    let batch = soroban_sdk::vec![
+        &env,
+        (funded, Winner::Player1),
+        (unfunded_none, Winner::Player1),
+        (unfunded_partial, Winner::Player2),
+    ];
+
+    let outcomes = client.submit_result_batch(&batch, &oracle);
+
+    assert_eq!(outcomes.len(), 3);
+    assert_eq!(outcomes.get(0).unwrap(), None);
+    assert_eq!(outcomes.get(1).unwrap(), Some(Error::NotFunded));
+    assert_eq!(outcomes.get(2).unwrap(), Some(Error::NotFunded));
+
+    assert_eq!(client.get_match(&funded).state, MatchState::Completed);
+    assert_eq!(client.get_match(&unfunded_none).state, MatchState::Pending);
+    assert_eq!(client.get_match(&unfunded_partial).state, MatchState::Pending);
 }
 
 #[test]
