@@ -2095,6 +2095,19 @@ impl EscrowContract {
 
         let is_multi_token = m.token_b.is_some() && m.conversion_rate.is_some_and(|r| r > 0);
 
+        // The match's token(s) may have been blacklisted after creation but
+        // before expiry. Refuse to attempt a refund transfer into a token
+        // contract that's since been flagged as broken or malicious — that
+        // could fail unpredictably or panic instead of cleanly erroring, and
+        // leaves the match state untouched so it can be resolved another way
+        // (e.g. admin intervention) rather than getting stuck mid-transfer.
+        let token_b_for_check = m.token_b.clone().unwrap_or_else(|| m.token.clone());
+        if Self::is_token_blacklisted(env.clone(), m.token.clone())
+            || (is_multi_token && Self::is_token_blacklisted(env.clone(), token_b_for_check))
+        {
+            return Err(Error::TokenNotAllowed);
+        }
+
         if m.player1_deposited {
             let client_a = token::Client::new(&env, &m.token);
             client_a.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
