@@ -312,6 +312,23 @@ pub enum OracleConsensusKey {
     OracleDeadlock(u64),
 }
 
+/// Storage keys for the admin-managed per-player freeze feature
+/// (`admin_freeze_player` / `admin_unfreeze_player`).
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// for the same reason as [`OracleConsensusKey`]: Soroban's contract-type
+/// union spec caps a single enum at 50 variants, and `DataKey` is already at
+/// that limit.
+#[contracttype]
+pub enum PlayerFreezeKey {
+    /// Freeze record for a player: Address → freeze reason (String), stored on
+    /// chain for auditability. Presence of the key means the player is frozen.
+    FrozenPlayer(Address),
+    /// Persistent list of frozen player addresses, for enumeration by
+    /// `get_frozen_players` (off-chain admin tooling, frontends, monitoring).
+    FrozenPlayers,
+}
+
 /// The lifecycle event that triggered a balance snapshot.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

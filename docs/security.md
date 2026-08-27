@@ -176,6 +176,29 @@ Both contracts implement emergency pause functionality for rapid response to sec
 3. **State Persistence**: Pause state survives contract upgrades
 4. **Granular Control**: Different pause behaviors for different operations
 
+## Freeze Mechanism
+
+Freezing is the targeted alternative to a contract-wide pause: `admin_freeze_player`
+blocks **one** player address from participating without affecting any other user.
+
+**Blocked Operations for a Frozen Player:**
+- `create_match()` (and `create_match_with_conversion` / `create_match_with_referrer`) - the frozen player can neither create a match nor be named as a player in a new one
+- `deposit()` - the frozen player cannot fund matches
+
+**Allowed Operations for a Frozen Player (fund safety is never blocked):**
+- `cancel_match()` / `expire_match()` - the frozen player can still recover their own stake from pending matches
+- `claim_vested_payout()` - the frozen player can still claim payouts/refunds from already-funded matches
+- `heartbeat_match()` / `dispute_and_rollback_match()` - existing-match recovery paths remain open
+- Oracle settlement of already-`Active` matches proceeds normally
+
+### Security Properties
+
+1. **Admin-Only Control**: Only admin can freeze/unfreeze
+2. **Targeted Scope**: Other users and existing matches are completely unaffected (unlike `pause`)
+3. **Auditability**: The freeze `reason` is stored on-chain; `freeze`/`unfreeze` events are emitted for monitoring
+4. **No Fund Seizure**: A freeze never blocks a player from withdrawing or claiming their own funds
+5. **Error Code**: Rejections surface as `Error::ContractPaused` (code 9) — the error enum is at its 50-variant XDR cap, so this reuses the closest existing code (mirroring how the token blacklist reuses `TokenNotAllowed`)
+
 ### Emergency Response Protocol
 
 1. **Detection**: Monitor for suspicious activity (unusual transaction patterns, oracle delays)
