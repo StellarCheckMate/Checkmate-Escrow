@@ -564,6 +564,14 @@ let all_ids = client.get_player_matches(&player);
 let page: Vec<u64> = all_ids.iter().skip(40).take(20).collect();
 ```
 
+## Storage Layout
+
+For a complete mapping of every `DataKey` variant to its value type, storage scope (instance vs persistent vs temporary), TTL behaviour, and description, see the dedicated reference document:
+
+- [**Storage Layout Reference**](storage-layout.md) — full `DataKey` and `OracleConsensusKey` tables, upgrade safety checklist
+
+This is the recommended starting point for anyone performing a contract upgrade or building tooling that reads contract storage directly.
+
 ## Glossary
 
 > For the complete project glossary — escrow, oracle, match lifecycle states, Soroban, XLM, stake, payout, draw, wave-ready, `game_id`, allowlist, admin, epoch, ledger, Freighter, and more — see [docs/glossary.md](glossary.md). A few architecture-specific terms are summarized below.

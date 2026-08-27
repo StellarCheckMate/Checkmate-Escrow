@@ -233,3 +233,115 @@ Use `get_snapshot(match_id, index)` for audit trails without relying on off-chai
 - Error codes: [`docs/error-codes.md`](error-codes.md)
 - Architecture overview: [`docs/architecture.md`](architecture.md)
 - Oracle design: [`docs/oracle.md`](oracle.md)
+
+## Sequence Diagrams
+
+The diagrams below show the interplay between the key actors — **Player1**, **Player2**, the **Oracle**, and the **Escrow Contract** — across the three primary lifecycle paths.
+
+### Full Lifecycle: Create → Deposit → Submit Result → Payout
+
+```mermaid
+sequenceDiagram
+    actor Player1
+    actor Player2
+    participant Escrow as Escrow Contract
+    participant Oracle
+
+    Player1->>Escrow: create_match(player1, player2, stake, token, game_id)
+    Note right of Escrow: state = Pending<br/>Emit: match/created
+
+    Player1->>Escrow: deposit(match_id, player1)
+    Note right of Escrow: player1_deposited = true<br/>Transfer stake → escrow<br/>Emit: match/deposit
+
+    Player2->>Escrow: deposit(match_id, player2)
+    Note right of Escrow: player2_deposited = true<br/>state = Active<br/>Emit: match/deposit, match/activated
+
+    Note over Player1,Oracle: Game is played on Lichess / Chess.com
+
+    Oracle->>Escrow: submit_result(match_id, winner)
+    alt winner = Player1 or Player2
+        Note right of Escrow: 2×stake → winner<br/>state = Completed<br/>Emit: match/completed
+        Escrow->>Player1: payout or refund
+        Escrow->>Player2: payout or refund
+    else winner = Draw
+        Note right of Escrow: stake → player1<br/>stake → player2<br/>state = Completed<br/>Emit: match/completed
+        Escrow->>Player1: refund stake
+        Escrow->>Player2: refund stake
+    end
+```
+
+### Cancellation Path
+
+Both players may cancel a match while it is still `Pending` (before both deposits are received). Alternatively, anyone may call `expire_match` once the configured timeout has elapsed.
+
+```mermaid
+sequenceDiagram
+    actor Player1
+    actor Player2
+    actor Anyone
+    participant Escrow as Escrow Contract
+
+    Player1->>Escrow: create_match(player1, player2, stake, token, game_id)
+    Note right of Escrow: state = Pending
+
+    alt Only player1 has deposited
+        Player1->>Escrow: deposit(match_id, player1)
+        Note right of Escrow: player1_deposited = true<br/>(still Pending)
+    end
+
+    alt Voluntary cancellation
+        Player1->>Escrow: cancel_match(match_id, player1)
+        Note right of Escrow: state = Cancelled<br/>Refund any deposits<br/>Emit: match/cancelled
+        Escrow-->>Player1: refund stake (if deposited)
+        Escrow-->>Player2: refund stake (if deposited)
+    else Timeout expiry
+        Note over Anyone: elapsed ≥ match_timeout
+        Anyone->>Escrow: expire_match(match_id)
+        Note right of Escrow: state = Cancelled<br/>Refund any deposits<br/>Emit: match/expired
+        Escrow-->>Player1: refund stake (if deposited)
+        Escrow-->>Player2: refund stake (if deposited)
+    end
+```
+
+### Dispute Path
+
+When the contract is configured with a non-zero `dispute_period`, a submitted result enters a `PendingResult` window before payout is executed. Either player may open a dispute; if quorum is not reached, the original result is upheld.
+
+```mermaid
+sequenceDiagram
+    actor Player1
+    actor Player2
+    participant Escrow as Escrow Contract
+    participant Oracle
+    actor Voter
+
+    Player1->>Escrow: create_match(...)
+    Player1->>Escrow: deposit(match_id, player1)
+    Player2->>Escrow: deposit(match_id, player2)
+    Note right of Escrow: state = Active
+
+    Oracle->>Escrow: submit_result(match_id, winner)
+    Note right of Escrow: dispute_period > 0<br/>state = PendingResult<br/>PendingWinner stored<br/>Emit: match/result_submitted
+
+    alt Player disputes the result
+        Player1->>Escrow: open_dispute(match_id, bond_amount)
+        Note right of Escrow: Dispute record created<br/>Bond locked from disputer<br/>Emit: match/disputed
+
+        Voter->>Escrow: vote_dispute(match_id, winner_vote)
+        Note right of Escrow: Vote weight accumulated
+
+        alt Quorum reached — dispute upheld
+            Note right of Escrow: Payout reversed / corrected<br/>Oracle slashed<br/>state = Completed<br/>Emit: match/completed
+            Escrow->>Player1: corrected payout
+            Escrow->>Player2: corrected payout
+        else Quorum not reached — original result upheld
+            Note right of Escrow: Original winner confirmed<br/>state = Completed<br/>Emit: match/completed
+            Escrow->>Player1: payout per original result
+            Escrow->>Player2: payout per original result
+        end
+    else No dispute within deadline
+        Note right of Escrow: ResultDeadline elapses<br/>Original result finalized<br/>state = Completed
+        Escrow->>Player1: payout per original result
+        Escrow->>Player2: payout per original result
+    end
+```
