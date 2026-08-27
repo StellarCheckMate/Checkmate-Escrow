@@ -11,7 +11,7 @@ The dispute resolution system governs how contested match results are handled th
 **Purpose**: Prevent spam and create skin-in-the-game for disputers.
 
 **Implementation**:
-- Required bond: `match_stake * dispute_bond_basis_points / 10_000`
+- Required bond: `match_stake * dispute_bond_basis_points / 10_000`, floored to a minimum of **1 stroop** so disputes are never free (prevents zero-cost spam on tiny stakes while keeping small matches disputable)
 - Default: 1% of match stake (100 basis points)
 - Refunded on successful overturn (dispute result = Overturned)
 - Forfeited to treasury on upheld outcome (dispute result = Upheld)
@@ -379,7 +379,7 @@ quorum_basis_points: 1500              // 15% quorum
 
 | Error | Triggered By | Recovery |
 |-------|--------------|----------|
-| `InsufficientBond` | Bond calculation results in <= 0 | Increase stake or reduce bond % |
+| `InsufficientBond` | Bond calculation results in <= 0 (defense-in-depth; the bond is normally floored to a minimum of 1 stroop) | Increase stake or reduce bond % |
 | `QuorumNotMet` | total_votes < quorum_threshold | Wait for more votes or admin intervention |
 | `InsufficientHoldingDuration` | Voter acquired tokens too recently | Wait for holding duration to elapse |
 | `OracleSlashFailed` | Oracle contract rejects slash call | Verify oracle is registered, admin auth |
