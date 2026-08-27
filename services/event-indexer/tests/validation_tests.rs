@@ -17,11 +17,17 @@ use tower::ServiceExt;
 
 use event_indexer::api::{build_router, ApiResponse};
 use event_indexer::api_cache::ApiCache;
+use event_indexer::auth::API_KEY_HEADER;
 use event_indexer::cache::EventCache;
 use event_indexer::db::Database;
 use event_indexer::rpc::SorobanRpcClient;
 
 const UNREACHABLE_DSN: &str = "postgres://nobody:nobody@127.0.0.1:1/nowhere";
+
+/// `/transactions/player/*` is gated by the API-key middleware, so the router
+/// is configured with a key and every request carries it in the header.  This
+/// keeps the tests focused on validation rather than authentication.
+const TEST_API_KEY: &str = "test-api-key-0123456789abcdef";
 
 /// Checksum-valid account address.
 const VALID_ACCOUNT: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
@@ -34,7 +40,7 @@ fn app() -> axum::Router {
     );
     let cache = Arc::new(RwLock::new(EventCache::new(16)));
     let rpc = Arc::new(SorobanRpcClient::new("http://127.0.0.1:1").unwrap());
-    build_router(db, cache, rpc, Arc::new(ApiCache::disabled()))
+    build_router(db, cache, rpc, Arc::new(ApiCache::disabled()), Some(TEST_API_KEY.to_string()))
 }
 
 /// Issue a GET and return the status plus the decoded error message (if any).
@@ -43,6 +49,7 @@ async fn get(uri: &str) -> (StatusCode, String) {
         .oneshot(
             Request::builder()
                 .uri(uri)
+                .header(API_KEY_HEADER, TEST_API_KEY)
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

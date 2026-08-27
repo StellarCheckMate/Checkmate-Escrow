@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use event_indexer::api::build_router;
 use event_indexer::api_cache::ApiCache;
+use event_indexer::auth::API_KEY_HEADER;
 use event_indexer::cache::EventCache;
 use event_indexer::db::Database;
 use event_indexer::rpc::SorobanRpcClient;
@@ -23,13 +24,17 @@ use event_indexer::rpc::SorobanRpcClient;
 const UNREACHABLE_DSN: &str = "postgres://nobody:nobody@127.0.0.1:1/nowhere";
 const REQUEST_ID_HEADER: &str = "X-Request-ID";
 
+/// Shared secret configured on the test router.  `/stats` is gated by the API
+/// key middleware, so every request must carry it to exercise the full chain.
+const TEST_API_KEY: &str = "test-api-key-0123456789abcdef";
+
 fn app() -> axum::Router {
     let db = Arc::new(
         Database::from_dsns(UNREACHABLE_DSN, UNREACHABLE_DSN, 1, 1).expect("DSN must parse"),
     );
     let cache = Arc::new(RwLock::new(EventCache::new(16)));
     let rpc = Arc::new(SorobanRpcClient::new("http://127.0.0.1:1").unwrap());
-    build_router(db, cache, rpc, Arc::new(ApiCache::disabled()))
+    build_router(db, cache, rpc, Arc::new(ApiCache::disabled()), Some(TEST_API_KEY.to_string()))
 }
 
 /// Issue a GET request to /health and return status and request ID header.
@@ -37,7 +42,7 @@ async fn get_with_request_id(
     endpoint: &str,
     client_request_id: Option<&str>,
 ) -> (StatusCode, Option<String>) {
-    let mut builder = Request::builder().uri(endpoint);
+    let mut builder = Request::builder().uri(endpoint).header(API_KEY_HEADER, TEST_API_KEY);
 
     if let Some(id) = client_request_id {
         builder = builder.header(REQUEST_ID_HEADER, id);
