@@ -20,12 +20,35 @@ async fn validate_game_id_rejects_wrong_length() {
     assert!(LichessClient::validate_game_id("abcdefg").is_err());
     // 9 chars
     assert!(LichessClient::validate_game_id("abcdefghi").is_err());
+    // 10 chars (not 8 or 12)
+    assert!(LichessClient::validate_game_id("abcdefghij").is_err());
+    // 11 chars (not 8 or 12)
+    assert!(LichessClient::validate_game_id("abcdefghijk").is_err());
+    // 13 chars (not 8 or 12)
+    assert!(LichessClient::validate_game_id("abcdefghijklm").is_err());
 }
 
 #[tokio::test]
 async fn validate_game_id_accepts_8_alphanumeric() {
     LichessClient::validate_game_id("abcd1234").unwrap();
     LichessClient::validate_game_id("ABCD1234").unwrap();
+}
+
+/// #1355: 12-character extended Lichess game IDs (tournament format) should be accepted.
+#[tokio::test]
+async fn validate_game_id_accepts_12_alphanumeric() {
+    LichessClient::validate_game_id("abcd12345678").unwrap();
+    LichessClient::validate_game_id("ABCD12345678").unwrap();
+    LichessClient::validate_game_id("a1B2c3D4e5F6").unwrap();
+}
+
+/// #1355: 12-character IDs with non-alphanumeric characters should be rejected.
+#[tokio::test]
+async fn validate_game_id_rejects_12_chars_non_alphanumeric() {
+    // dash in the middle
+    assert!(LichessClient::validate_game_id("abcd1234-678").is_err());
+    // underscore in the middle
+    assert!(LichessClient::validate_game_id("abcd1234_678").is_err());
 }
 
 #[tokio::test]
@@ -209,4 +232,47 @@ async fn test_lichess_game_not_found() {
 
     let err = client.fetch_result("notfnd12").await.unwrap_err();
     assert!(matches!(err, LichessError::GameNotFound));
+}
+
+// ── #1355: 12-character extended Lichess game ID fetch ────────────────────────
+
+/// A 12-character Lichess game ID should pass validation and result in a
+/// successful API call when the mock server returns a valid response.
+#[tokio::test]
+async fn fetch_result_accepts_12_char_game_id() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/game/export/abcd12345678"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "winner": "white"
+        })))
+        .mount(&server)
+        .await;
+
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
+
+    let res = client.fetch_result("abcd12345678").await.unwrap();
+    assert_eq!(res.winner, contracts_oracle::types::Winner::Player1);
+}
+
+/// A 12-character Lichess game ID with a draw result should map to Winner::Draw.
+#[tokio::test]
+async fn fetch_result_12_char_draw() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/game/export/draw12345678"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .mount(&server)
+        .await;
+
+    let client =
+        LichessClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
+
+    let res = client.fetch_result("draw12345678").await.unwrap();
+    assert_eq!(res.winner, contracts_oracle::types::Winner::Draw);
 }

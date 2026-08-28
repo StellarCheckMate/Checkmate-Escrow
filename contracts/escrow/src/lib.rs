@@ -116,7 +116,7 @@ pub const DEFAULT_QUORUM_BASIS_POINTS: u32 = 2000;
 /// Maximum allowed byte length for a game_id string.
 ///
 /// Platform-specific formats:
-/// - Lichess:      8 alphanumeric characters (e.g. `"abcd1234"`)
+/// - Lichess:      8 or 12 alphanumeric characters (e.g. `"abcd1234"` or `"abcd12345678"`)
 /// - Chess.com:    numeric string, typically 7–12 digits (e.g. `"123456789"`)
 ///
 /// Both formats fit well within this limit.
@@ -126,8 +126,12 @@ const MAX_GAME_ID_LEN: u32 = 64;
 /// Results below this threshold trigger PendingResult state for dispute.
 const DEFAULT_CONFIDENCE_THRESHOLD: u8 = 50;
 
-/// Exact game ID length required for Lichess (8 alphanumeric characters).
+/// Standard game ID length for Lichess (8 alphanumeric characters).
 const LICHESS_GAME_ID_LEN: u32 = 8;
+
+/// Extended game ID length for Lichess tournament formats (12 alphanumeric characters).
+/// Lichess recently began issuing 12-character IDs for certain tournament game types.
+const LICHESS_GAME_ID_LEN_EXTENDED: u32 = 12;
 
 /// Minimum/maximum game ID length accepted for Chess.com (numeric string).
 const CHESS_COM_GAME_ID_MIN_LEN: u32 = 7;
@@ -1035,7 +1039,8 @@ impl EscrowContract {
 
     /// Validate that `game_id` matches the format expected for `platform`.
     ///
-    /// - Lichess: exactly 8 ASCII alphanumeric characters.
+    /// - Lichess: exactly 8 or 12 ASCII alphanumeric characters.
+    ///   Standard games use 8-character IDs; tournament formats may use 12.
     /// - Chess.com: 7–12 ASCII digits.
     ///
     /// Also enforces the shared non-empty / `MAX_GAME_ID_LEN` bound before
@@ -1052,7 +1057,9 @@ impl EscrowContract {
 
         match platform {
             Platform::Lichess => {
-                if len != LICHESS_GAME_ID_LEN || !slice.iter().all(|b| b.is_ascii_alphanumeric()) {
+                if (len != LICHESS_GAME_ID_LEN && len != LICHESS_GAME_ID_LEN_EXTENDED)
+                    || !slice.iter().all(|b| b.is_ascii_alphanumeric())
+                {
                     return Err(Error::InvalidGameId);
                 }
             }
@@ -1072,7 +1079,9 @@ impl EscrowContract {
     ///
     /// # Parameters
     /// - `game_id`: The platform-specific game identifier, validated against `platform`.
-    ///   - **Lichess**: exactly 8 alphanumeric characters (e.g. `"abcd1234"`).
+    ///   - **Lichess**: exactly 8 or 12 alphanumeric characters (e.g. `"abcd1234"` or
+    ///     `"abcd12345678"`). Standard games use 8-character IDs; tournament formats
+    ///     may use 12-character extended IDs.
     ///     Taken from the game URL: `https://lichess.org/<game_id>`
     ///   - **Chess.com**: 7–12 numeric digits (e.g. `"123456789"`).
     ///     Taken from the game URL: `https://www.chess.com/game/live/<game_id>`
