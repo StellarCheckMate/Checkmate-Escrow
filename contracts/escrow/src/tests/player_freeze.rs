@@ -208,6 +208,37 @@ fn test_admin_unfreeze_player_removes_from_list() {
     assert!(!client.is_player_frozen(&player1));
 }
 
+// ── admin_list_frozen_players ──────────────────────────────────────────────────
+
+#[test]
+fn test_admin_list_frozen_players_requires_admin_auth() {
+    let (env, contract_id, _oracle, player1, _p2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.admin_freeze_player(&player1, &reason(&env, "audit"));
+    env.set_auths(&[]);
+
+    let result = client.try_admin_list_frozen_players(&_admin);
+    assert!(result.is_err(), "frozen-player audit must require admin auth");
+}
+
+#[test]
+fn test_admin_list_frozen_players_returns_current_ordered_list() {
+    let (env, contract_id, _oracle, player1, player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let player3 = Address::generate(&env);
+
+    client.admin_freeze_player(&player1, &reason(&env, "r1"));
+    client.admin_freeze_player(&player2, &reason(&env, "r2"));
+    client.admin_freeze_player(&player3, &reason(&env, "r3"));
+    client.admin_unfreeze_player(&player2);
+
+    let list = client.admin_list_frozen_players(&admin);
+    assert_eq!(list.len(), 2);
+    assert_eq!(list.get(0).unwrap(), player1);
+    assert_eq!(list.get(1).unwrap(), player3);
+}
+
 // ── get_frozen_players ────────────────────────────────────────────────────────
 
 #[test]
