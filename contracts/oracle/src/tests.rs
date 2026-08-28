@@ -2623,3 +2623,273 @@ fn test_oracle_store_result_idempotent() {
     let second_result = client.get_result(&0u64);
     assert_eq!(first_result.result, second_result.result);
 }
+
+// ── #1356 rate_limit_config enforced from storage ────────────────────────
+
+/// Admin sets a custom rate limit (5/hour). After 5 accepted submissions
+/// the 6th must be rejected with RateLimitExceeded, proving the stored
+/// config — not the hardcoded constant — drives enforcement.
+#[test]
+fn test_custom_rate_limit_config_is_enforced_not_hardcoded_default() {
+    let (env, contract_id, _escrow_id, oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    // Admin lowers the hourly limit to 5 for this oracle.
+    client.set_oracle_rate_limits(&oracle_admin, &5, &1000);
+
+    let limits = client.get_oracle_rate_limits(&oracle_admin);
+    assert_eq!(limits.hourly_limit, 5, "stored hourly limit must be 5");
+    assert_eq!(limits.daily_limit, 1000, "stored daily limit must be 1000");
+
+    // First 5 submissions must succeed.
+    for match_id in 0u64..5 {
+        client.submit_result(
+            &match_id,
+            &String::from_str(&env, "g"),
+            &Platform::Lichess,
+            &Winner::Player1,
+            &100u64,
+        );
+    }
+
+    // The 6th must be rejected because the custom limit (5) is exhausted.
+    let blocked = client.try_submit_result(
+        &5u64,
+        &String::from_str(&env, "g"),
+        &Platform::Lichess,
+        &Winner::Player1,
+        &100u64,
+    );
+    assert_eq!(
+        blocked,
+        Err(Ok(Error::RateLimitExceeded)),
+        "6th submission must be rejected by the custom hourly limit of 5"
+    );
+
+    // Status view must reflect the custom limit, not the 100-submission default.
+    let status = client.get_oracle_rate_limit_status(&oracle_admin);
+    assert_eq!(status.hourly_limit, 5);
+    assert_eq!(status.hourly_used, 5);
+    assert_eq!(status.hourly_remaining, 0);
+}
+
+// ── #1357 get_all_oracles_paginated ─────────────────────────────────────
+
+#[test]
+fn test_get_all_oracles_paginated_returns_correct_page() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    // Register 5 oracles.
+    let oracles = register_n_oracles(&env, &client, &token_addr, 5, 100);
+
+    // First page: offset=0, limit=3 → first 3 oracles.
+    let page1 = client.get_all_oracles_paginated(&0, &3);
+    assert_eq!(page1.len(), 3);
+    assert_eq!(page1.get(0).unwrap(), oracles[0]);
+    assert_eq!(page1.get(1).unwrap(), oracles[1]);
+    assert_eq!(page1.get(2).unwrap(), oracles[2]);
+
+    // Second page: offset=3, limit=3 → remaining 2 oracles.
+    let page2 = client.get_all_oracles_paginated(&3, &3);
+    assert_eq!(page2.len(), 2);
+    assert_eq!(page2.get(0).unwrap(), oracles[3]);
+    assert_eq!(page2.get(1).unwrap(), oracles[4]);
+
+    // Past end: offset=10 → empty.
+    let empty = client.get_all_oracles_paginated(&10, &3);
+    assert_eq!(empty.len(), 0);
+}
+
+#[test]
+fn test_get_all_oracles_paginated_empty_when_none_registered() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let result = client.get_all_oracles_paginated(&0, &10);
+    assert_eq!(result.len(), 0);
+}
+
+#[test]
+fn test_get_all_oracles_paginated_limit_capped_at_100() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    env.budget().reset_unlimited();
+
+    // Register 5 oracles and request a limit of 200 — should return all 5.
+    let oracles = register_n_oracles(&env, &client, &token_addr, 5, 100);
+
+    let page = client.get_all_oracles_paginated(&0, &200);
+    assert_eq!(page.len(), 5, "limit=200 is capped to 100 but 5 oracles < 100");
+    assert_eq!(page.get(0).unwrap(), oracles[0]);
+    assert_eq!(page.get(4).unwrap(), oracles[4]);
+}
+
+// ── #1358 minority slash covers draw finalization ────────────────────────
+
+/// With threshold=1 (default), the first oracle to submit Draw finalizes
+/// the match immediately. Two subsequent oracles that try to submit Player1
+/// (a conflicting result) must each be slashed at MINORITY_SLASH_BPS (10%),
+/// and their call must return Ok (so the slash commits) rather than Err.
+#[test]
+fn test_minority_slash_on_draw_finalization() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+
+    // Three oracles with 1000 stake each.
+    let stake = 1000i128;
+    let oracles = register_n_oracles(&env, &client, &token_addr, 3, stake);
+
+    // Oracle 0 submits Draw first — with threshold=1 it finalizes immediately.
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "game_draw"),
+        &Platform::Lichess,
+        &Winner::Draw,
+        &500u64,
+    );
+    assert!(client.has_result(&0u64), "Draw must finalize with threshold=1");
+    assert_eq!(client.get_result(&0u64).result, Winner::Draw);
+
+    // Stakes before the two Player1 votes.
+    let stake_before_1: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracles[1].clone()))
+            .unwrap()
+    });
+    let stake_before_2: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracles[2].clone()))
+            .unwrap()
+    });
+    assert_eq!(stake_before_1.oracle_stake, stake);
+    assert_eq!(stake_before_2.oracle_stake, stake);
+
+    // Oracles 1 and 2 vote Player1 — conflicting with the finalized Draw.
+    // Must return Ok (slash commits) rather than AlreadySubmitted.
+    let result1 = client.try_submit_oracle_result(
+        &oracles[1],
+        &0u64,
+        &String::from_str(&env, "game_draw"),
+        &Platform::Lichess,
+        &Winner::Player1,
+        &500u64,
+    );
+    let result2 = client.try_submit_oracle_result(
+        &oracles[2],
+        &0u64,
+        &String::from_str(&env, "game_draw"),
+        &Platform::Lichess,
+        &Winner::Player1,
+        &500u64,
+    );
+    assert!(
+        result1.is_ok(),
+        "conflicting late vote must return Ok so the slash commits"
+    );
+    assert!(
+        result2.is_ok(),
+        "conflicting late vote must return Ok so the slash commits"
+    );
+
+    // Each minority oracle must have been slashed 10% (MINORITY_SLASH_BPS = 1000 bps).
+    let expected_slashed_stake = stake - (stake * 1000 / 10_000); // 1000 - 100 = 900
+    let reg1: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracles[1].clone()))
+            .unwrap()
+    });
+    let reg2: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracles[2].clone()))
+            .unwrap()
+    });
+    assert_eq!(
+        reg1.oracle_stake, expected_slashed_stake,
+        "oracle1 must be slashed 10% for voting Player1 against finalized Draw"
+    );
+    assert_eq!(
+        reg2.oracle_stake, expected_slashed_stake,
+        "oracle2 must be slashed 10% for voting Player1 against finalized Draw"
+    );
+
+    // Oracle 0 (Draw submitter) must be untouched.
+    let reg0: OracleRegistration = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracles[0].clone()))
+            .unwrap()
+    });
+    assert_eq!(
+        reg0.oracle_stake, stake,
+        "winning Draw oracle must not be slashed"
+    );
+
+    // Contract holds: 1000 (oracle0) + 900 (oracle1 after slash) + 900 (oracle2 after slash)
+    // and the two slashed amounts (100 + 100) were transferred to admin.
+    let expected_contract_balance = 1000 + 900 + 900;
+    assert_eq!(
+        balance_client.balance(&contract_id),
+        expected_contract_balance
+    );
+}
+
+/// Verify minority event is emitted for each Draw-minority oracle.
+#[test]
+fn test_draw_finalization_emits_minority_events_for_player_voters() {
+    let (env, contract_id, _escrow_id, _admin, _p1, _p2, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let oracles = register_n_oracles(&env, &client, &token_addr, 3, 500);
+
+    // Oracle 0 finalizes with Draw (threshold=1).
+    client.submit_oracle_result(
+        &oracles[0],
+        &0u64,
+        &String::from_str(&env, "draw_game"),
+        &Platform::Lichess,
+        &Winner::Draw,
+        &200u64,
+    );
+
+    // Oracles 1 and 2 vote Player2 — both should trigger minority events.
+    client.try_submit_oracle_result(
+        &oracles[1],
+        &0u64,
+        &String::from_str(&env, "draw_game"),
+        &Platform::Lichess,
+        &Winner::Player2,
+        &200u64,
+    ).ok();
+    client.try_submit_oracle_result(
+        &oracles[2],
+        &0u64,
+        &String::from_str(&env, "draw_game"),
+        &Platform::Lichess,
+        &Winner::Player2,
+        &200u64,
+    ).ok();
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("minority").into_val(&env),
+    ];
+    let minority_events: std::vec::Vec<_> = events
+        .iter()
+        .filter(|(_, topics, _)| *topics == expected_topics)
+        .collect();
+    assert_eq!(
+        minority_events.len(),
+        2,
+        "one minority event per late-conflicting oracle"
+    );
+}

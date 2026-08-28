@@ -510,7 +510,35 @@ impl OracleContract {
             return Err(Error::InsufficientStake);
         }
 
+        // If the match is already finalized, check whether this oracle's vote
+        // conflicts with the winning result. A conflicting late vote (i.e. the
+        // oracle submits a different result than the one that was already
+        // finalized by the majority) is treated as a minority vote and slashed
+        // accordingly — this covers the draw-finalization case where oracles
+        // that voted Player1/Player2 arrive after Draw has already won.
+        //
+        // A contract call that returns `Err` reverts *all* storage writes
+        // (including the slash), so a conflicting late vote must return `Ok`
+        // for the slash to commit, just like the equivocation case.
         if env.storage().persistent().has(&DataKey::Result(match_id)) {
+            let finalized: ResultEntry = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Result(match_id))
+                .unwrap();
+            let conflicts = finalized.result != result
+                || finalized.platform != platform
+                || finalized.game_id != game_id;
+            if conflicts {
+                // Late conflicting vote — slash as minority and return Ok so
+                // the slash commits (same pattern as equivocation handling).
+                Self::slash_bps(&env, &oracle, MINORITY_SLASH_BPS);
+                env.events().publish(
+                    (Symbol::new(&env, "oracle"), symbol_short!("minority")),
+                    (match_id, oracle),
+                );
+                return Ok(());
+            }
             return Err(Error::AlreadySubmitted);
         }
 
@@ -844,6 +872,39 @@ impl OracleContract {
             .get(&DataKey::OracleSet)
             .unwrap_or(Vec::new(&env));
         set.len()
+    }
+
+    /// Return a page of registered oracle addresses, ordered by registration
+    /// time (earliest first). Useful for monitoring and governance tools that
+    /// need to enumerate the full oracle registry without reading unbounded
+    /// storage in a single call.
+    ///
+    /// - `offset` — zero-based index of the first oracle to return.
+    /// - `limit`  — maximum number of oracles to return per page (capped at
+    ///   100 to bound per-call resource use).
+    ///
+    /// Returns an empty `Vec` when `offset` is beyond the end of the list.
+    pub fn get_all_oracles_paginated(env: Env, offset: u32, limit: u32) -> Vec<Address> {
+        extend_instance_ttl(&env);
+        let set: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleSet)
+            .unwrap_or(Vec::new(&env));
+
+        // Cap limit to 100 per call.
+        let limit = limit.min(100);
+        let total = set.len();
+        if offset >= total {
+            return Vec::new(&env);
+        }
+
+        let end = (offset + limit).min(total);
+        let mut page = Vec::new(&env);
+        for i in offset..end {
+            page.push_back(set.get(i).unwrap());
+        }
+        page
     }
 
     /// Returns performance metrics and SLA status for a registered oracle.
