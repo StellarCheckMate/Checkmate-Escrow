@@ -39,6 +39,8 @@ fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: escrow::DEFAULT_MINIMUM_STAKE,
+        max_protocol_fee: None,
+        dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
     escrow_client.create_match(
         &player1,

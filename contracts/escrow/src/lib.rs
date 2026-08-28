@@ -44,8 +44,8 @@ use soroban_sdk::{
     Symbol, Vec,
 };
 use types::{
-    BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeState, FeeTier, Match,
-    MatchState, OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform,
+    BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeBondTier, DisputeState, FeeTier,
+    Match, MatchState, OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform,
     PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey, PlayerTier, ProtocolConfig,
     SnapshotReason, TempOracleRotation, Winner,
 };
@@ -1006,7 +1006,7 @@ impl EscrowContract {
                 Symbol::new(&env, "admin"),
                 Symbol::new(&env, "fee_tiers_set"),
             ),
-            (),
+            tiers.len(),
         );
         Ok(())
     }
@@ -2681,6 +2681,28 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Admin bulk-expiration of stale pending matches. Iterates `match_ids`,
+    /// reusing `expire_match` for each entry and returning the ids that were
+    /// successfully expired. Non-pending / not-expired / not-found matches are
+    /// silently skipped, so one stale entry can never block cleanup of the rest.
+    pub fn bulk_expire_matches(env: Env, match_ids: Vec<u64>) -> Vec<u64> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)
+            .expect("escrow contract must be initialized");
+        admin.require_auth();
+
+        let mut results: Vec<u64> = Vec::new(&env);
+        for match_id in match_ids.iter() {
+            if Self::expire_match(env.clone(), match_id).is_ok() {
+                results.push_back(match_id);
+            }
+        }
+        results
+    }
+
     // ── Disconnection-rollback dispute (issue: auto-created from UNSOLVED_ISSUES_40.md) ──
 
     /// Dispute an in-progress match and roll it back, refunding both players.
@@ -3904,11 +3926,7 @@ impl EscrowContract {
         // cannot round down to a zero-cost dispute, which would let an attacker
         // spam the dispute system for free. Small matches stay disputable, they
         // just pay the 1-stroop minimum.
-        let bond_basis_points: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::DisputeBondBasisPoints)
-            .unwrap_or(DEFAULT_DISPUTE_BOND_BASIS_POINTS);
+        let bond_basis_points: u32 = Self::dispute_bond_basis_points_for(&env, m.stake_amount);
 
         let dispute_bond = m
             .stake_amount
@@ -4477,6 +4495,27 @@ impl EscrowContract {
     /// Get current dispute bond requirement in basis points.
     pub fn get_dispute_bond_basis_points(env: Env) -> u32 {
         extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::DisputeBondBasisPoints)
+            .unwrap_or(DEFAULT_DISPUTE_BOND_BASIS_POINTS)
+    }
+
+    /// Resolve the dispute-bond basis points for a given stake, consulting the
+    /// per-tier schedule in `ProtocolConfig` first and falling back to the
+    /// global `DisputeBondBasisPoints` when no tiers are configured.
+    fn dispute_bond_basis_points_for(env: &Env, stake_amount: i128) -> u32 {
+        let schedule = Self::get_config(env).dispute_bond_tier_schedule;
+        if !schedule.is_empty() {
+            for tier in schedule.iter() {
+                if stake_amount <= tier.max_stake {
+                    return tier.bond_basis_points;
+                }
+            }
+            if let Some(last) = schedule.get(schedule.len().saturating_sub(1)) {
+                return last.bond_basis_points;
+            }
+        }
         env.storage()
             .instance()
             .get(&DataKey::DisputeBondBasisPoints)
@@ -6360,6 +6399,7 @@ impl EscrowContract {
                 fee_recipient: env.current_contract_address(),
                 minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![env],
             })
     }
 

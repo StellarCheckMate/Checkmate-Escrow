@@ -53,6 +53,7 @@ fn setup_multi_token_fixture() -> (
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     // Deploy two distinct tokens (e.g. USDC and XLM)

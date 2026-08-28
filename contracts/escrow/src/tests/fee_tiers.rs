@@ -135,7 +135,12 @@ fn test_set_fee_tiers_emits_event() {
     let matched = events
         .iter()
         .find(|(_, topics, _)| *topics == expected_topics);
-    assert!(matched.is_some(), "fee_tiers_set event must be emitted");
+    let (_, _, data) = matched.expect("fee_tiers_set event must be emitted");
+    let count: u32 = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(
+        count, t.len(),
+        "fee_tiers_set event must carry the number of tiers set"
+    );
 }
 
 // ── calculate_fee_by_tier ─────────────────────────────────────────────────────

@@ -69,6 +69,11 @@ pub struct ProtocolConfig {
     /// When set, `fee = min(calculated_fee, max_protocol_fee)`.
     /// `None` means no cap (default).
     pub max_protocol_fee: Option<i128>,
+    /// Per-tier dispute bond schedule, mirroring the fee-tier pattern. Stored in
+    /// ascending `max_stake` order; each entry's `bond_basis_points` applies to
+    /// stakes up to `max_stake`. When empty (default), the global
+    /// `DisputeBondBasisPoints` value is used.
+    pub dispute_bond_tier_schedule: soroban_sdk::Vec<DisputeBondTier>,
 }
 
 /// A single fee tier entry: matches with a stake up to `max_stake` are charged
@@ -83,6 +88,20 @@ pub struct FeeTier {
     pub max_stake: i128,
     /// Fee charged as basis points of the total pot (1 bp = 0.01 %).
     pub fee_basis_points: u32,
+}
+
+/// A single dispute-bond tier entry: matches with a stake up to `max_stake`
+/// require a dispute bond of `bond_basis_points` (e.g. 100 = 1 %) of the stake.
+/// Tiers must be stored in ascending `max_stake` order; the last tier acts as
+/// the catch-all for any stake exceeding all explicit thresholds.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DisputeBondTier {
+    /// Maximum stake (inclusive) for this tier.  Use `i128::MAX` for the
+    /// open-ended final tier.
+    pub max_stake: i128,
+    /// Dispute bond charged as basis points of the match stake (1 bp = 0.01 %).
+    pub bond_basis_points: u32,
 }
 
 #[contracttype]

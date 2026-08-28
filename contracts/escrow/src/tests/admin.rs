@@ -1017,3 +1017,57 @@ fn test_rotate_oracle_temporary_validates_current_oracle() {
         "rotate_oracle_temporary must reject when old_oracle doesn't match current oracle"
     );
 }
+
+#[test]
+fn test_bulk_expire_matches_mixed_outcomes() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.set_match_timeout(&MIN_MATCH_TIMEOUT_SECONDS);
+    env.ledger().set_sequence_number(100);
+
+    // Expired pending match: created at sequence 100, bulk-expired well past timeout.
+    let expired_id = client.create_match(
+        &player1,
+        &player2,
+        &50,
+        &token,
+        &String::from_str(&env, "bulk_expired"),
+        &Platform::Lichess,
+    );
+
+    env.ledger().set_sequence_number(100 + 17_280);
+
+    // Fresh pending match: created just before the bulk call, not yet expired.
+    let not_expired_id = client.create_match(
+        &player1,
+        &player2,
+        &50,
+        &token,
+        &String::from_str(&env, "bulk_fresh"),
+        &Platform::Lichess,
+    );
+
+    let ids = vec![&env, expired_id, not_expired_id, 9999u64];
+    let expired = client.bulk_expire_matches(&ids);
+
+    assert_eq!(
+        expired.len(),
+        1,
+        "only the actually-expired match should be reported as expired"
+    );
+    assert_eq!(
+        expired.get(0),
+        Some(expired_id),
+        "the expired match id should be returned"
+    );
+
+    assert_eq!(
+        client.get_match(&expired_id).state,
+        MatchState::Cancelled
+    );
+    assert_eq!(
+        client.get_match(&not_expired_id).state,
+        MatchState::Pending
+    );
+}

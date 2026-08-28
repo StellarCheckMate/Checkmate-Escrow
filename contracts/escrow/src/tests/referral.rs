@@ -96,6 +96,7 @@ fn setup_referral_match(
         fee_recipient: admin.clone(),
         minimum_stake: crate::DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
     client.set_referral_share_bps(&referral_share_bps);
 

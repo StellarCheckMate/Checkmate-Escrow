@@ -8,7 +8,7 @@ use super::*;
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Build a non-default `ProtocolConfig` for assertion purposes.
-fn custom_config(treasury: &Address) -> ProtocolConfig {
+fn custom_config(env: &Env, treasury: &Address) -> ProtocolConfig {
     ProtocolConfig {
         vesting_duration_seconds: 86_400,
         cancellation_fee_basis_points: 50,
@@ -20,6 +20,7 @@ fn custom_config(treasury: &Address) -> ProtocolConfig {
         fee_recipient: treasury.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![env],
     }
 }
 
@@ -45,6 +46,7 @@ fn test_get_protocol_config_returns_config_set_during_initialize() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     };
 
     let actual = client.get_protocol_config();
@@ -70,6 +72,7 @@ fn test_get_protocol_config_reflects_update_after_set() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     };
 
     client.set_protocol_config(&updated);
@@ -107,7 +110,7 @@ fn test_get_protocol_config_unaffected_by_transfer_admin() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Store a non-default config so we have something meaningful to check.
-    let cfg = custom_config(&admin);
+    let cfg = custom_config(&env, &admin);
     client.set_protocol_config(&cfg);
 
     let cfg_before = client.get_protocol_config();
@@ -131,7 +134,7 @@ fn test_set_protocol_config_rejected_for_non_admin() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Construct a valid config; the call itself must fail due to auth.
-    let cfg = custom_config(&admin);
+    let cfg = custom_config(&env, &admin);
 
     // Clear all mocked auths so that the admin signature is absent.
     env.set_auths(&[]);
