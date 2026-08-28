@@ -36,7 +36,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          # wasm32v1-none is the Soroban target used for the E2E suite: core
+          # wasm 1.0 only, which the host validator accepts.
+          targets: wasm32-unknown-unknown, wasm32v1-none
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -71,6 +73,12 @@ jobs:
 
       - name: Run upgrade simulation tests
         run: cargo test -p escrow --test upgrade_simulation_tests
+
+      - name: Build release WASM
+        run: cargo build --target wasm32v1-none --release -p escrow -p oracle
+
+      - name: Run E2E tests against release WASM
+        run: cargo test -p e2e-tests
 
   frontend-build:
     name: Frontend Build

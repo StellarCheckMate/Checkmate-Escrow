@@ -1,5 +1,21 @@
 [workspace]
-members = ["contracts/escrow", "contracts/oracle", "oracle-service", "services/event-indexer"]
+members = [
+    "contracts/escrow",
+    "contracts/oracle",
+    "oracle-service",
+    "services/event-indexer",
+    "e2e-tests",
+]
+# Default members exclude e2e-tests: it is a host-only test harness that reads
+# the release WASM artifacts from disk, so plain `cargo build` / `cargo test`
+# must not try to run it without the WASM build. Run it explicitly with
+# `cargo test -p e2e-tests` after `cargo build --target wasm32v1-none --release`.
+default-members = [
+    "contracts/escrow",
+    "contracts/oracle",
+    "oracle-service",
+    "services/event-indexer",
+]
 resolver = "2"
 
 [workspace.package]
