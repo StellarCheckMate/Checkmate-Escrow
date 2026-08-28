@@ -31,7 +31,7 @@
 use std::sync::Arc;
 
 use ed25519_dalek::SigningKey;
-use tracing::{error, info, warn};
+use tracing::{error, info, info_span, warn, Instrument};
 use zeroize::Zeroizing;
 
 use crate::config::{OracleConfig, Platform};
@@ -39,8 +39,9 @@ use crate::dead_letter::DeadLetterStore;
 use crate::oracle::errors::{ChessComError, LichessError, OracleServiceError};
 use crate::oracle::{ChessComClient, LichessClient, Winner};
 use crate::queue::{PendingEntry, PendingQueue};
-use crate::reconciliation_cursor::ReconciliationCursor;
+use crate::result_cache::ResultCache;
 use crate::soroban_client::SorobanClient;
+use crate::metrics;
 
 /// The pipeline poller.  Clone-cheap — the inner state is reference-counted.
 #[derive(Clone)]
@@ -67,6 +68,9 @@ struct PollerInner {
     /// account for read-only simulation calls (`get_active_matches_paginated`,
     /// `has_result`). Never used to sign anything.
     pubkey: [u8; 32],
+    /// In-memory LRU cache for oracle results, keyed by (platform, game_id).
+    /// Avoids redundant API calls on retry within the TTL window.
+    result_cache: ResultCache,
 }
 
 impl Poller {
@@ -98,6 +102,7 @@ impl Poller {
                 chessdotcom_poll_interval_secs: cfg.chessdotcom_poll_interval_secs,
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
+                result_cache: ResultCache::with_defaults(),
             }),
         })
     }
@@ -138,6 +143,7 @@ impl Poller {
                 chessdotcom_poll_interval_secs: cfg.chessdotcom_poll_interval_secs,
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
+                result_cache: ResultCache::with_defaults(),
             }),
         })
     }
@@ -178,6 +184,7 @@ impl Poller {
                 chessdotcom_poll_interval_secs: cfg.chessdotcom_poll_interval_secs,
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
+                result_cache: ResultCache::with_defaults(),
             }),
         })
     }
@@ -201,17 +208,32 @@ impl Poller {
 
     /// Run a single polling tick: process all due queue entries.
     ///
+    /// Each entry is processed inside a tracing span that carries `match_id`
+    /// as a structured field, so all log lines emitted during verification of
+    /// that entry (including inside `lichess_client` and `soroban_client`) are
+    /// automatically correlated by `match_id` in structured log aggregators.
+    ///
     /// This is `pub` so that tests can call it directly without spawning a
     /// background task.
     pub async fn tick(&self) -> Result<(), OracleServiceError> {
         let due = self.inner.queue.due_entries().await?;
+        // Update queue-depth gauge on every tick so Prometheus reflects live state.
+        let total_depth = self.inner.queue.load().await?.len();
+        metrics::set_queue_depth(total_depth);
         if due.is_empty() {
             return Ok(());
         }
         info!(count = due.len(), "poller tick: processing due entries");
 
         for entry in due {
-            self.process_entry(entry).await;
+            let match_id = entry.match_id;
+            let span = info_span!(
+                "oracle.verify",
+                match_id = match_id,
+                game_id = %entry.game_id,
+                platform = %entry.platform,
+            );
+            self.process_entry(entry).instrument(span).await;
         }
         Ok(())
     }
@@ -278,7 +300,12 @@ impl Poller {
         game_id: String,
         platform: Platform,
     ) -> Result<bool, OracleServiceError> {
-        self.inner.queue.enqueue(match_id, game_id, platform).await
+        let added = self.inner.queue.enqueue(match_id, game_id, platform).await?;
+        if added {
+            let depth = self.inner.queue.load().await?.len();
+            metrics::set_queue_depth(depth);
+        }
+        Ok(added)
     }
 
     /// Run one reconciliation pass: page through the escrow contract's
@@ -413,6 +440,23 @@ impl Poller {
             "attempting result verification",
         );
 
+        // ── Cache check ──────────────────────────────────────────────────
+        // Skip the platform API call if there is a non-expired cached result.
+        if let Some(cached_winner) = self
+            .inner
+            .result_cache
+            .get(entry.platform, &game_id)
+            .await
+        {
+            info!(
+                match_id,
+                game_id = %game_id,
+                "cache hit — skipping API call, using cached result",
+            );
+            self.submit_and_complete(entry, cached_winner).await;
+            return;
+        }
+
         // ── Fetch result from chess platform ─────────────────────────────
         let winner_result = match entry.platform {
             Platform::Lichess => self
@@ -433,7 +477,13 @@ impl Poller {
 
         match winner_result {
             Ok(winner) => {
-                info!(match_id, ?winner, "result fetched; submitting to Soroban");
+                info!(match_id, ?winner, "result fetched; caching and submitting to Soroban");
+                // Populate the cache so subsequent retries (if submission fails)
+                // don't need to call the platform API again within the TTL window.
+                self.inner
+                    .result_cache
+                    .insert(entry.platform, &game_id, winner.clone())
+                    .await;
                 self.submit_and_complete(entry, winner).await;
             }
             Err(FetchError::Permanent(reason)) => {
@@ -466,6 +516,11 @@ impl Poller {
                         match_id,
                         "failed to remove completed entry from queue: {}", e
                     );
+                } else {
+                    // Update queue-depth gauge after successful removal.
+                    if let Ok(entries) = self.inner.queue.load().await {
+                        metrics::set_queue_depth(entries.len());
+                    }
                 }
             }
             Err(e) => {
@@ -476,6 +531,7 @@ impl Poller {
     }
 
     async fn handle_transient(&self, mut entry: PendingEntry, reason: String) {
+        let match_id = entry.match_id;
         let exhausted = entry.record_failure(
             reason,
             self.inner.retry_base_delay_secs,
@@ -486,7 +542,7 @@ impl Poller {
             self.exhaust_entry(entry).await;
         } else {
             if let Err(e) = self.inner.queue.update_entry(entry).await {
-                error!("failed to update queue entry: {}", e);
+                error!(match_id, "failed to update queue entry: {}", e);
             }
         }
     }

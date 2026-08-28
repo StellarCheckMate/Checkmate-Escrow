@@ -15,6 +15,7 @@ mod admin_stall_resolution;
 mod balance_history_edge_cases;
 mod batch_submit;
 mod consensus;
+mod deposit_batch_and_fee_cap;
 mod dispute;
 mod events;
 mod fee_calculation_scenarios;
@@ -80,6 +81,7 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     (

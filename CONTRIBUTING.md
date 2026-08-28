@@ -87,6 +87,7 @@ cargo test -p oracle
 - Add or update oracle guidance in `docs/CONTRIBUTING_ORACLE.md` when changing the oracle service, adding platform clients, or modifying result verification
 - Update README.md if adding new features or changing setup steps
 - Check repository health and link validity with `./scripts/repository_health_check.sh`
+- **When adding or renaming an error variant in `contracts/escrow/src/errors.rs` or `contracts/oracle/src/errors.rs`:** update `docs/error-codes.md` in the same PR — add a new row to the relevant table with the `Since` column set to the next version, and add an entry to the [Error Code Changelog](docs/error-codes.md#error-code-changelog) section at the bottom of that file.
 
 See [docs/repository-health-checklist.md](docs/repository-health-checklist.md) for checklist details.
 
@@ -271,6 +272,49 @@ For changes to `contracts/escrow` or `contracts/oracle`, see [docs/contributing-
 - TTL management
 - Contract initialization and upgrade safety
 - Events and observability
+
+### Updating the ABI Snapshot
+
+The escrow contract's public ABI is protected by a snapshot check in CI
+(`.github/workflows/abi-snapshot.yml`). If you intentionally add, remove, or
+rename a public function in `contracts/escrow/src/lib.rs`, you **must** update
+the baseline before merging or CI will fail.
+
+**Procedure:**
+
+1. Build the escrow contract for release:
+   ```bash
+   cd contracts/escrow
+   cargo build --target wasm32-unknown-unknown --release
+   ```
+
+2. Inspect the WASM to get the current function list:
+   ```bash
+   stellar contract inspect \
+     --wasm ../../target/wasm32-unknown-unknown/release/escrow.wasm \
+     --output json > /tmp/current-spec.json
+   ```
+
+3. Update `contracts/escrow/contract-spec.json`:
+   - Add a new `{ "name": "your_function" }` entry to the `"functions"` array
+     for each new function, or remove the entry for deleted functions.
+   - Update `"_generated_at"` to today's date.
+   - Commit the updated file as part of your PR.
+
+4. Add a changelog entry in `CHANGELOG.md` describing the ABI change:
+   ```markdown
+   ### Changed
+   - Added `your_function` to the escrow contract public ABI (since v0.X.0).
+   ```
+
+5. Update `docs/error-codes.md` if the change introduces or removes error
+   variants (see the [Since column requirement](#documentation) above).
+
+**Why this matters:** The escrow ABI is effectively a public interface. Clients
+(oracle service, frontend, third-party integrators) depend on stable function
+names and signatures. An accidental rename or removal can silently break live
+integrations. The snapshot check catches these regressions at PR review time,
+not in production.
 
 ### Oracle Service Changes
 

@@ -19,6 +19,7 @@ fn custom_config(treasury: &Address) -> ProtocolConfig {
         protocol_fee_bps: 100,
         fee_recipient: treasury.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     }
 }
 
@@ -43,6 +44,7 @@ fn test_get_protocol_config_returns_config_set_during_initialize() {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     };
 
     let actual = client.get_protocol_config();
@@ -67,6 +69,7 @@ fn test_get_protocol_config_reflects_update_after_set() {
         protocol_fee_bps: 200,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     };
 
     client.set_protocol_config(&updated);

@@ -37,4 +37,24 @@ describe('WalletErrorBoundary', () => {
     );
     expect(screen.getByText('custom fallback')).toBeInTheDocument();
   });
+
+  it('renders dedicated message with installation link when FreighterNotInstalledError is thrown', () => {
+    function FreighterThrower(): never {
+      const err = new Error('Freighter wallet not detected');
+      err.name = 'FreighterNotInstalledError';
+      throw err;
+    }
+
+    render(
+      <WalletErrorBoundary>
+        <FreighterThrower />
+      </WalletErrorBoundary>
+    );
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(/Freighter wallet not detected/i);
+    const link = screen.getByRole('link', { name: /Install Freighter/i });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', 'https://www.freighter.app/');
+  });
 });

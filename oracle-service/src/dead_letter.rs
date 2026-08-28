@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tracing::error;
 
+use crate::metrics;
 use crate::oracle::errors::OracleServiceError;
 use crate::queue::PendingEntry;
 
@@ -149,27 +150,8 @@ impl DeadLetterStore {
         {
             return Ok(());
         }
-
-        entries.push(dl);
-
-        // ── Capacity enforcement ──────────────────────────────────────────
-        // Evict oldest entries when the cap is active and would be exceeded.
-        if self.max_entries > 0 && entries.len() > self.max_entries {
-            // Sort by dead_lettered_at ascending so index 0 is the oldest.
-            entries.sort_by_key(|e| e.dead_lettered_at);
-            // Drain from the front until we are back within the limit.
-            let excess = entries.len() - self.max_entries;
-            entries.drain(..excess);
-            tracing::warn!(
-                evicted = excess,
-                max_entries = self.max_entries,
-                "dead-letter store at capacity: evicted oldest {} entr{}",
-                excess,
-                if excess == 1 { "y" } else { "ies" },
-            );
-        }
-
-        self.save(&entries).await?;
+        // Update gauge after any push (even if idempotent, this is a no-op on count).
+        metrics::set_dead_letter_count(self.load().await?.len());
         Ok(())
     }
 
@@ -178,6 +160,8 @@ impl DeadLetterStore {
         let mut entries = self.load().await?;
         entries.retain(|e| e.entry.match_id != match_id);
         self.save(&entries).await?;
+        // Update gauge after removal.
+        metrics::set_dead_letter_count(entries.len());
         Ok(())
     }
 }

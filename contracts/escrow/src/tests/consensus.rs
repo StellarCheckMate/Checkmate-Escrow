@@ -63,6 +63,7 @@ fn setup_consensus(
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: crate::DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     // Register approved oracles.

@@ -1,6 +1,6 @@
 import React, { useId } from 'react';
 
-type StakeAmountInputProps = {
+export type StakeAmountInputProps = {
   /** HTML id for the input element – needed for label association */
   id?: string;
   /** Symbol of the token to display as a suffix */
@@ -11,11 +11,18 @@ type StakeAmountInputProps = {
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   /** Minimum allowed amount (default 0) */
   min?: number;
+  /** Minimum stake amount from contract protocol config */
+  minimum_stake?: number;
+  /** Maximum stake amount from contract protocol config */
+  maximum_stake?: number;
+  /** Alias max */
+  max?: number;
 };
 
 /**
  * Input component for entering a staking amount.
- * Displays the token symbol as a suffix and performs inline validation.
+ * Displays the token symbol as a suffix and performs inline validation against
+ * contract protocol config bounds (minimum_stake, maximum_stake) or standard min/max.
  * Uses a plain text input (type="text") so it works with the test suite's
  * `getByRole('textbox')` query while still allowing numeric validation.
  */
@@ -25,17 +32,35 @@ export const StakeAmountInput: React.FC<StakeAmountInputProps> = ({
   value,
   onChange,
   min = 0,
+  minimum_stake,
+  maximum_stake,
+  max,
 }) => {
   const errorId = useId();
   const numericValue = Number(value);
   const isValidNumber = !isNaN(numericValue) && value.trim() !== '';
-  const hasError = value !== '' && (!isValidNumber || numericValue <= min);
-  const errorMessage =
-    !isValidNumber
-      ? 'Amount must be a number'
-      : numericValue <= min
-      ? `Amount must be greater than ${min}`
-      : '';
+
+  const effectiveMin = minimum_stake !== undefined ? minimum_stake : min;
+  const effectiveMax = maximum_stake !== undefined ? maximum_stake : max;
+
+  let hasError = false;
+  let errorMessage = '';
+
+  if (value !== '') {
+    if (!isValidNumber) {
+      hasError = true;
+      errorMessage = 'Amount must be a number';
+    } else if (minimum_stake !== undefined && numericValue < minimum_stake) {
+      hasError = true;
+      errorMessage = `Amount must be at least ${minimum_stake}`;
+    } else if (effectiveMax !== undefined && numericValue > effectiveMax) {
+      hasError = true;
+      errorMessage = `Amount cannot exceed ${effectiveMax}`;
+    } else if (minimum_stake === undefined && numericValue <= min) {
+      hasError = true;
+      errorMessage = `Amount must be greater than ${min}`;
+    }
+  }
 
   return (
     <div style={{ position: 'relative', display: 'inline-block', width: '100%' }}>

@@ -207,3 +207,59 @@ fn test_set_minimum_stake_rejects_negative() {
     let result = client.try_set_minimum_stake(&-1);
     assert_eq!(result, Err(Ok(Error::InvalidAmount)));
 }
+
+// ── #1355: Extended Lichess game ID format (12 characters) ────────────────────
+
+/// A valid 12-character Lichess game ID should be accepted.
+#[test]
+fn test_create_match_valid_lichess_game_id_12_chars() {
+    let (env, contract_id, player1, player2, token, ..) = setup_for_platform_and_game_id();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "abcd12345678"),
+        &Platform::Lichess,
+    );
+    assert_eq!(
+        client.get_match(&id).game_id,
+        String::from_str(&env, "abcd12345678")
+    );
+}
+
+/// A 10-character Lichess game ID (not 8 or 12) should still be rejected.
+#[test]
+fn test_create_match_invalid_lichess_game_id_10_chars() {
+    let (env, contract_id, player1, player2, token, ..) = setup_for_platform_and_game_id();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "abcd123456"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+}
+
+/// A 12-character Lichess ID containing non-alphanumeric characters is rejected.
+#[test]
+fn test_create_match_invalid_lichess_game_id_12_chars_non_alphanumeric() {
+    let (env, contract_id, player1, player2, token, ..) = setup_for_platform_and_game_id();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "abcd1234-678"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidGameId)));
+}
