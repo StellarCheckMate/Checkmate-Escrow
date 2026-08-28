@@ -326,4 +326,37 @@ describe('useMatchWebSocket', () => {
       expect(result.current.error).toMatch(/SUBSCRIBE_ERROR/);
     });
   });
+
+  describe('ping/pong handling', () => {
+    it('responds to server-sent JSON ping with pong response', async () => {
+      renderHook(() => useMatchWebSocket({ url: 'ws://localhost:8090' }));
+      const ws = MockWebSocket.lastInstance();
+      const sendSpy = vi.spyOn(ws, 'send');
+
+      act(() => ws.simulateOpen());
+      act(() => ws.simulateMessage({ type: 'welcome', protocol_version: 1, server_time: '' }));
+      act(() => ws.simulateMessage({ type: 'ping' }));
+
+      expect(sendSpy).toHaveBeenCalled();
+      const lastPayload = JSON.parse(sendSpy.mock.calls[sendSpy.mock.calls.length - 1][0]);
+      expect(lastPayload.type).toBe('pong');
+      expect(lastPayload.server_time).toBeDefined();
+    });
+
+    it('responds to raw text PING frames with pong response', async () => {
+      renderHook(() => useMatchWebSocket({ url: 'ws://localhost:8090' }));
+      const ws = MockWebSocket.lastInstance();
+      const sendSpy = vi.spyOn(ws, 'send');
+
+      act(() => ws.simulateOpen());
+      act(() => ws.simulateMessage({ type: 'welcome', protocol_version: 1, server_time: '' }));
+      act(() => {
+        ws.onmessage?.({ data: 'PING' });
+      });
+
+      expect(sendSpy).toHaveBeenCalled();
+      const lastPayload = JSON.parse(sendSpy.mock.calls[sendSpy.mock.calls.length - 1][0]);
+      expect(lastPayload.type).toBe('pong');
+    });
+  });
 });

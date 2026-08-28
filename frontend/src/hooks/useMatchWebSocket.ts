@@ -200,6 +200,14 @@ export function useMatchWebSocket({
     };
 
     ws.onmessage = (evt) => {
+      const rawData = typeof evt.data === 'string' ? evt.data.trim() : '';
+
+      // Handle raw text PING frames
+      if (rawData.toUpperCase() === 'PING') {
+        ws.send(JSON.stringify({ type: 'pong', server_time: new Date().toISOString() }));
+        return;
+      }
+
       let msg: ServerMsg;
       try {
         msg = JSON.parse(evt.data as string) as ServerMsg;
@@ -207,7 +215,7 @@ export function useMatchWebSocket({
         return;
       }
 
-      switch (msg.type) {
+      switch (msg.type?.toLowerCase()) {
         case 'welcome': {
           retryCountRef.current = 0; // reset back-off on successful handshake
           setStatus('subscribing');
