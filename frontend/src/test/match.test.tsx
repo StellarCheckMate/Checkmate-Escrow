@@ -63,20 +63,63 @@ describe('CreateMatchForm', () => {
     expect(screen.getAllByRole('alert').length).toBeGreaterThan(0);
   });
 
-  it('calls onSubmit with form data when valid', () => {
+  it('shows error for invalid lichess game ID and blocks submit', () => {
     const onSubmit = vi.fn();
     render(<CreateMatchForm onSubmit={onSubmit} />);
     fireEvent.change(screen.getByLabelText(/player 2/i), { target: { value: 'GBOB' } });
     fireEvent.change(screen.getByLabelText(/stake amount/i), { target: { value: '10' } });
     fireEvent.change(screen.getByLabelText(/token address/i), { target: { value: 'GTOK' } });
-    fireEvent.change(screen.getByLabelText(/game id/i), { target: { value: 'abc123' } });
+    fireEvent.change(screen.getByLabelText(/game id/i), { target: { value: 'abc12' } }); // only 5 chars
+    fireEvent.click(screen.getByRole('button', { name: /create match/i }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText(/Lichess game ID must be exactly 8 alphanumeric characters/i)).toBeInTheDocument();
+  });
+
+  it('shows error for invalid chess.com game ID and blocks submit', () => {
+    const onSubmit = vi.fn();
+    render(<CreateMatchForm onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByLabelText(/player 2/i), { target: { value: 'GBOB' } });
+    fireEvent.change(screen.getByLabelText(/stake amount/i), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText(/token address/i), { target: { value: 'GTOK' } });
+    fireEvent.change(screen.getByLabelText(/platform/i), { target: { value: 'chessdotcom' } });
+    fireEvent.change(screen.getByLabelText(/game id/i), { target: { value: 'short' } });
+    fireEvent.click(screen.getByRole('button', { name: /create match/i }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText(/Chess.com game ID must be 7-12 digits/i)).toBeInTheDocument();
+  });
+
+  it('calls onSubmit with form data when valid (Lichess)', () => {
+    const onSubmit = vi.fn();
+    render(<CreateMatchForm onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByLabelText(/player 2/i), { target: { value: 'GBOB' } });
+    fireEvent.change(screen.getByLabelText(/stake amount/i), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText(/token address/i), { target: { value: 'GTOK' } });
+    fireEvent.change(screen.getByLabelText(/game id/i), { target: { value: 'abc12345' } });
     fireEvent.click(screen.getByRole('button', { name: /create match/i }));
     expect(onSubmit).toHaveBeenCalledWith({
       player2: 'GBOB',
       stakeAmount: '10',
       token: 'GTOK',
-      gameId: 'abc123',
+      gameId: 'abc12345',
       platform: 'lichess',
+    });
+  });
+
+  it('calls onSubmit with form data when valid (Chess.com)', () => {
+    const onSubmit = vi.fn();
+    render(<CreateMatchForm onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByLabelText(/player 2/i), { target: { value: 'GBOB' } });
+    fireEvent.change(screen.getByLabelText(/stake amount/i), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText(/token address/i), { target: { value: 'GTOK' } });
+    fireEvent.change(screen.getByLabelText(/platform/i), { target: { value: 'chessdotcom' } });
+    fireEvent.change(screen.getByLabelText(/game id/i), { target: { value: '1234567890' } });
+    fireEvent.click(screen.getByRole('button', { name: /create match/i }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      player2: 'GBOB',
+      stakeAmount: '10',
+      token: 'GTOK',
+      gameId: '1234567890',
+      platform: 'chessdotcom',
     });
   });
 });
