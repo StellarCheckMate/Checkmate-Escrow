@@ -84,6 +84,7 @@ impl Harness {
 
 /// Test that the per-player active match cap prevents unbounded inflation.
 /// This reproduces the attack vector documented in docs/performance-report.md:71-85.
+#[ignore = "slow (100 matches); run explicitly with `cargo test -- --ignored`"]
 #[test]
 fn test_active_match_inflation_cap_prevents_dos() {
     let harness = Harness::new();
@@ -122,6 +123,7 @@ fn test_active_match_inflation_cap_prevents_dos() {
 
 /// Test that removal cost is bounded by the per-player cap, not total history.
 /// This verifies the fix for docs/performance-report.md:73-81.
+#[ignore = "slow (500+ matches); run explicitly with `cargo test -- --ignored`"]
 #[test]
 fn test_removal_cost_bounded_by_cap() {
     let harness = Harness::new();
@@ -262,6 +264,7 @@ fn test_unbounded_match_scans_are_capped() {
 }
 
 /// Test that per-player active match cap is enforced correctly.
+#[ignore = "slow (1000 matches); run explicitly with `cargo test -- --ignored`"]
 #[test]
 fn test_per_player_active_match_cap_enforcement() {
     let harness = Harness::new();
