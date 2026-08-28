@@ -16,10 +16,12 @@ pub fn test_config() -> OracleConfig {
         lichess_api_token: None,
         chessdotcom_api_key: None,
         poll_interval_secs: 30,
+        chessdotcom_poll_interval_secs: 60,
         max_retries: 5,
         retry_base_delay_secs: 10,
         queue_dir: "/tmp/test-oracle-queue".to_string(),
         reconciliation_interval_secs: 60,
+        dead_letter_max_entries: 1000,
     }
 }
 

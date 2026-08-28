@@ -51,10 +51,12 @@ fn make_config(soroban_rpc_url: &str, queue_dir: &str) -> OracleConfig {
         lichess_api_token: None,
         chessdotcom_api_key: None,
         poll_interval_secs: 1,
+        chessdotcom_poll_interval_secs: 1,
         max_retries: 3,
         retry_base_delay_secs: 1,
         queue_dir: queue_dir.to_string(),
         reconciliation_interval_secs: 1,
+        dead_letter_max_entries: 0,
     }
 }
 
@@ -122,7 +124,7 @@ async fn lichess_oracle_completes_match_end_to_end() {
 
     let poller = Poller::new_with_lichess_base(&cfg, lichess_server.uri()).unwrap();
     let queue = PendingQueue::new(dir_str);
-    let dead_letter = DeadLetterStore::new(dir_str);
+    let dead_letter = DeadLetterStore::new(dir_str, 0);
 
     enqueue_due(&queue, MATCH_ID, GAME_ID, Platform::Lichess).await;
 

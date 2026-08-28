@@ -65,7 +65,9 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let dir = queue_dir();
-    let store = DeadLetterStore::new(&dir);
+    // The replay tool doesn't enforce a capacity limit — it always operates
+    // on the full current contents of the dead-letter file as-is.
+    let store = DeadLetterStore::new(&dir, 0);
     let queue = PendingQueue::new(&dir);
 
     let dry_run = args.iter().any(|a| a == "--dry-run");
