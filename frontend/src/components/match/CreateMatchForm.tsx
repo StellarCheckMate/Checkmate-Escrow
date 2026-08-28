@@ -13,6 +13,24 @@ interface CreateMatchFormProps {
   onSubmit: (data: CreateMatchData) => void;
 }
 
+export const LICHESS_GAME_ID_REGEX = /^[a-zA-Z0-9]{8}$/;
+export const CHESSDOTCOM_GAME_ID_REGEX = /^\d{7,12}$/;
+
+export function validateGameId(gameId: string, platform: 'lichess' | 'chessdotcom'): string | null {
+  const trimmed = gameId.trim();
+  if (!trimmed) return 'Required';
+  if (platform === 'lichess') {
+    if (!LICHESS_GAME_ID_REGEX.test(trimmed)) {
+      return 'Lichess game ID must be exactly 8 alphanumeric characters';
+    }
+  } else if (platform === 'chessdotcom') {
+    if (!CHESSDOTCOM_GAME_ID_REGEX.test(trimmed)) {
+      return 'Chess.com game ID must be 7-12 digits';
+    }
+  }
+  return null;
+}
+
 export function CreateMatchForm({ onSubmit }: CreateMatchFormProps) {
   const [form, setForm] = useState<CreateMatchData>({
     player2: '',
@@ -28,7 +46,8 @@ export function CreateMatchForm({ onSubmit }: CreateMatchFormProps) {
     if (!form.player2.trim()) e.player2 = 'Required';
     if (!form.stakeAmount.trim() || Number(form.stakeAmount) <= 0) e.stakeAmount = 'Must be > 0';
     if (!form.token.trim()) e.token = 'Required';
-    if (!form.gameId.trim()) e.gameId = 'Required';
+    const gameIdErr = validateGameId(form.gameId, form.platform);
+    if (gameIdErr) e.gameId = gameIdErr;
     setErrors(e);
     return Object.keys(e).length === 0;
   }
