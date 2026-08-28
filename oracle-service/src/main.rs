@@ -34,6 +34,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use oracle_service::{
     config,
     health::HealthChecker,
+    metrics,
     middleware::{
         rate_limit::{self, RateLimitState},
         waf::{self, WafState},
@@ -55,6 +56,23 @@ struct AppState {
 async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> {
     let status = state.health_checker.status().await;
     Json(serde_json::to_value(&status).unwrap_or(serde_json::json!(null)))
+}
+
+/// `GET /metrics` — Prometheus text-format metrics scrape endpoint.
+///
+/// Exposes `oracle_queue_depth` and `oracle_dead_letter_count` gauges (plus
+/// standard process metrics when the `process` feature is enabled) in the
+/// text/plain; version=0.0.4 format expected by Prometheus.
+async fn metrics_handler() -> Response {
+    let body = metrics::render();
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
 }
 
 // ── API documentation handlers ────────────────────────────────────────────────
@@ -168,6 +186,7 @@ async fn main() {
     // traffic before the token-bucket rate limiter does any bookkeeping.
     let app = Router::new()
         .route("/health", get(health_check))
+        .route("/metrics", get(metrics_handler))
         .route("/api/docs", get(api_docs_ui))
         .route("/api/openapi.yaml", get(api_openapi_yaml))
         .with_state(app_state.clone())
@@ -190,6 +209,7 @@ async fn main() {
 
     info!("oracle service listening on http://0.0.0.0:8000");
     info!("API docs available at http://0.0.0.0:8000/api/docs");
+    info!("Prometheus metrics available at http://0.0.0.0:8000/metrics");
 
     // ── Run all four tasks concurrently ─────────────────────────────────────
     tokio::select! {

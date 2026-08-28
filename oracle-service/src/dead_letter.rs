@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use tracing::error;
 
+use crate::metrics;
 use crate::oracle::errors::OracleServiceError;
 use crate::queue::PendingEntry;
 
@@ -128,6 +129,8 @@ impl DeadLetterStore {
             entries.push(dl);
             self.save(&entries).await?;
         }
+        // Update gauge after any push (even if idempotent, this is a no-op on count).
+        metrics::set_dead_letter_count(self.load().await?.len());
         Ok(())
     }
 
@@ -136,6 +139,8 @@ impl DeadLetterStore {
         let mut entries = self.load().await?;
         entries.retain(|e| e.entry.match_id != match_id);
         self.save(&entries).await?;
+        // Update gauge after removal.
+        metrics::set_dead_letter_count(entries.len());
         Ok(())
     }
 }
