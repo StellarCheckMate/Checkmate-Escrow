@@ -71,8 +71,7 @@ impl ResultCache {
     /// * `capacity` — maximum number of `(platform, game_id)` entries to keep.
     /// * `ttl` — how long a cached result is considered valid.
     pub fn new(capacity: usize, ttl: Duration) -> Self {
-        let cap = std::num::NonZeroUsize::new(capacity.max(1))
-            .expect("capacity must be >= 1");
+        let cap = std::num::NonZeroUsize::new(capacity.max(1)).expect("capacity must be >= 1");
         Self {
             inner: Arc::new(Mutex::new(LruCache::new(cap))),
             ttl,
@@ -81,7 +80,10 @@ impl ResultCache {
 
     /// Create a cache with default settings (1 024 entries, 60 s TTL).
     pub fn with_defaults() -> Self {
-        Self::new(DEFAULT_CACHE_CAPACITY, Duration::from_secs(DEFAULT_CACHE_TTL_SECS))
+        Self::new(
+            DEFAULT_CACHE_CAPACITY,
+            Duration::from_secs(DEFAULT_CACHE_TTL_SECS),
+        )
     }
 
     /// Look up a cached result for `(platform, game_id)`.
@@ -142,7 +144,9 @@ mod tests {
     #[tokio::test]
     async fn cache_hit_within_ttl() {
         let cache = ResultCache::new(16, Duration::from_secs(60));
-        cache.insert(Platform::Lichess, "abcd1234", Winner::Player1).await;
+        cache
+            .insert(Platform::Lichess, "abcd1234", Winner::Player1)
+            .await;
 
         let result = cache.get(Platform::Lichess, "abcd1234").await;
         assert_eq!(result, Some(Winner::Player1));
@@ -159,7 +163,9 @@ mod tests {
     async fn cache_miss_after_ttl_expiry() {
         // Very short TTL so the entry expires before we read it.
         let cache = ResultCache::new(16, Duration::from_millis(1));
-        cache.insert(Platform::Lichess, "abcd1234", Winner::Player1).await;
+        cache
+            .insert(Platform::Lichess, "abcd1234", Winner::Player1)
+            .await;
 
         // Sleep past the TTL.
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -171,8 +177,12 @@ mod tests {
     #[tokio::test]
     async fn different_platforms_are_separate_keys() {
         let cache = ResultCache::new(16, Duration::from_secs(60));
-        cache.insert(Platform::Lichess, "abcd1234", Winner::Player1).await;
-        cache.insert(Platform::ChessDotCom, "abcd1234", Winner::Player2).await;
+        cache
+            .insert(Platform::Lichess, "abcd1234", Winner::Player1)
+            .await;
+        cache
+            .insert(Platform::ChessDotCom, "abcd1234", Winner::Player2)
+            .await;
 
         assert_eq!(
             cache.get(Platform::Lichess, "abcd1234").await,
@@ -187,10 +197,16 @@ mod tests {
     #[tokio::test]
     async fn lru_eviction_respects_capacity() {
         let cache = ResultCache::new(2, Duration::from_secs(60));
-        cache.insert(Platform::Lichess, "game0001", Winner::Player1).await;
-        cache.insert(Platform::Lichess, "game0002", Winner::Draw).await;
+        cache
+            .insert(Platform::Lichess, "game0001", Winner::Player1)
+            .await;
+        cache
+            .insert(Platform::Lichess, "game0002", Winner::Draw)
+            .await;
         // Inserting a third entry should evict the LRU entry (game0001).
-        cache.insert(Platform::Lichess, "game0003", Winner::Player2).await;
+        cache
+            .insert(Platform::Lichess, "game0003", Winner::Player2)
+            .await;
 
         assert_eq!(cache.len().await, 2);
         // game0001 was evicted (LRU).

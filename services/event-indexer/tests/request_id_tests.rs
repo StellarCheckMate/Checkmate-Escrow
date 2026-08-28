@@ -34,7 +34,13 @@ fn app() -> axum::Router {
     );
     let cache = Arc::new(RwLock::new(EventCache::new(16)));
     let rpc = Arc::new(SorobanRpcClient::new("http://127.0.0.1:1").unwrap());
-    build_router(db, cache, rpc, Arc::new(ApiCache::disabled()), Some(TEST_API_KEY.to_string()))
+    build_router(
+        db,
+        cache,
+        rpc,
+        Arc::new(ApiCache::disabled()),
+        Some(TEST_API_KEY.to_string()),
+    )
 }
 
 /// Issue a GET request to /health and return status and request ID header.
@@ -42,7 +48,9 @@ async fn get_with_request_id(
     endpoint: &str,
     client_request_id: Option<&str>,
 ) -> (StatusCode, Option<String>) {
-    let mut builder = Request::builder().uri(endpoint).header(API_KEY_HEADER, TEST_API_KEY);
+    let mut builder = Request::builder()
+        .uri(endpoint)
+        .header(API_KEY_HEADER, TEST_API_KEY);
 
     if let Some(id) = client_request_id {
         builder = builder.header(REQUEST_ID_HEADER, id);

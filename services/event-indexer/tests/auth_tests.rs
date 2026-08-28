@@ -104,7 +104,11 @@ async fn protected_endpoints_fail_closed_without_a_configured_key() {
             "401 for {uri} must explain that no key is configured"
         );
         assert!(
-            parsed.error.as_deref().unwrap_or("").contains("not configured"),
+            parsed
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("not configured"),
             "401 for {uri} must mention the missing configuration"
         );
     }

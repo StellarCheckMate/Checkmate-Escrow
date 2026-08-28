@@ -515,7 +515,13 @@ async fn api_get_events_by_player_returns_correct_subset() {
 
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
-    let app = build_router(db.clone(), cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
+    let app = build_router(
+        db.clone(),
+        cache,
+        rpc,
+        no_cache(),
+        Some(TEST_API_KEY.to_string()),
+    );
 
     let response = app
         .oneshot(

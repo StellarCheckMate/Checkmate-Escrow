@@ -45,7 +45,10 @@ fn parse_max_retries(args: &[String]) -> Option<u32> {
             Some(val) => match val.parse::<u32>() {
                 Ok(n) => Some(n),
                 Err(_) => {
-                    eprintln!("--max-retries requires a non-negative integer, got: {}", val);
+                    eprintln!(
+                        "--max-retries requires a non-negative integer, got: {}",
+                        val
+                    );
                     std::process::exit(1);
                 }
             },

@@ -821,13 +821,7 @@ fn test_dispute_bond_minimum_one_for_tiny_stake() {
     // to 0, so the bond must be floored up to 1 stroop — a dispute is never
     // free, even on the smallest possible match.
     let match_id = create_funded_active_match_with_stake(
-        &client,
-        &env,
-        &player1,
-        &player2,
-        &token,
-        "tiny0001",
-        1,
+        &client, &env, &player1, &player2, &token, "tiny0001", 1,
     );
 
     env.ledger().set_sequence_number(1000);
@@ -857,13 +851,7 @@ fn test_dispute_bond_minimum_one_for_sub_unit_stake() {
 
     // 99 * 100 / 10_000 = 0.99 → floors to 0, must be floored up to 1.
     let match_id = create_funded_active_match_with_stake(
-        &client,
-        &env,
-        &player1,
-        &player2,
-        &token,
-        "tiny0099",
-        99,
+        &client, &env, &player1, &player2, &token, "tiny0099", 99,
     );
 
     env.ledger().set_sequence_number(1000);

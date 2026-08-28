@@ -98,11 +98,9 @@ async fn fetch_result_retries_rate_limited_request_after_header_delay() {
         .mount(&server)
         .await;
 
-    let client = ChessComClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        ChessComClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
 
     let result = client.fetch_result("429").await.unwrap();
 
@@ -131,11 +129,9 @@ async fn fetch_result_reloads_rotated_api_key_after_unauthorized() {
         .mount(&server)
         .await;
 
-    let client = ChessComClient::new_with_base_and_timeout(
-        server.uri(),
-        std::time::Duration::from_secs(30),
-    )
-    .unwrap();
+    let client =
+        ChessComClient::new_with_base_and_timeout(server.uri(), std::time::Duration::from_secs(30))
+            .unwrap();
     std::env::set_var("CHESSDOTCOM_API_KEY", "new-key");
 
     let result = client.fetch_result("401").await.unwrap();
