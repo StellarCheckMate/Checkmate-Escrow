@@ -1,6 +1,6 @@
 use oracle_service::oracle::{ChessComClient, ChessComError, ChessComGameResult};
 
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
@@ -73,6 +73,75 @@ async fn fetch_result_maps_white_to_player1() {
 
     let res: ChessComGameResult = client.fetch_result("555").await.unwrap();
     assert_eq!(res.winner, contracts_oracle::types::Winner::Player1);
+}
+
+#[tokio::test]
+async fn fetch_result_retries_rate_limited_request_after_header_delay() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/pub/game/429"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "0")
+                .set_body_string("rate limited"),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/pub/game/429"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "end": {"result": "draw"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = ChessComClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+
+    let result = client.fetch_result("429").await.unwrap();
+
+    assert_eq!(result.winner, contracts_oracle::types::Winner::Draw);
+}
+
+#[tokio::test]
+async fn fetch_result_reloads_rotated_api_key_after_unauthorized() {
+    let server = MockServer::start().await;
+    std::env::set_var("CHESSDOTCOM_API_KEY", "old-key");
+
+    Mock::given(method("GET"))
+        .and(path("/pub/game/401"))
+        .and(header("authorization", "Bearer old-key"))
+        .respond_with(ResponseTemplate::new(401))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/pub/game/401"))
+        .and(header("authorization", "Bearer new-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "end": {"result": "white"}
+        })))
+        .mount(&server)
+        .await;
+
+    let client = ChessComClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+    std::env::set_var("CHESSDOTCOM_API_KEY", "new-key");
+
+    let result = client.fetch_result("401").await.unwrap();
+
+    std::env::remove_var("CHESSDOTCOM_API_KEY");
+    assert_eq!(result.winner, contracts_oracle::types::Winner::Player1);
 }
 
 #[tokio::test]

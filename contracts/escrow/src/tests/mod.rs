@@ -15,6 +15,7 @@ mod admin_stall_resolution;
 mod balance_history_edge_cases;
 mod batch_submit;
 mod consensus;
+mod deposit_batch_and_fee_cap;
 mod dispute;
 mod events;
 mod fee_calculation_scenarios;
@@ -29,6 +30,7 @@ mod multi_token;
 mod oracle_validation;
 mod pagination;
 mod player_balance_history;
+mod player_freeze;
 mod referral;
 mod security;
 mod slash_relay_tests;
@@ -80,6 +82,7 @@ pub fn setup() -> (Env, Address, Address, Address, Address, Address, Address) {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     (
@@ -196,3 +199,7 @@ mod dispute_rollback;
 mod platform_stats;
 mod protocol_config;
 mod stablecoin;
+mod issue_1342;
+mod issue_1343;
+mod issue_1344;
+mod issue_1345;

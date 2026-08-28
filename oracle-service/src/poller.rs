@@ -31,7 +31,7 @@
 use std::sync::Arc;
 
 use ed25519_dalek::SigningKey;
-use tracing::{error, info, warn};
+use tracing::{error, info, info_span, warn, Instrument};
 use zeroize::Zeroizing;
 
 use crate::config::{OracleConfig, Platform};
@@ -39,7 +39,9 @@ use crate::dead_letter::DeadLetterStore;
 use crate::oracle::errors::{ChessComError, LichessError, OracleServiceError};
 use crate::oracle::{ChessComClient, LichessClient, Winner};
 use crate::queue::{PendingEntry, PendingQueue};
+use crate::result_cache::ResultCache;
 use crate::soroban_client::SorobanClient;
+use crate::metrics;
 
 /// The pipeline poller.  Clone-cheap — the inner state is reference-counted.
 #[derive(Clone)]
@@ -50,12 +52,15 @@ pub struct Poller {
 struct PollerInner {
     queue: PendingQueue,
     dead_letter: DeadLetterStore,
+    cursor: ReconciliationCursor,
     soroban: SorobanClient,
     chess_com: ChessComClient,
     lichess: LichessClient,
     signing_key: Zeroizing<[u8; 32]>,
     max_retries: u32,
     retry_base_delay_secs: u64,
+    /// How often (seconds) the Chess.com-specific poll loop wakes.
+    chessdotcom_poll_interval_secs: u64,
     /// Strkey of the oracle contract — used by reconciliation to check
     /// `has_result` before enqueuing a discovered match.
     contract_oracle: String,
@@ -63,6 +68,9 @@ struct PollerInner {
     /// account for read-only simulation calls (`get_active_matches_paginated`,
     /// `has_result`). Never used to sign anything.
     pubkey: [u8; 32],
+    /// In-memory LRU cache for oracle results, keyed by (platform, game_id).
+    /// Avoids redundant API calls on retry within the TTL window.
+    result_cache: ResultCache,
 }
 
 impl Poller {
@@ -83,15 +91,18 @@ impl Poller {
         Ok(Self {
             inner: Arc::new(PollerInner {
                 queue: PendingQueue::new(&cfg.queue_dir),
-                dead_letter: DeadLetterStore::new(&cfg.queue_dir),
+                dead_letter: DeadLetterStore::new(&cfg.queue_dir, cfg.dead_letter_max_entries),
+                cursor: ReconciliationCursor::new(&cfg.queue_dir),
                 soroban,
                 chess_com,
                 lichess,
                 signing_key: Zeroizing::new(*cfg.oracle_signing_key),
                 max_retries: cfg.max_retries,
                 retry_base_delay_secs: cfg.retry_base_delay_secs,
+                chessdotcom_poll_interval_secs: cfg.chessdotcom_poll_interval_secs,
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
+                result_cache: ResultCache::with_defaults(),
             }),
         })
     }
@@ -121,15 +132,18 @@ impl Poller {
         Ok(Self {
             inner: Arc::new(PollerInner {
                 queue: PendingQueue::new(&cfg.queue_dir),
-                dead_letter: DeadLetterStore::new(&cfg.queue_dir),
+                dead_letter: DeadLetterStore::new(&cfg.queue_dir, cfg.dead_letter_max_entries),
+                cursor: ReconciliationCursor::new(&cfg.queue_dir),
                 soroban,
                 chess_com,
                 lichess,
                 signing_key: Zeroizing::new(*cfg.oracle_signing_key),
                 max_retries: cfg.max_retries,
                 retry_base_delay_secs: cfg.retry_base_delay_secs,
+                chessdotcom_poll_interval_secs: cfg.chessdotcom_poll_interval_secs,
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
+                result_cache: ResultCache::with_defaults(),
             }),
         })
     }
@@ -159,32 +173,67 @@ impl Poller {
         Ok(Self {
             inner: Arc::new(PollerInner {
                 queue: PendingQueue::new(&cfg.queue_dir),
-                dead_letter: DeadLetterStore::new(&cfg.queue_dir),
+                dead_letter: DeadLetterStore::new(&cfg.queue_dir, cfg.dead_letter_max_entries),
+                cursor: ReconciliationCursor::new(&cfg.queue_dir),
                 soroban,
                 chess_com,
                 lichess,
                 signing_key: Zeroizing::new(*cfg.oracle_signing_key),
                 max_retries: cfg.max_retries,
                 retry_base_delay_secs: cfg.retry_base_delay_secs,
+                chessdotcom_poll_interval_secs: cfg.chessdotcom_poll_interval_secs,
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
+                result_cache: ResultCache::with_defaults(),
             }),
         })
     }
 
+    /// Return the configured Chess.com poll interval in seconds.
+    ///
+    /// Exposed so that the main loop and tests can read it without reaching
+    /// into the `Arc<PollerInner>`.
+    pub fn chessdotcom_poll_interval_secs(&self) -> u64 {
+        self.inner.chessdotcom_poll_interval_secs
+    }
+
+    /// Read the currently persisted reconciliation cursor offset from disk.
+    ///
+    /// Returns `0` if no cursor file exists (i.e. no cycle is in progress or
+    /// the last cycle completed cleanly).  Exposed primarily for integration
+    /// tests that simulate a mid-reconciliation restart.
+    pub async fn reconciliation_cursor_offset(&self) -> u32 {
+        self.inner.cursor.load().await
+    }
+
     /// Run a single polling tick: process all due queue entries.
+    ///
+    /// Each entry is processed inside a tracing span that carries `match_id`
+    /// as a structured field, so all log lines emitted during verification of
+    /// that entry (including inside `lichess_client` and `soroban_client`) are
+    /// automatically correlated by `match_id` in structured log aggregators.
     ///
     /// This is `pub` so that tests can call it directly without spawning a
     /// background task.
     pub async fn tick(&self) -> Result<(), OracleServiceError> {
         let due = self.inner.queue.due_entries().await?;
+        // Update queue-depth gauge on every tick so Prometheus reflects live state.
+        let total_depth = self.inner.queue.load().await?.len();
+        metrics::set_queue_depth(total_depth);
         if due.is_empty() {
             return Ok(());
         }
         info!(count = due.len(), "poller tick: processing due entries");
 
         for entry in due {
-            self.process_entry(entry).await;
+            let match_id = entry.match_id;
+            let span = info_span!(
+                "oracle.verify",
+                match_id = match_id,
+                game_id = %entry.game_id,
+                platform = %entry.platform,
+            );
+            self.process_entry(entry).instrument(span).await;
         }
         Ok(())
     }
@@ -200,6 +249,50 @@ impl Poller {
         }
     }
 
+    /// Run a Chess.com-specific polling loop that wakes every
+    /// `chessdotcom_poll_interval_secs` seconds.
+    ///
+    /// This allows Chess.com games (which finish more slowly, especially
+    /// classical time controls) to be polled at an independent rate from the
+    /// general Lichess pipeline tick.
+    pub async fn run_chess_com_loop(self) {
+        let interval =
+            tokio::time::Duration::from_secs(self.inner.chessdotcom_poll_interval_secs);
+        loop {
+            // Only process due Chess.com entries.
+            match self.tick_chess_com().await {
+                Ok(n) if n > 0 => {
+                    info!(count = n, "chess.com poller tick: processed due entries");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    error!("chess.com poller tick error: {}", e);
+                }
+            }
+            tokio::time::sleep(interval).await;
+        }
+    }
+
+    /// Process only Chess.com entries that are due for a retry.
+    ///
+    /// Returns the number of entries processed.  `pub` so tests can call it
+    /// directly without spawning a background loop.
+    pub async fn tick_chess_com(&self) -> Result<usize, OracleServiceError> {
+        let due = self
+            .inner
+            .queue
+            .due_entries()
+            .await?
+            .into_iter()
+            .filter(|e| e.platform == Platform::ChessDotCom)
+            .collect::<Vec<_>>();
+        let count = due.len();
+        for entry in due {
+            self.process_entry(entry).await;
+        }
+        Ok(count)
+    }
+
     /// Enqueue a new match for verification if not already queued.
     pub async fn enqueue(
         &self,
@@ -207,7 +300,12 @@ impl Poller {
         game_id: String,
         platform: Platform,
     ) -> Result<bool, OracleServiceError> {
-        self.inner.queue.enqueue(match_id, game_id, platform).await
+        let added = self.inner.queue.enqueue(match_id, game_id, platform).await?;
+        if added {
+            let depth = self.inner.queue.load().await?.len();
+            metrics::set_queue_depth(depth);
+        }
+        Ok(added)
     }
 
     /// Run one reconciliation pass: page through the escrow contract's
@@ -218,10 +316,25 @@ impl Poller {
     /// file has been lost entirely, or against a queue that already has
     /// entries mid-retry — `PendingQueue::enqueue` dedups on `match_id` and
     /// never touches an existing entry's retry state.
+    ///
+    /// ## Cursor persistence
+    ///
+    /// The current page offset is saved to disk after every page so that a
+    /// service restart mid-reconciliation resumes from where it left off rather
+    /// than restarting from offset 0.  The cursor is cleared when the cycle
+    /// completes successfully.
     pub async fn reconcile(&self) -> Result<(), OracleServiceError> {
         const PAGE_SIZE: u32 = 50;
 
-        let mut offset = 0u32;
+        // Resume from a previously persisted offset (0 if starting fresh).
+        let mut offset = self.inner.cursor.load().await;
+        if offset > 0 {
+            info!(
+                offset,
+                "reconciliation resuming from persisted cursor offset"
+            );
+        }
+
         let mut discovered = 0u32;
 
         loop {
@@ -272,11 +385,28 @@ impl Poller {
                 }
             }
 
+            offset += page_len;
+
+            // Persist the cursor after each successfully processed page so a
+            // restart can resume from here instead of offset 0.
+            if let Err(e) = self.inner.cursor.save(offset).await {
+                // Non-fatal: log and continue — correctness is maintained because
+                // PendingQueue::enqueue is idempotent (already-queued matches are
+                // silently skipped on re-discovery).
+                error!(
+                    offset,
+                    "failed to persist reconciliation cursor (non-fatal): {}", e
+                );
+            }
+
             if page_len < PAGE_SIZE {
                 break;
             }
-            offset += page_len;
         }
+
+        // Cycle complete — remove the cursor file so the next cycle starts
+        // from offset 0 (fresh scan of all active matches).
+        self.inner.cursor.clear().await;
 
         if discovered > 0 {
             info!(count = discovered, "reconciliation cycle complete");
@@ -310,6 +440,23 @@ impl Poller {
             "attempting result verification",
         );
 
+        // ── Cache check ──────────────────────────────────────────────────
+        // Skip the platform API call if there is a non-expired cached result.
+        if let Some(cached_winner) = self
+            .inner
+            .result_cache
+            .get(entry.platform, &game_id)
+            .await
+        {
+            info!(
+                match_id,
+                game_id = %game_id,
+                "cache hit — skipping API call, using cached result",
+            );
+            self.submit_and_complete(entry, cached_winner).await;
+            return;
+        }
+
         // ── Fetch result from chess platform ─────────────────────────────
         let winner_result = match entry.platform {
             Platform::Lichess => self
@@ -330,7 +477,13 @@ impl Poller {
 
         match winner_result {
             Ok(winner) => {
-                info!(match_id, ?winner, "result fetched; submitting to Soroban");
+                info!(match_id, ?winner, "result fetched; caching and submitting to Soroban");
+                // Populate the cache so subsequent retries (if submission fails)
+                // don't need to call the platform API again within the TTL window.
+                self.inner
+                    .result_cache
+                    .insert(entry.platform, &game_id, winner.clone())
+                    .await;
                 self.submit_and_complete(entry, winner).await;
             }
             Err(FetchError::Permanent(reason)) => {
@@ -363,6 +516,11 @@ impl Poller {
                         match_id,
                         "failed to remove completed entry from queue: {}", e
                     );
+                } else {
+                    // Update queue-depth gauge after successful removal.
+                    if let Ok(entries) = self.inner.queue.load().await {
+                        metrics::set_queue_depth(entries.len());
+                    }
                 }
             }
             Err(e) => {
@@ -373,6 +531,7 @@ impl Poller {
     }
 
     async fn handle_transient(&self, mut entry: PendingEntry, reason: String) {
+        let match_id = entry.match_id;
         let exhausted = entry.record_failure(
             reason,
             self.inner.retry_base_delay_secs,
@@ -383,7 +542,7 @@ impl Poller {
             self.exhaust_entry(entry).await;
         } else {
             if let Err(e) = self.inner.queue.update_entry(entry).await {
-                error!("failed to update queue entry: {}", e);
+                error!(match_id, "failed to update queue entry: {}", e);
             }
         }
     }

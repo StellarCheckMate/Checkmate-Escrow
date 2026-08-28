@@ -32,7 +32,7 @@ async fn get_active_matches_returns_empty_when_no_active() {
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(SorobanRpcClient::new("http://localhost:1").unwrap());
 
-    let app = build_router(db, cache, rpc, api_cache());
+    let app = build_router(db, cache, rpc, api_cache(), None);
 
     let request = Request::builder()
         .uri("/matches/active")
@@ -67,7 +67,7 @@ async fn get_active_matches_response_structure() {
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(SorobanRpcClient::new("http://localhost:1").unwrap());
 
-    let app = build_router(db, cache, rpc, api_cache());
+    let app = build_router(db, cache, rpc, api_cache(), None);
 
     let request = Request::builder()
         .uri("/matches/active")
@@ -101,7 +101,7 @@ async fn get_active_matches_accepts_pagination_params() {
     let cache = Arc::new(RwLock::new(EventCache::new(100)));
     let rpc = Arc::new(SorobanRpcClient::new("http://localhost:1").unwrap());
 
-    let app = build_router(db, cache, rpc, api_cache());
+    let app = build_router(db, cache, rpc, api_cache(), None);
 
     // Test with limit and offset parameters
     let request = Request::builder()

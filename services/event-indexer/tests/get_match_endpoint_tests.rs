@@ -27,7 +27,7 @@ fn app() -> axum::Router {
     );
     let cache = Arc::new(RwLock::new(EventCache::new(16)));
     let rpc = Arc::new(SorobanRpcClient::new("http://127.0.0.1:1").unwrap());
-    build_router(db, cache, rpc, Arc::new(ApiCache::disabled()))
+    build_router(db, cache, rpc, Arc::new(ApiCache::disabled()), None)
 }
 
 /// Issue a GET request and return the status and response body.
@@ -67,7 +67,7 @@ async fn get_match_invalid_match_id_returns_404() {
     db.init_schema().await.expect("schema");
     let cache = Arc::new(RwLock::new(EventCache::new(16)));
     let rpc = Arc::new(SorobanRpcClient::new("http://127.0.0.1:1").unwrap());
-    let app = build_router(db, cache, rpc, Arc::new(ApiCache::disabled()));
+    let app = build_router(db, cache, rpc, Arc::new(ApiCache::disabled()), None);
 
     let response = app
         .oneshot(

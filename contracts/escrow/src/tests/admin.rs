@@ -495,6 +495,27 @@ fn test_is_paused_cycle() {
     assert!(!client.is_paused());
 }
 
+// Guard against redundant pause/unpause calls writing duplicate state and
+// emitting duplicate events.
+#[test]
+fn test_pause_when_already_paused_returns_invalid_pause_state() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.pause(&admin);
+    let result = client.try_pause(&admin);
+    assert_eq!(result, Err(Ok(Error::InvalidPauseState)));
+}
+
+#[test]
+fn test_unpause_when_not_paused_returns_invalid_pause_state() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_unpause(&admin);
+    assert_eq!(result, Err(Ok(Error::InvalidPauseState)));
+}
+
 // #593 - propose_admin stores the pending admin and emits an event
 #[test]
 fn test_propose_admin_stores_pending_admin_and_emits_event() {

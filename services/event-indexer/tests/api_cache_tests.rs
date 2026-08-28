@@ -23,6 +23,7 @@ use tokio::sync::RwLock;
 use tower::ServiceExt;
 
 use event_indexer::api::{build_router, ApiResponse, Stats};
+use event_indexer::auth::API_KEY_HEADER;
 use event_indexer::api_cache::{
     all_match_list_keys, analytics_key, analytics_ttl, match_key, match_ttl, matches_key,
     pending_matches_ttl, ApiCache, ANALYTICS_STATS, ANALYTICS_TTL_SECS, MATCH_TTL_SECS,
@@ -37,6 +38,10 @@ use event_indexer::rpc::SorobanRpcClient;
 
 /// A DSN that parses but can never connect, so any database access fails fast.
 const UNREACHABLE_DSN: &str = "postgres://nobody:nobody@127.0.0.1:1/nowhere";
+
+/// Shared secret configured on the test router.  `/stats` is gated by the API
+/// key middleware, so requests must carry it in the header.
+const TEST_API_KEY: &str = "test-api-key-0123456789abcdef";
 
 fn match_info(match_id: u64, status: MatchStatus) -> MatchInfo {
     MatchInfo {
@@ -62,7 +67,7 @@ fn router_with(api_cache: Arc<ApiCache>) -> axum::Router {
     );
     let cache = Arc::new(RwLock::new(EventCache::new(16)));
     let rpc = Arc::new(SorobanRpcClient::new("http://127.0.0.1:1").unwrap());
-    build_router(db, cache, rpc, api_cache)
+    build_router(db, cache, rpc, api_cache, Some(TEST_API_KEY.to_string()))
 }
 
 async fn get(app: &axum::Router, uri: &str) -> (StatusCode, Vec<u8>) {
@@ -71,6 +76,7 @@ async fn get(app: &axum::Router, uri: &str) -> (StatusCode, Vec<u8>) {
         .oneshot(
             Request::builder()
                 .uri(uri)
+                .header(API_KEY_HEADER, TEST_API_KEY)
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

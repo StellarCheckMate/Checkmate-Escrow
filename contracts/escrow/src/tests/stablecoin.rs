@@ -25,6 +25,7 @@ fn enable_stablecoin_mode(client: &EscrowContractClient, admin: &Address) {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 }
 
@@ -217,6 +218,7 @@ fn test_stablecoin_mode_can_be_toggled_off() {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     // Same token should now succeed.

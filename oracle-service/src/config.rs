@@ -83,6 +83,15 @@ pub struct OracleConfig {
     // ---- Pipeline tuning ----
     /// How often (seconds) the poller wakes to check active matches.
     pub poll_interval_secs: u64,
+    /// How often (seconds) the Chess.com poller polls for game results.
+    ///
+    /// Chess.com games (especially classical time controls) finish more slowly
+    /// than Lichess games.  A separate interval lets operators tune polling
+    /// frequency per-platform without affecting the Lichess pipeline.
+    ///
+    /// Defaults to `ORACLE_CHESSDOTCOM_POLL_INTERVAL_SECS` env var, or 60 s
+    /// if unset.
+    pub chessdotcom_poll_interval_secs: u64,
     /// Maximum retry attempts before a pending entry is dead-lettered.
     pub max_retries: u32,
     /// Base delay (seconds) for the first retry; doubles on each attempt.
@@ -92,6 +101,14 @@ pub struct OracleConfig {
     /// How often (seconds) the reconciliation task re-scans the escrow
     /// contract's active matches for ones missing a result and enqueues them.
     pub reconciliation_interval_secs: u64,
+    /// Maximum number of entries retained in the dead-letter store.
+    ///
+    /// When the store is at capacity and a new entry arrives, the oldest entry
+    /// (by `dead_lettered_at`) is evicted before writing the new one.
+    /// `0` means no limit (unbounded — use with caution in production).
+    ///
+    /// Defaults to `ORACLE_DEAD_LETTER_MAX_ENTRIES` env var, or 1000 if unset.
+    pub dead_letter_max_entries: usize,
 }
 
 impl fmt::Debug for OracleConfig {
@@ -112,6 +129,10 @@ impl fmt::Debug for OracleConfig {
                 &self.chessdotcom_api_key.as_deref().map(|_| "<set>"),
             )
             .field("poll_interval_secs", &self.poll_interval_secs)
+            .field(
+                "chessdotcom_poll_interval_secs",
+                &self.chessdotcom_poll_interval_secs,
+            )
             .field("max_retries", &self.max_retries)
             .field("retry_base_delay_secs", &self.retry_base_delay_secs)
             .field("queue_dir", &self.queue_dir)
@@ -119,6 +140,7 @@ impl fmt::Debug for OracleConfig {
                 "reconciliation_interval_secs",
                 &self.reconciliation_interval_secs,
             )
+            .field("dead_letter_max_entries", &self.dead_letter_max_entries)
             .finish()
     }
 }
@@ -146,10 +168,12 @@ pub enum ConfigError {
 /// - `LICHESS_API_TOKEN`
 /// - `CHESSDOTCOM_API_KEY`
 /// - `ORACLE_POLL_INTERVAL_SECS` (default: 30)
+/// - `ORACLE_CHESSDOTCOM_POLL_INTERVAL_SECS` (default: 60)
 /// - `ORACLE_MAX_RETRIES` (default: 5)
 /// - `ORACLE_RETRY_BASE_DELAY_SECS` (default: 10)
 /// - `ORACLE_QUEUE_DIR` (default: `./oracle-queue`)
 /// - `ORACLE_RECONCILIATION_INTERVAL_SECS` (default: 60)
+/// - `ORACLE_DEAD_LETTER_MAX_ENTRIES` (default: 1000; 0 = unlimited)
 pub fn load() -> Result<OracleConfig, ConfigError> {
     let rpc_url = require_env("STELLAR_RPC_URL")?;
 
@@ -199,11 +223,14 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
         .filter(|s| !s.is_empty());
 
     let poll_interval_secs = parse_u64_env("ORACLE_POLL_INTERVAL_SECS", 30)?;
+    let chessdotcom_poll_interval_secs =
+        parse_u64_env("ORACLE_CHESSDOTCOM_POLL_INTERVAL_SECS", 60)?;
     let max_retries = parse_u32_env("ORACLE_MAX_RETRIES", 5)?;
     let retry_base_delay_secs = parse_u64_env("ORACLE_RETRY_BASE_DELAY_SECS", 10)?;
     let queue_dir =
         std::env::var("ORACLE_QUEUE_DIR").unwrap_or_else(|_| "./oracle-queue".to_string());
     let reconciliation_interval_secs = parse_u64_env("ORACLE_RECONCILIATION_INTERVAL_SECS", 60)?;
+    let dead_letter_max_entries = parse_usize_env("ORACLE_DEAD_LETTER_MAX_ENTRIES", 1000)?;
 
     Ok(OracleConfig {
         rpc_url,
@@ -215,10 +242,12 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
         lichess_api_token,
         chessdotcom_api_key,
         poll_interval_secs,
+        chessdotcom_poll_interval_secs,
         max_retries,
         retry_base_delay_secs,
         queue_dir,
         reconciliation_interval_secs,
+        dead_letter_max_entries,
     })
 }
 
@@ -242,6 +271,16 @@ fn parse_u32_env(name: &'static str, default: u32) -> Result<u32, ConfigError> {
     match std::env::var(name) {
         Err(_) => Ok(default),
         Ok(v) => v.parse::<u32>().map_err(|e| ConfigError::InvalidValue {
+            var: name,
+            reason: e.to_string(),
+        }),
+    }
+}
+
+fn parse_usize_env(name: &'static str, default: usize) -> Result<usize, ConfigError> {
+    match std::env::var(name) {
+        Err(_) => Ok(default),
+        Ok(v) => v.parse::<usize>().map_err(|e| ConfigError::InvalidValue {
             var: name,
             reason: e.to_string(),
         }),
@@ -281,6 +320,11 @@ fn stellar_address_from_seed(seed: &[u8; 32]) -> Result<String, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Serialize all tests that mutate environment variables to avoid data
+    // races when tests run in parallel threads.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn decode_key_hex_valid() {
@@ -308,5 +352,46 @@ mod tests {
         let seed = [1u8; 32];
         let addr = stellar_address_from_seed(&seed).unwrap();
         assert!(addr.starts_with('G'), "expected G-address, got {}", addr);
+    }
+
+    #[test]
+    fn parse_usize_env_default_and_override() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        // Default path — variable not set.
+        std::env::remove_var("_TEST_USIZE_VAR");
+        let v = parse_usize_env("_TEST_USIZE_VAR", 42).unwrap();
+        assert_eq!(v, 42);
+
+        // Override path — variable set.
+        std::env::set_var("_TEST_USIZE_VAR", "123");
+        let v = parse_usize_env("_TEST_USIZE_VAR", 42).unwrap();
+        assert_eq!(v, 123);
+        std::env::remove_var("_TEST_USIZE_VAR");
+    }
+
+    #[test]
+    fn parse_usize_env_invalid() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("_TEST_USIZE_VAR2", "not_a_number");
+        let err = parse_usize_env("_TEST_USIZE_VAR2", 0).unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidValue { .. }));
+        std::env::remove_var("_TEST_USIZE_VAR2");
+    }
+
+    #[test]
+    fn chessdotcom_poll_interval_secs_default() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ORACLE_CHESSDOTCOM_POLL_INTERVAL_SECS");
+        let v = parse_u64_env("ORACLE_CHESSDOTCOM_POLL_INTERVAL_SECS", 60).unwrap();
+        assert_eq!(v, 60, "default chessdotcom_poll_interval_secs should be 60s");
+    }
+
+    #[test]
+    fn chessdotcom_poll_interval_secs_override() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ORACLE_CHESSDOTCOM_POLL_INTERVAL_SECS", "120");
+        let v = parse_u64_env("ORACLE_CHESSDOTCOM_POLL_INTERVAL_SECS", 60).unwrap();
+        assert_eq!(v, 120);
+        std::env::remove_var("ORACLE_CHESSDOTCOM_POLL_INTERVAL_SECS");
     }
 }

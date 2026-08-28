@@ -46,8 +46,8 @@ use soroban_sdk::{
 use types::{
     BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeState, FeeTier, Match,
     MatchState, OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform,
-    PlatformStats, PlayerBalanceSnapshot, PlayerTier, ProtocolConfig, SnapshotReason,
-    TempOracleRotation, Winner,
+    PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey, PlayerTier, ProtocolConfig,
+    SnapshotReason, TempOracleRotation, Winner,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -116,14 +116,22 @@ pub const DEFAULT_QUORUM_BASIS_POINTS: u32 = 2000;
 /// Maximum allowed byte length for a game_id string.
 ///
 /// Platform-specific formats:
-/// - Lichess:      8 alphanumeric characters (e.g. `"abcd1234"`)
+/// - Lichess:      8 or 12 alphanumeric characters (e.g. `"abcd1234"` or `"abcd12345678"`)
 /// - Chess.com:    numeric string, typically 7–12 digits (e.g. `"123456789"`)
 ///
 /// Both formats fit well within this limit.
 const MAX_GAME_ID_LEN: u32 = 64;
 
-/// Exact game ID length required for Lichess (8 alphanumeric characters).
+/// Default confidence threshold for oracle results (0-100).
+/// Results below this threshold trigger PendingResult state for dispute.
+const DEFAULT_CONFIDENCE_THRESHOLD: u8 = 50;
+
+/// Standard game ID length for Lichess (8 alphanumeric characters).
 const LICHESS_GAME_ID_LEN: u32 = 8;
+
+/// Extended game ID length for Lichess tournament formats (12 alphanumeric characters).
+/// Lichess recently began issuing 12-character IDs for certain tournament game types.
+const LICHESS_GAME_ID_LEN_EXTENDED: u32 = 12;
 
 /// Minimum/maximum game ID length accepted for Chess.com (numeric string).
 const CHESS_COM_GAME_ID_MIN_LEN: u32 = 7;
@@ -233,6 +241,14 @@ impl EscrowContract {
         if caller != admin {
             return Err(Error::Unauthorized);
         }
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if already_paused {
+            return Err(Error::InvalidPauseState);
+        }
         env.storage().instance().set(&DataKey::Paused, &true);
         env.events()
             .publish((Symbol::new(&env, "admin"), symbol_short!("paused")), ());
@@ -250,6 +266,14 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         if caller != admin {
             return Err(Error::Unauthorized);
+        }
+        let already_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if !already_paused {
+            return Err(Error::InvalidPauseState);
         }
         env.storage().instance().set(&DataKey::Paused, &false);
         env.events()
@@ -283,9 +307,22 @@ impl EscrowContract {
         if config.protocol_fee_bps > 10_000 {
             return Err(Error::InvalidAmount);
         }
+        let old_mode: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProtocolConfig)
+            .map(|c: ProtocolConfig| c.stablecoin_only_mode)
+            .unwrap_or(false);
+        let new_mode = config.stablecoin_only_mode;
         env.storage()
             .instance()
             .set(&DataKey::ProtocolConfig, &config);
+        if old_mode != new_mode {
+            env.events().publish(
+                (Symbol::new(&env, "escrow"), Symbol::new(&env, "stablecoin_mode")),
+                new_mode,
+            );
+        }
         Ok(())
     }
 
@@ -318,6 +355,32 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::ReferralShareBasisPoints)
             .unwrap_or(2000u32)
+    }
+
+    /// Set the minimum stake amount — admin only.
+    ///
+    /// Enforces a global minimum stake floor for all matches. Default is 1.
+    pub fn set_minimum_stake(env: Env, amount: i128) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+        if amount < 1 {
+            return Err(Error::InvalidAmount);
+        }
+        let mut config = Self::get_config(&env);
+        config.minimum_stake = amount;
+        env.storage()
+            .instance()
+            .set(&DataKey::ProtocolConfig, &config);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("min_stake")),
+            amount,
+        );
+        Ok(())
     }
 
     /// Set the caller's preferred payout token — player only.
@@ -466,6 +529,10 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
+        if issuer == env.current_contract_address() {
+            return Err(Error::InvalidAddress);
+        }
+
         let already_registered: bool = env
             .storage()
             .instance()
@@ -568,6 +635,23 @@ impl EscrowContract {
     /// Return the current allowlist as an ordered list.
     pub fn get_allowed_tokens(env: Env) -> Result<soroban_sdk::Vec<Address>, Error> {
         Ok(Self::get_allowed_token_list(&env))
+    }
+
+    /// Return a paginated slice of the allowlist.
+    pub fn get_allowed_tokens_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Address> {
+        let all = Self::get_allowed_token_list(&env);
+        let mut result = soroban_sdk::vec![&env];
+        let total = all.len();
+        let start = offset.min(total);
+        let end = (start.saturating_add(limit)).min(total);
+        for i in start..end {
+            result.push_back(all.get(i).unwrap());
+        }
+        result
     }
 
     fn get_allowed_token_list(env: &Env) -> soroban_sdk::Vec<Address> {
@@ -744,6 +828,141 @@ impl EscrowContract {
             .unwrap_or_else(|| soroban_sdk::vec![&env])
     }
 
+    // ── Player Freeze ────────────────────────────────────────────────────────
+
+    /// Freeze a player — admin only.
+    ///
+    /// A frozen player cannot create new matches (`create_match` and its
+    /// variants) or deposit into existing ones, while every other user on the
+    /// contract is completely unaffected — unlike a contract-wide `pause`.
+    /// The `reason` string (stored on-chain for auditability) documents why
+    /// the player was frozen (e.g. cheating, stalling, harassment).
+    ///
+    /// Freezing deliberately does **not** block fund-recovery paths: the
+    /// frozen player can still cancel/expire their own `Pending` matches and
+    /// claim vested payouts from already-funded matches, and the oracle can
+    /// still settle `Active` matches normally. See `admin_unfreeze_player` to
+    /// reverse a freeze.
+    ///
+    /// The `Error` enum is at the XDR-enforced cap of 50 variants, so the
+    /// existing `Error::ContractPaused` is reused for frozen-player rejections
+    /// (mirroring how the token blacklist reuses `Error::TokenNotAllowed`).
+    pub fn admin_freeze_player(env: Env, player: Address, reason: String) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let is_new = !env
+            .storage()
+            .instance()
+            .has(&PlayerFreezeKey::FrozenPlayer(player.clone()));
+
+        env.storage()
+            .instance()
+            .set(&PlayerFreezeKey::FrozenPlayer(player.clone()), &reason);
+
+        if is_new {
+            let mut list: soroban_sdk::Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&PlayerFreezeKey::FrozenPlayers)
+                .unwrap_or_else(|| soroban_sdk::vec![&env]);
+            list.push_back(player.clone());
+            env.storage()
+                .persistent()
+                .set(&PlayerFreezeKey::FrozenPlayers, &list);
+            env.storage().persistent().extend_ttl(
+                &PlayerFreezeKey::FrozenPlayers,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("freeze")),
+            player,
+        );
+        Ok(())
+    }
+
+    /// Unfreeze a player — admin only.
+    ///
+    /// Removes the freeze record and list entry so the player can create
+    /// matches and deposit again.
+    pub fn admin_unfreeze_player(env: Env, player: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .remove(&PlayerFreezeKey::FrozenPlayer(player.clone()));
+
+        // Remove from the persistent list.
+        if let Some(list) = env
+            .storage()
+            .persistent()
+            .get::<PlayerFreezeKey, soroban_sdk::Vec<Address>>(&PlayerFreezeKey::FrozenPlayers)
+        {
+            let mut updated: soroban_sdk::Vec<Address> = soroban_sdk::vec![&env];
+            for existing in list.iter() {
+                if existing != player {
+                    updated.push_back(existing.clone());
+                }
+            }
+            env.storage()
+                .persistent()
+                .set(&PlayerFreezeKey::FrozenPlayers, &updated);
+            env.storage().persistent().extend_ttl(
+                &PlayerFreezeKey::FrozenPlayers,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("unfreeze")),
+            player,
+        );
+        Ok(())
+    }
+
+    /// Returns `true` when `player` is currently frozen.
+    pub fn is_player_frozen(env: Env, player: Address) -> bool {
+        env.storage()
+            .instance()
+            .has(&PlayerFreezeKey::FrozenPlayer(player))
+    }
+
+    /// Returns all currently frozen player addresses.
+    pub fn get_frozen_players(env: Env) -> soroban_sdk::Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&PlayerFreezeKey::FrozenPlayers)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
+    /// Internal helper — rejects `player` with `Error::ContractPaused` when
+    /// frozen. Used by `create_match` (all variants) and `deposit`.
+    fn require_player_not_frozen(env: &Env, player: &Address) -> Result<(), Error> {
+        if env
+            .storage()
+            .instance()
+            .has(&PlayerFreezeKey::FrozenPlayer(player.clone()))
+        {
+            return Err(Error::ContractPaused);
+        }
+        Ok(())
+    }
+
     // ── Dynamic Fee Tiers (issue #963) ───────────────────────────────────────
 
     /// Set the dynamic fee tier schedule — admin only.
@@ -751,6 +970,8 @@ impl EscrowContract {
     /// `tiers` must be ordered by `max_stake` ascending.  The last entry acts
     /// as the open-ended catch-all (set `max_stake = i128::MAX`).  Pass an
     /// empty `Vec` to clear the schedule and fall back to zero protocol fees.
+    /// Each tier's `fee_basis_points` must be in the range `0..=10_000`
+    /// (0% to 100%).
     pub fn set_fee_tiers(env: Env, tiers: soroban_sdk::Vec<FeeTier>) -> Result<(), Error> {
         extend_instance_ttl(&env);
         let admin: Address = env
@@ -765,6 +986,9 @@ impl EscrowContract {
         let mut prev_max: i128 = -1;
         for tier in tiers.iter() {
             if tier.max_stake <= prev_max {
+                return Err(Error::InvalidAmount);
+            }
+            if tier.fee_basis_points > 10_000 {
                 return Err(Error::InvalidAmount);
             }
             prev_max = tier.max_stake;
@@ -845,7 +1069,8 @@ impl EscrowContract {
 
     /// Validate that `game_id` matches the format expected for `platform`.
     ///
-    /// - Lichess: exactly 8 ASCII alphanumeric characters.
+    /// - Lichess: exactly 8 or 12 ASCII alphanumeric characters.
+    ///   Standard games use 8-character IDs; tournament formats may use 12.
     /// - Chess.com: 7–12 ASCII digits.
     ///
     /// Also enforces the shared non-empty / `MAX_GAME_ID_LEN` bound before
@@ -862,7 +1087,9 @@ impl EscrowContract {
 
         match platform {
             Platform::Lichess => {
-                if len != LICHESS_GAME_ID_LEN || !slice.iter().all(|b| b.is_ascii_alphanumeric()) {
+                if (len != LICHESS_GAME_ID_LEN && len != LICHESS_GAME_ID_LEN_EXTENDED)
+                    || !slice.iter().all(|b| b.is_ascii_alphanumeric())
+                {
                     return Err(Error::InvalidGameId);
                 }
             }
@@ -882,7 +1109,9 @@ impl EscrowContract {
     ///
     /// # Parameters
     /// - `game_id`: The platform-specific game identifier, validated against `platform`.
-    ///   - **Lichess**: exactly 8 alphanumeric characters (e.g. `"abcd1234"`).
+    ///   - **Lichess**: exactly 8 or 12 alphanumeric characters (e.g. `"abcd1234"` or
+    ///     `"abcd12345678"`). Standard games use 8-character IDs; tournament formats
+    ///     may use 12-character extended IDs.
     ///     Taken from the game URL: `https://lichess.org/<game_id>`
     ///   - **Chess.com**: 7–12 numeric digits (e.g. `"123456789"`).
     ///     Taken from the game URL: `https://www.chess.com/game/live/<game_id>`
@@ -899,6 +1128,184 @@ impl EscrowContract {
     /// `minimum_stake` (see `set_minimum_stake`).
     pub fn create_match(
         env: Env,
+        player1: Address,
+        player2: Address,
+        stake_amount: i128,
+        token: Address,
+        game_id: String,
+        platform: Platform,
+    ) -> Result<u64, Error> {
+        extend_instance_ttl(&env);
+        player1.require_auth();
+
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        // Frozen players cannot create or join new matches — targeted
+        // intervention without pausing the whole contract.
+        Self::require_player_not_frozen(&env, &player1)?;
+        Self::require_player_not_frozen(&env, &player2)?;
+
+        // Blacklisted tokens are permanently rejected, regardless of allowlist status.
+        if Self::is_token_blacklisted(env.clone(), token.clone()) {
+            return Err(Error::TokenNotAllowed);
+        }
+
+        // Check allowlist enforcement
+        let allowlist_enforced: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowlistEnforced)
+            .unwrap_or(false);
+        if allowlist_enforced && !Self::is_token_allowed(env.clone(), token.clone()) {
+            return Err(Error::TokenNotAllowed);
+        }
+
+        // Stablecoin-only mode: reject non-stablecoin tokens when enabled
+        let protocol_cfg = Self::get_config(&env);
+        if protocol_cfg.stablecoin_only_mode && !Self::check_is_stablecoin(&env, &token) {
+            return Err(Error::NotStablecoin);
+        }
+
+        if stake_amount < protocol_cfg.minimum_stake {
+            return Err(Error::InvalidAmount);
+        }
+        if let Some(max_stake) = protocol_cfg.maximum_stake {
+            if stake_amount > max_stake {
+                return Err(Error::InvalidAmount);
+            }
+        }
+        Self::require_player_tier_for_stake(&env, &player1, stake_amount)?;
+        Self::require_player_tier_for_stake(&env, &player2, stake_amount)?;
+        Self::validate_game_id_format(&game_id, &platform)?;
+
+        // Reject if either player is invalid
+        if player1 == player2 {
+            return Err(Error::InvalidPlayers);
+        }
+        if player2 == env.current_contract_address() {
+            return Err(Error::InvalidPlayers);
+        }
+
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::GameId(game_id.clone()))
+        {
+            return Err(Error::DuplicateGameId);
+        }
+
+        let id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+
+        if env.storage().persistent().has(&DataKey::Match(id)) {
+            return Err(Error::AlreadyExists);
+        }
+
+        let m = Match {
+            id,
+            player1: player1.clone(),
+            player2: player2.clone(),
+            stake_amount,
+            token,
+            game_id,
+            platform,
+            state: MatchState::Pending,
+            player1_deposited: false,
+            player2_deposited: false,
+            created_ledger: env.ledger().sequence(),
+            completed_ledger: None,
+            winner: Winner::None,
+            vested_at: None,
+            player1_claimed: false,
+            player2_claimed: false,
+            conversion_rate: None,
+            token_b: None,
+            conversion_rate_ledger: None,
+            paused_ledger: None,
+            total_pause_duration: 0,
+            referrer: None,
+            last_heartbeat: env.ledger().timestamp(),
+            bracket_id: None,
+        };
+
+        env.storage().persistent().set(&DataKey::Match(id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+        // Guard against u64 overflow in release mode where wrapping would occur silently
+        let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
+        env.storage().instance().set(&DataKey::MatchCount, &next_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::GameId(m.game_id.clone()), &true);
+        env.storage().persistent().extend_ttl(
+            &DataKey::GameId(m.game_id.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        // Add match ID to both players' match lists
+        let mut player1_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player1.clone()))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        player1_matches.push_back(id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerMatches(player1.clone()), &player1_matches);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerMatches(player1),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        let mut player2_matches: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerMatches(player2.clone()))
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        player2_matches.push_back(id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerMatches(player2.clone()), &player2_matches);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerMatches(player2),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        Self::record_snapshot(&env, &m, SnapshotReason::Created);
+        Self::record_platform_match_created(&env, stake_amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("created")),
+            (id, m.player1, m.player2, stake_amount),
+        );
+
+        Ok(id)
+    }
+
+    /// Create a new match for tournament brackets.
+    ///
+    /// This variant allows bracket matches to be linked on-chain, enabling
+    /// automated bracket progression for multi-game tournaments.
+    pub fn create_match_tournament(
+        env: Env,
+        bracket_id: u64,
+        round: u32,
         player1: Address,
         player2: Address,
         stake_amount: i128,
@@ -1001,6 +1408,7 @@ impl EscrowContract {
             total_pause_duration: 0,
             referrer: None,
             last_heartbeat: env.ledger().timestamp(),
+            bracket_id: Some(bracket_id),
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1009,7 +1417,6 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
             MATCH_TTL_LEDGERS,
         );
-        // Guard against u64 overflow in release mode where wrapping would occur silently
         let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         env.storage().instance().set(&DataKey::MatchCount, &next_id);
         env.storage()
@@ -1056,14 +1463,40 @@ impl EscrowContract {
         Self::record_platform_match_created(&env, stake_amount);
 
         env.events().publish(
-            (Symbol::new(&env, "match"), symbol_short!("created")),
-            (id, m.player1, m.player2, stake_amount),
+            (Symbol::new(&env, "match"), symbol_short!("bracket_created")),
+            (id, bracket_id, round, m.player1, m.player2, stake_amount),
         );
 
         Ok(id)
     }
 
+    /// Get all matches for a specific tournament bracket.
+    pub fn get_bracket_matches(env: Env, bracket_id: u64) -> soroban_sdk::Vec<Match> {
+        let match_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MatchCount)
+            .unwrap_or(0);
+        let mut bracket_matches = soroban_sdk::vec![&env];
+
+        for i in 0..match_count {
+            if let Some(m) = env.storage().persistent().get::<_, Match>(&DataKey::Match(i)) {
+                if m.bracket_id == Some(bracket_id) {
+                    bracket_matches.push_back(m);
+                }
+            }
+        }
+
+        bracket_matches
+    }
+
     /// Create a new match with multi-token support and conversion rates.
+    ///
+    /// `rate` is the token_b-per-token_a conversion rate, scaled by 1e7
+    /// (e.g. a 1:1 rate is `10_000_000`). It must be strictly positive —
+    /// `rate <= 0` (including `0`) is rejected with `Error::InvalidAmount`,
+    /// since a zero or negative rate would later cause a division-by-zero
+    /// or nonsensical payout when converting amounts in `claim_vested_payout`.
     pub fn create_match_with_conversion(
         env: Env,
         player1: Address,
@@ -1086,6 +1519,11 @@ impl EscrowContract {
         {
             return Err(Error::ContractPaused);
         }
+
+        // Frozen players cannot create or join new matches — targeted
+        // intervention without pausing the whole contract.
+        Self::require_player_not_frozen(&env, &player1)?;
+        Self::require_player_not_frozen(&env, &player2)?;
 
         // Blacklisted tokens are permanently rejected, regardless of allowlist status.
         if Self::is_token_blacklisted(env.clone(), token_a.clone())
@@ -1203,6 +1641,7 @@ impl EscrowContract {
             total_pause_duration: 0,
             referrer: None,
             last_heartbeat: env.ledger().timestamp(),
+            bracket_id: None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1296,6 +1735,11 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
+        // Frozen players cannot create or join new matches — targeted
+        // intervention without pausing the whole contract.
+        Self::require_player_not_frozen(&env, &player1)?;
+        Self::require_player_not_frozen(&env, &player2)?;
+
         // Blacklisted tokens are permanently rejected, regardless of allowlist status.
         if Self::is_token_blacklisted(env.clone(), token.clone()) {
             return Err(Error::TokenNotAllowed);
@@ -1372,6 +1816,7 @@ impl EscrowContract {
             total_pause_duration: 0,
             referrer: Some(referrer.clone()),
             last_heartbeat: env.ledger().timestamp(),
+            bracket_id: None,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1446,6 +1891,12 @@ impl EscrowContract {
             return Err(Error::ContractPaused);
         }
 
+        // Frozen players cannot fund matches — targeted intervention without
+        // pausing the whole contract. Existing matches are unaffected: the
+        // counterpart can still cancel/expire a Pending match, and Active
+        // matches still settle normally.
+        Self::require_player_not_frozen(&env, &player)?;
+
         // ── Cross-contract reentrancy guard ──────────────────────────────────
         // If a malicious (or callback-capable) token contract re-enters
         // deposit() for the same match_id during the token.transfer() call
@@ -1470,6 +1921,18 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
+
+        // Explicit "already fully funded" guard, independent of `state`: even
+        // if some future code path left `state` as `Pending` while both
+        // deposits had already landed, this still closes the door on a
+        // double-count. Checked before the state check so the caller gets
+        // the more specific `AlreadyFunded` instead of `InvalidState`.
+        if m.player1_deposited && m.player2_deposited {
+            env.storage()
+                .temporary()
+                .remove(&DataKey::DepositInProgress(match_id));
+            return Err(Error::AlreadyFunded);
+        }
 
         if m.state != MatchState::Pending {
             // Clear guard before returning on error.
@@ -1529,8 +1992,18 @@ impl EscrowContract {
                 (Symbol::new(&env, "match"), symbol_short!("activated")),
                 match_id,
             );
-            Self::add_active_match(&env, &m.player1, match_id)?;
-            Self::add_active_match(&env, &m.player2, match_id)?;
+            if let Err(e) = Self::add_active_match(&env, &m.player1, match_id) {
+                env.storage()
+                    .temporary()
+                    .remove(&DataKey::DepositInProgress(match_id));
+                return Err(e);
+            }
+            if let Err(e) = Self::add_active_match(&env, &m.player2, match_id) {
+                env.storage()
+                    .temporary()
+                    .remove(&DataKey::DepositInProgress(match_id));
+                return Err(e);
+            }
         } else {
             env.events().publish(
                 (Symbol::new(&env, "match"), symbol_short!("deposit")),
@@ -1555,6 +2028,11 @@ impl EscrowContract {
             .temporary()
             .remove(&DataKey::DepositInProgress(match_id));
 
+        env.events().publish(
+            (Symbol::new(&env, "escrow"), symbol_short!("deposit")),
+            (match_id, player, m.stake_amount),
+        );
+
         Ok(())
     }
 
@@ -1564,6 +2042,7 @@ impl EscrowContract {
         match_id: u64,
         winner: Winner,
         oracle: Address,
+        confidence: Option<u8>,
     ) -> Result<(), Error> {
         if env
             .storage()
@@ -1580,12 +2059,12 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        Self::settle_result(&env, match_id, winner)
+        Self::settle_result(&env, match_id, winner, confidence)
     }
 
     /// Submit a draw result — oracle only. This is a convenience wrapper
     /// around `settle_result` with `Winner::Draw`.
-    pub fn submit_draw(env: Env, match_id: u64, oracle: Address) -> Result<(), Error> {
+    pub fn submit_draw(env: Env, match_id: u64, oracle: Address, confidence: Option<u8>) -> Result<(), Error> {
         if env
             .storage()
             .instance()
@@ -1601,7 +2080,7 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        Self::settle_result(&env, match_id, Winner::Draw)
+        Self::settle_result(&env, match_id, Winner::Draw, confidence)
     }
 
     /// Core result-settlement logic shared by `submit_result` and
@@ -1610,7 +2089,7 @@ impl EscrowContract {
     /// `submit_result_batch` authorize the oracle once for the whole batch
     /// instead of once per match (repeated `require_auth` calls for the same
     /// address within a single invocation are rejected by the host).
-    fn settle_result(env: &Env, match_id: u64, winner: Winner) -> Result<(), Error> {
+    fn settle_result(env: &Env, match_id: u64, winner: Winner, confidence: Option<u8>) -> Result<(), Error> {
         if winner == Winner::None {
             return Err(Error::InvalidState);
         }
@@ -1621,25 +2100,31 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        if m.state != MatchState::Active {
-            return Err(Error::InvalidState);
+        // A still-Pending match is inherently not (fully) funded — surface
+        // `NotFunded` for it specifically, rather than the generic
+        // `InvalidState`, so `submit_result_batch` callers can distinguish
+        // "needs more deposits" from other invalid transitions (Completed,
+        // Cancelled, PendingResult, Paused).
+        if m.state == MatchState::Pending || !m.player1_deposited || !m.player2_deposited {
+            return Err(Error::NotFunded);
         }
 
-        if !m.player1_deposited || !m.player2_deposited {
-            return Err(Error::NotFunded);
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
         }
 
         Self::remove_active_match_indexed(env, &m.player1, match_id);
         Self::remove_active_match_indexed(env, &m.player2, match_id);
 
         m.state = MatchState::Completed;
-        m.completed_ledger = Some(env.ledger().sequence());
         m.winner = winner.clone();
         m.vested_at = Some(env.ledger().timestamp());
 
         Self::record_completed_match(env, &m.player1);
         Self::record_completed_match(env, &m.player2);
         Self::record_platform_payout(env);
+        Self::update_player_stats(env, &m.player1, &winner, m.stake_amount);
+        Self::update_player_stats(env, &m.player2, &winner, m.stake_amount);
 
         env.storage()
             .persistent()
@@ -1653,7 +2138,16 @@ impl EscrowContract {
         let dispute_period = Self::get_dispute_period(env);
 
         if dispute_period == 0 {
-            // Immediate payout (no dispute period, but still subject to vesting)
+            // Immediate payout (no dispute period, but still subject to vesting).
+            // completed_ledger is stamped only here (not unconditionally above)
+            // because the delayed branch below leaves the match in
+            // PendingResult, not Completed, until finalize_match /
+            // resolve_dispute_by_vote actually performs the transition (both
+            // of which already stamp completed_ledger themselves).
+            m.completed_ledger = Some(env.ledger().sequence());
+            env.storage()
+                .persistent()
+                .set(&DataKey::Match(match_id), &m);
             Self::record_snapshot(env, &m, SnapshotReason::Completed);
             Self::record_player_snapshot(env, &m.player1);
             Self::record_player_snapshot(env, &m.player2);
@@ -1832,7 +2326,55 @@ impl EscrowContract {
 
         let mut outcomes = Vec::new(&env);
         for (match_id, winner) in results.iter() {
-            let outcome = Self::settle_result(&env, match_id, winner);
+            // A match already settled (Completed/PendingResult) in a prior
+            // call means this oracle is re-confirming a result it already
+            // submitted. Surface that explicitly instead of letting it fall
+            // through to the generic InvalidState from settle_result.
+            let already_settled = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Match>(&DataKey::Match(match_id))
+                .is_some_and(|m| {
+                    matches!(
+                        m.state,
+                        MatchState::Completed | MatchState::PendingResult
+                    )
+                });
+
+            let outcome = if already_settled {
+                Err(Error::OracleAlreadyConfirmed)
+            } else {
+                Self::settle_result(&env, match_id, winner)
+            };
+            outcomes.push_back(outcome.err());
+        }
+        Ok(outcomes)
+    }
+
+    /// Deposit into multiple matches in a single transaction. Issue #1335.
+    ///
+    /// Follows the same pattern as `submit_result_batch`: each entry is
+    /// attempted independently and failures are collected rather than
+    /// aborting the whole batch.
+    ///
+    /// Returns a `Vec<Option<Error>>` where `None` means success and
+    /// `Some(e)` carries the error for that entry.
+    pub fn deposit_batch(
+        env: Env,
+        entries: Vec<(u64, Address)>,
+    ) -> Result<Vec<Option<Error>>, Error> {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        let mut outcomes = Vec::new(&env);
+        for (match_id, player) in entries.iter() {
+            let outcome = Self::deposit(env.clone(), match_id, player);
             outcomes.push_back(outcome.err());
         }
         Ok(outcomes)
@@ -2078,6 +2620,19 @@ impl EscrowContract {
 
         let is_multi_token = m.token_b.is_some() && m.conversion_rate.is_some_and(|r| r > 0);
 
+        // The match's token(s) may have been blacklisted after creation but
+        // before expiry. Refuse to attempt a refund transfer into a token
+        // contract that's since been flagged as broken or malicious — that
+        // could fail unpredictably or panic instead of cleanly erroring, and
+        // leaves the match state untouched so it can be resolved another way
+        // (e.g. admin intervention) rather than getting stuck mid-transfer.
+        let token_b_for_check = m.token_b.clone().unwrap_or_else(|| m.token.clone());
+        if Self::is_token_blacklisted(env.clone(), m.token.clone())
+            || (is_multi_token && Self::is_token_blacklisted(env.clone(), token_b_for_check))
+        {
+            return Err(Error::TokenNotAllowed);
+        }
+
         if m.player1_deposited {
             let client_a = token::Client::new(&env, &m.token);
             client_a.transfer(&env.current_contract_address(), &m.player1, &m.stake_amount);
@@ -2263,6 +2818,13 @@ impl EscrowContract {
         );
 
         Ok(())
+    }
+
+    /// Update the heartbeat for a match — player only.
+    ///
+    /// Alias for `heartbeat_match` with the parameter order specified in issue #1343.
+    pub fn update_heartbeat(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
+        Self::heartbeat_match(env, match_id, caller)
     }
 
     // ── Heartbeat (refreshes `last_heartbeat` to keep the rollback window alive) ──
@@ -2522,6 +3084,14 @@ impl EscrowContract {
             (match_id, resolution),
         );
 
+        // Also publish a match/cancelled event so the event-indexer picks up
+        // the terminal state transition out of Active (it only listens for
+        // the standard lifecycle events, not "adm_stall").
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("cancelled")),
+            match_id,
+        );
+
         Ok(())
     }
 
@@ -2593,6 +3163,21 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::Oracle)
             .ok_or(Error::Unauthorized)
+    }
+
+    /// Return the current oracle rotation state for monitoring.
+    ///
+    /// This is a lightweight view function that returns the current
+    /// OracleRotationState without requiring admin rights. Returns None
+    /// if no rotation is pending. Monitoring tools can use this to observe
+    /// rotation progress without triggering auth.
+    pub fn get_oracle_rotation_state(env: Env) -> Option<OracleRotationState> {
+        let state = Self::get_rotation_state(&env);
+        if state.is_empty() {
+            None
+        } else {
+            Some(state)
+        }
     }
 
     // ── Platform Statistics (for analytics without full indexing) ─────────────
@@ -2668,7 +3253,9 @@ impl EscrowContract {
     /// (which compares against ledger-sequence deltas).
     fn current_match_timeout(env: &Env) -> u32 {
         let seconds = Self::get_config(env).match_timeout_seconds;
-        (seconds / SECONDS_PER_LEDGER) as u32
+        // Ceiling division: floor division here would underestimate the
+        // ledger delta required, allowing the timeout to trigger early.
+        ((seconds + SECONDS_PER_LEDGER - 1) / SECONDS_PER_LEDGER) as u32
     }
 
     /// Get the cached count of completed matches for a player (O(1) lookup).
@@ -2919,6 +3506,9 @@ impl EscrowContract {
         env.storage()
             .instance()
             .set(&DataKey::Admin, &proposal.pending_admin);
+        // Audited: PendingAdmin is removed here, so a second accept_admin()
+        // call has nothing to load (Error::Unauthorized) and cannot replay
+        // this proposal.
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("xfer")),
@@ -2964,6 +3554,58 @@ impl EscrowContract {
         Ok(m.player1_deposited && m.player2_deposited)
     }
 
+    /// Return player statistics for a given address.
+    ///
+    /// Returns cumulative stats including total matches, wins, losses, draws,
+    /// and total volume staked. These statistics are maintained on-chain
+    /// to enable off-chain analytics without requiring full event indexing.
+    pub fn get_player_stats(env: Env, player: Address) -> PlayerStats {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PlayerStats(player))
+            .unwrap_or(PlayerStats {
+                total_matches: 0,
+                wins: 0,
+                losses: 0,
+                draws: 0,
+                total_volume_staked: 0,
+            })
+    }
+
+    /// Internal helper to update player statistics on match completion.
+    fn update_player_stats(env: &Env, player: &Address, winner: &Winner, stake_amount: i128) {
+        let mut stats: PlayerStats = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PlayerStats(player.clone()))
+            .unwrap_or(PlayerStats {
+                total_matches: 0,
+                wins: 0,
+                losses: 0,
+                draws: 0,
+                total_volume_staked: 0,
+            });
+
+        stats.total_matches = stats.total_matches.saturating_add(1);
+        stats.total_volume_staked = stats.total_volume_staked.saturating_add(stake_amount);
+
+        match winner {
+            Winner::Player1 => stats.wins = stats.wins.saturating_add(1),
+            Winner::Player2 => stats.losses = stats.losses.saturating_add(1),
+            Winner::Draw => stats.draws = stats.draws.saturating_add(1),
+            Winner::None => {}
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::PlayerStats(player.clone()), &stats);
+        env.storage().persistent().extend_ttl(
+            &DataKey::PlayerStats(player.clone()),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    }
+
     /// Return the number of players who have deposited for a match (0, 1, or 2).
     pub fn get_depositor_count(env: Env, match_id: u64) -> Result<u32, Error> {
         let m: Match = env
@@ -2982,6 +3624,22 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
         Ok(Self::escrow_balance_of(&m))
+    }
+
+    /// Return `true` only if funds are currently held in escrow for this
+    /// match, i.e. it is funded AND not yet Completed or Cancelled.
+    ///
+    /// Unlike [`Self::is_funded`], this reflects the *current* balance state
+    /// rather than historical deposit flags.
+    pub fn is_currently_escrowed(env: Env, match_id: u64) -> Result<bool, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        let funded = m.player1_deposited && m.player2_deposited;
+        let terminal = matches!(m.state, MatchState::Completed | MatchState::Cancelled);
+        Ok(funded && !terminal)
     }
 
     fn depositor_count(m: &Match) -> i128 {
@@ -3241,7 +3899,11 @@ impl EscrowContract {
             return Err(Error::DisputeAlreadyRaised);
         }
 
-        // Calculate and collect dispute bond
+        // Calculate and collect dispute bond. The bond is floored to a minimum
+        // of 1 stroop so that tiny stakes (e.g. 1 stroop at the default 100 bps)
+        // cannot round down to a zero-cost dispute, which would let an attacker
+        // spam the dispute system for free. Small matches stay disputable, they
+        // just pay the 1-stroop minimum.
         let bond_basis_points: u32 = env
             .storage()
             .instance()
@@ -3253,8 +3915,10 @@ impl EscrowContract {
             .checked_mul(bond_basis_points as i128)
             .ok_or(Error::Overflow)?
             .checked_div(10_000)
-            .ok_or(Error::Overflow)?;
+            .ok_or(Error::Overflow)?
+            .max(1);
 
+        // Defense in depth: never allow a zero (or negative) bond through.
         if dispute_bond <= 0 {
             return Err(Error::InsufficientBond);
         }
@@ -3713,6 +4377,16 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
         Ok(dispute)
+    }
+
+    /// Get the dispute for a match by match ID.
+    pub fn get_dispute_details(env: Env, match_id: u64) -> Result<Dispute, Error> {
+        let dispute_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MatchDispute(match_id))
+            .ok_or(Error::DisputeNotFound)?;
+        Self::get_dispute(env, dispute_id)
     }
 
     /// Return the dispute ID for a match, if one exists.
@@ -4283,8 +4957,10 @@ impl EscrowContract {
             .unwrap_or(0);
 
         let mut collected = 0u32;
+        let mut truncated = false;
         for match_id in 0..count {
             if collected >= MAX_UNBOUNDED_MATCH_RESULTS {
+                truncated = true;
                 break;
             }
             if let Some(m) = env
@@ -4297,6 +4973,15 @@ impl EscrowContract {
                     collected = collected.saturating_add(1);
                 }
             }
+        }
+
+        if truncated {
+            // Silent data loss otherwise: callers of the deprecated unbounded
+            // getters have no other signal that results were capped.
+            env.events().publish(
+                (Symbol::new(env, "match"), symbol_short!("truncated")),
+                (state, MAX_UNBOUNDED_MATCH_RESULTS),
+            );
         }
 
         Ok(matches)
@@ -4413,6 +5098,18 @@ impl EscrowContract {
         limit: u32,
     ) -> Result<soroban_sdk::Vec<Match>, Error> {
         Self::collect_matches_by_state_paginated(&env, MatchState::Completed, offset, limit)
+    }
+
+    /// Return a paginated page of cancelled matches ordered by match ID ascending.
+    ///
+    /// `offset` — number of cancelled matches to skip before collecting results.
+    /// `limit`  — maximum number of cancelled matches to return (0 returns an empty vec).
+    pub fn get_cancelled_matches_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state_paginated(&env, MatchState::Cancelled, offset, limit)
     }
 
     /// Return the total number of matches created.
@@ -5662,6 +6359,7 @@ impl EscrowContract {
                 protocol_fee_bps: 0,
                 fee_recipient: env.current_contract_address(),
                 minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
             })
     }
 
@@ -5710,6 +6408,12 @@ impl EscrowContract {
             .checked_mul(config.protocol_fee_bps as i128)
             .ok_or(Error::Overflow)?
             / 10_000;
+        // Apply per-match fee cap if set (issue #1337).
+        let fee = if let Some(cap) = config.max_protocol_fee {
+            fee.min(cap)
+        } else {
+            fee
+        };
         Ok(fee)
     }
 }

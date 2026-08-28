@@ -42,7 +42,8 @@ impl Default for LichessClientConfig {
 
 /// Lichess off-chain client.
 ///
-/// - Validates Lichess game IDs (exactly 8 alphanumeric characters).
+/// - Validates Lichess game IDs: exactly 8 or 12 alphanumeric characters.
+///   Standard games use 8-character IDs; some tournament formats use 12.
 /// - Applies a per-request timeout.
 /// - Token-bucket rate limiting (60 req/min by default).
 /// - Concurrency semaphore (8 in-flight requests by default).
@@ -99,9 +100,13 @@ impl LichessClient {
         })
     }
 
-    /// Validates that a Lichess game ID is exactly 8 alphanumeric characters.
+    /// Validates that a Lichess game ID is 8 or 12 alphanumeric characters.
+    ///
+    /// Standard Lichess games use 8-character IDs.  Lichess recently began
+    /// supporting extended 12-character IDs for some tournament formats.
     pub fn validate_game_id(game_id: &str) -> Result<(), LichessError> {
-        if game_id.len() != 8 || !game_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        let len = game_id.len();
+        if (len != 8 && len != 12) || !game_id.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(LichessError::InvalidGameId);
         }
         Ok(())
@@ -217,10 +222,11 @@ impl GameProvider for LichessClient {
     }
 
     async fn fetch_result(&self, game_id: &str) -> Result<Winner, ProviderError> {
-        // Lichess game IDs are always 8 alphanumeric chars; fail fast otherwise.
-        if game_id.len() != 8 || !game_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        // Lichess game IDs are 8 or 12 alphanumeric chars; fail fast otherwise.
+        let len = game_id.len();
+        if (len != 8 && len != 12) || !game_id.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(ProviderError::InvalidGameId(format!(
-                "lichess expects 8 alphanumeric chars, got {:?}",
+                "lichess expects 8 or 12 alphanumeric chars, got {:?}",
                 game_id
             )));
         }

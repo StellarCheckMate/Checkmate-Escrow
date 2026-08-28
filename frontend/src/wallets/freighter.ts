@@ -1,6 +1,14 @@
 import { isConnected, getAddress, signTransaction } from '@stellar/freighter-api';
 import type { SignResult } from './types';
 
+export class FreighterNotInstalledError extends Error {
+  constructor(message = 'Freighter wallet not detected') {
+    super(message);
+    this.name = 'FreighterNotInstalledError';
+    Object.setPrototypeOf(this, FreighterNotInstalledError.prototype);
+  }
+}
+
 export async function freighterIsAvailable(): Promise<boolean> {
   try {
     const result = await isConnected();

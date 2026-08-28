@@ -255,6 +255,10 @@ get_match_timeout() -> Result<u64, Error>
 set_maximum_stake(amount: Option<i128>) -> Result<(), Error>
 set_protocol_config(config: ProtocolConfig) -> Result<(), Error>
 get_protocol_config() -> Result<ProtocolConfig, Error>
+admin_freeze_player(player, reason) -> Result<(), Error>
+admin_unfreeze_player(player) -> Result<(), Error>
+is_player_frozen(player) -> bool
+get_frozen_players() -> Vec<Address>
 ```
 
 All admin-control functions below require authorization from the configured admin address.
@@ -263,6 +267,7 @@ All admin-control functions below require authorization from the configured admi
 - **Maximum stake** — `set_maximum_stake` caps the `stake_amount` accepted by `create_match` and its variants. Pass `Some(amount)` to set a cap (rejected with `Error::InvalidAmount` if `amount <= 0`), or `None` to remove the cap (the default). `create_match` rejects any `stake_amount` above the configured cap with `Error::InvalidAmount`. Read the current cap via `get_protocol_config().maximum_stake`.
 - **Protocol fee** — `ProtocolConfig::protocol_fee_bps` (basis points, default `0`) and `ProtocolConfig::fee_recipient` control a platform fee taken out of the winner's payout: `protocol_fee = stake_amount * 2 * protocol_fee_bps / 10_000`, transferred to `fee_recipient` when `submit_result` resolves a winner. Draw refunds are never charged this fee. Set both fields via `set_protocol_config`; `protocol_fee_bps` above `10_000` (100%) is rejected with `Error::InvalidAmount`.
 - **Full config read** — `get_protocol_config` returns the complete `ProtocolConfig` struct as currently stored on-chain (treasury, vesting duration, cancellation fee, stablecoin-only mode, maximum stake, match timeout, protocol fee, and fee recipient). Off-chain tools and the frontend can call this single function instead of making multiple separate admin queries to reconstruct contract state.
+- **Player freeze** — `admin_freeze_player(player, reason)` blocks a single player from creating matches (any `create_match` variant, including being named as the opponent) and depositing, without pausing the contract for anyone else. The `reason` is stored on-chain for auditability, and `admin_unfreeze_player(player)` reverses it. A freeze deliberately does **not** block fund recovery — the frozen player can still cancel/expire pending matches and claim payouts, and existing `Active` matches settle normally. Rejections surface as `Error::ContractPaused` (the error enum is at its 50-variant XDR cap, so this reuses the closest existing code). Query state via `is_player_frozen(player)` and `get_frozen_players()`.
 
 ## 🧪 Testing
 

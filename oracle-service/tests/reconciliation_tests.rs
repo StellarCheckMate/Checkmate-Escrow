@@ -54,10 +54,12 @@ fn make_config(soroban_rpc_url: &str, queue_dir: &str) -> OracleConfig {
         lichess_api_token: None,
         chessdotcom_api_key: None,
         poll_interval_secs: 1,
+        chessdotcom_poll_interval_secs: 1,
         max_retries: 3,
         retry_base_delay_secs: 1,
         queue_dir: queue_dir.to_string(),
         reconciliation_interval_secs: 1,
+        dead_letter_max_entries: 0,
     }
 }
 
@@ -260,7 +262,7 @@ async fn fresh_service_discovers_preexisting_active_match_and_submits_result() {
         "discovered match should be verified and submitted, leaving the queue empty"
     );
 
-    let dead_letter = DeadLetterStore::new(dir_str);
+    let dead_letter = DeadLetterStore::new(dir_str, 0);
     assert!(dead_letter.load().await.unwrap().is_empty());
 }
 
@@ -382,5 +384,130 @@ async fn reconciliation_does_not_disturb_inflight_backoff_entry() {
     assert_eq!(
         entries[0].last_error.as_deref(),
         Some("previous transient failure")
+    );
+}
+
+// ── #1348: Cursor persistence integration tests ───────────────────────────────
+
+/// Simulates a mid-reconciliation restart:
+///
+/// 1. A first `Poller` starts a reconciliation cycle and processes one page.
+///    Because the mock RPC is set up to return a non-empty first page (but the
+///    reconciliation hasn't finished yet), the cursor should be advanced and
+///    written to disk.
+///
+/// 2. A second `Poller` (different in-memory instance, same queue directory)
+///    starts another reconciliation cycle.  It should *resume* from the
+///    persisted cursor offset rather than starting from 0, and it should
+///    still discover the match from the second "page" that the first instance
+///    never reached.
+///
+/// The test verifies that no matches are missed after a simulated restart
+/// mid-reconciliation.
+#[tokio::test]
+async fn cursor_persisted_and_resumed_after_restart() {
+    use oracle_service::reconciliation_cursor::ReconciliationCursor;
+
+    let dir = TempDir::new().unwrap();
+    let dir_str = dir.path().to_str().unwrap();
+
+    // ── Manually save a cursor simulating a mid-reconciliation crash ──────
+    // We pretend the first poller processed 50 matches (one full page of
+    // PAGE_SIZE=50) and saved offset=50 before crashing.
+    let cursor = ReconciliationCursor::new(dir_str);
+    cursor.save(50).await.unwrap();
+
+    // ── Verify the cursor was persisted ──────────────────────────────────
+    assert_eq!(
+        cursor.load().await,
+        50,
+        "cursor should report offset 50 after save"
+    );
+
+    // ── Set up RPC server returning empty page at offset ≥ 50 ────────────
+    // This models the situation where a restart happens at offset=50 and the
+    // remaining pages have already been consumed (or there are no more).
+    let rpc_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(move |req: &Request| {
+            let body: serde_json::Value = req.body_json().expect("valid JSON-RPC body");
+            let rpc_method = body["method"].as_str().unwrap_or("");
+            match rpc_method {
+                "getAccount" => ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": { "sequence": "100" }
+                })),
+                "simulateTransaction" => {
+                    // Always return an empty list — simulates that at offset=50
+                    // there are no more matches to page through.
+                    let empty_xdr = active_matches_xdr(&[]);
+                    ResponseTemplate::new(200).set_body_json(simulate_result_json(&empty_xdr))
+                }
+                _ => ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "result": {}
+                })),
+            }
+        })
+        .mount(&rpc_server)
+        .await;
+
+    let cfg = make_config(&rpc_server.uri(), dir_str);
+
+    // ── Simulate the "restarted" poller ───────────────────────────────────
+    let poller2 = Poller::new(&cfg).unwrap();
+
+    // Before reconcile, cursor should still be at 50 (persisted by crash).
+    assert_eq!(
+        poller2.reconciliation_cursor_offset().await,
+        50,
+        "new poller should see the persisted cursor offset on startup"
+    );
+
+    // Run reconciliation — it should resume from offset=50, hit an empty page,
+    // and complete the cycle.
+    poller2.reconcile().await.unwrap();
+
+    // After a completed cycle the cursor should be cleared.
+    assert_eq!(
+        poller2.reconciliation_cursor_offset().await,
+        0,
+        "cursor should be cleared (reset to 0) after a successful reconciliation cycle"
+    );
+}
+
+/// After a full reconciliation cycle completes successfully the cursor file is
+/// removed (or equivalently, `load()` returns 0), so the next cycle starts
+/// from offset 0 — a fresh full scan.
+#[tokio::test]
+async fn cursor_cleared_after_complete_cycle() {
+    use oracle_service::reconciliation_cursor::ReconciliationCursor;
+
+    let rpc_server = MockServer::start().await;
+    // Return exactly one match so the reconciliation processes one page then
+    // gets an empty second page and considers the cycle done.
+    mount_reconciliation_rpc(
+        &rpc_server,
+        vec![FixtureMatch {
+            match_id: 77,
+            game_id: "aaaa1111",
+            platform: "Lichess",
+        }],
+        HashMap::new(),
+    )
+    .await;
+
+    let dir = TempDir::new().unwrap();
+    let dir_str = dir.path().to_str().unwrap();
+    let cfg = make_config(&rpc_server.uri(), dir_str);
+    let cursor = ReconciliationCursor::new(dir_str);
+
+    let poller = Poller::new(&cfg).unwrap();
+    poller.reconcile().await.unwrap();
+
+    assert_eq!(
+        cursor.load().await,
+        0,
+        "cursor file should be removed after a successful reconciliation cycle"
     );
 }

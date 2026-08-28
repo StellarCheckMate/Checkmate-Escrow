@@ -1,9 +1,123 @@
 # End-to-End Testing Guide
 
-This guide explains how to run the Checkmate-Escrow end-to-end (E2E) test suite
-against the Stellar testnet using real wallets and real contract deployments.
+Checkmate-Escrow has two end-to-end test suites:
 
-## What the E2E tests cover
+1. **Sandboxed lifecycle suite** (`e2e-tests/`) — deploys the *release WASM
+   artifacts* into an in-process Soroban host and drives a complete match from
+   creation to payout. It is fully automated, deterministic, and runs on every
+   PR in CI.
+2. **Testnet suite** (`oracle-service/tests/e2e_tests.rs`) — exercises the
+   off-chain oracle pipeline (RPC, Lichess/Chess.com fetches, persistence)
+   against real testnet endpoints and wallets.
+
+## Sandboxed lifecycle suite (`e2e-tests/`)
+
+### Why it exists
+
+The unit tests in `contracts/escrow` and `contracts/oracle` register the
+contracts natively (compiled into the test binary). They are fast and cover
+the state machine well, but they do not prove that the **deployed artifact** —
+the release WASM that would actually be shipped to a network — behaves
+correctly, nor that the two contracts work together. The sandboxed suite
+closes that gap: it deploys `target/wasm32v1-none/release/{escrow,oracle}.wasm`
+into the sandboxed Soroban host and drives the exact flow the off-chain oracle
+service drives in production.
+
+### The gold-standard lifecycle
+
+`e2e-tests/tests/lifecycle.rs` runs the full flow end to end for every payout
+branch:
+
+1. **Deploy** — `escrow.wasm` and `oracle.wasm` (the release bytecode) are
+   registered in the sandbox, together with a Stellar asset contract that
+   plays the role of the stake token.
+2. **Initialize** — escrow is configured with the oracle service account as
+   its trusted oracle; the oracle contract gets the same account as admin.
+3. **Create match** — `create_match` with a realistic Lichess `game_id`
+   (`"abcd1234"`). The match is `Pending` and escrow holds nothing.
+4. **Deposit** — player1 then player2 transfer their stakes in. The match
+   activates, `is_funded` flips to `true`, and the contract balance is exactly
+   `2 × stake`.
+5. **Oracle records the result** — the oracle service calls
+   `oracle.submit_result` (game_id, platform, winner, response time, and
+   confidence), which stores a `ResultEntry` for the audit log.
+6. **Settle** — the oracle calls `escrow.submit_result` from the escrow-side
+   oracle address; the match becomes `Completed` and the payout vests.
+7. **Claim** — each player calls `claim_vested_payout` (the test config
+   disables the vesting delay). The winner receives `2 × stake`, the loser
+   receives nothing, and the contract retains a zero balance.
+
+Assertions cover state transitions, the contract's token balance at each
+stage, player balances after payout, stored oracle results, and the loser's
+inability to claim.
+
+| Test | Outcome | Verifies |
+|------|---------|----------|
+| `test_full_lifecycle_player1_wins` | `Winner::Player1` | winner ends with `initial + stake`, loser cannot claim |
+| `test_full_lifecycle_player2_wins` | `Winner::Player2` | winner ends with `initial + stake`, loser cannot claim |
+| `test_full_lifecycle_draw` | `Winner::Draw` | each player gets exactly their stake back |
+
+### Negative paths
+
+- `test_non_oracle_cannot_submit_result` — an impostor account cannot settle a
+  match; it stays `Active` and both stakes stay in escrow.
+- `test_oracle_duplicate_submit_rejected` — the oracle contract refuses a
+  second result submission for the same match (`AlreadySubmitted`).
+- `test_claim_before_settlement_rejected` — a player cannot claim a payout
+  before the oracle settles the match.
+- `test_submit_result_on_unfunded_match_rejected` — the oracle cannot settle a
+  match that was never fully funded (`NotFunded`).
+
+> **Note on events:** event emission (`match/created`, `match/activated`,
+> `match/completed`, `oracle/result`, …) is asserted in the unit tests in
+> `contracts/*`. The soroban-sdk test host does not reliably surface events
+> published by WASM-registered contracts through `env.events()` in this SDK
+> version, so the E2E suite validates observable effects instead — the state
+> and balance assertions above pin the same behavior end to end.
+
+### How to run
+
+Contracts are built for **`wasm32v1-none`** — the Soroban target that emits
+core wasm 1.0 only. Do not build with `wasm32-unknown-unknown` for the E2E
+suite: on recent Rust that target enables reference-types / multi-value
+instructions, which the Soroban host validator rejects at deployment — the E2E
+suite would catch exactly this.
+
+```bash
+# Full suite: build release WASM → unit tests → E2E tests
+scripts/test.sh
+
+# Or manually:
+rustup target add wasm32v1-none
+cargo build --target wasm32v1-none --release -p escrow -p oracle
+cargo test              # unit tests
+cargo test -p e2e-tests # E2E tests against the release WASM
+```
+
+The E2E tests read the compiled artifacts from `target/wasm32v1-none/release/`
+at runtime, so the WASM build must run first. If the artifacts are missing,
+the tests fail with a clear message instead of silently testing stale
+bytecode. `e2e-tests` is a workspace member but not a *default* member, so
+plain `cargo build` / `cargo test` compile only the contracts — run the
+harness explicitly with `cargo test -p e2e-tests`.
+
+### CI
+
+`.github/workflows/ci.yml` builds the release WASM in the `test` job and then
+runs both `cargo test` and `cargo test -p e2e-tests`, so every push to `main`
+and every PR is validated against the deployable artifacts.
+
+### What the sandboxed suite does not cover
+
+- **Live network behavior** — fees, sequencing, and real ledger effects are
+  covered by the testnet suite below and by `scripts/smoke_test.sh`.
+- **Off-chain oracle HTTP fetch** — the Lichess / Chess.com API calls live in
+  `oracle-service/` and are exercised by the testnet suite.
+- **Multi-oracle consensus** — the m-of-n voting path in the oracle contract
+  (see [docs/oracle.md](oracle.md)) is covered by unit tests in
+  `contracts/oracle/src/tests.rs`.
+
+## Testnet suite (`oracle-service/tests/e2e_tests.rs`)
 
 The E2E test suite (`oracle-service/tests/e2e_tests.rs`) exercises the full
 oracle pipeline with no mocks:

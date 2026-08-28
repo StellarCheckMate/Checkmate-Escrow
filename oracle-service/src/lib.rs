@@ -1,6 +1,7 @@
 pub mod config;
 pub mod dead_letter;
 pub mod health;
+pub mod metrics;
 pub mod middleware;
 pub mod oracle;
 pub mod poller;

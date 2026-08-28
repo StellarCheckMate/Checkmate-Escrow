@@ -1,0 +1,134 @@
+name: ABI Snapshot
+
+# Fail if the escrow contract's public function list changes without an explicit
+# update to the committed baseline in contracts/escrow/contract-spec.json.
+#
+# How it works:
+#   1. Build the escrow WASM for release.
+#   2. Run `stellar contract inspect` to emit a JSON function list.
+#   3. Extract only the function names (sorted) and compare to the names in the
+#      committed baseline (also sorted).
+#   4. If they differ, the job fails and prints a diff so the author knows
+#      exactly which functions were added, removed, or renamed.
+#
+# To update the baseline after an intentional ABI change, follow the procedure
+# in CONTRIBUTING.md#updating-the-abi-snapshot.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'contracts/escrow/src/**'
+      - 'contracts/escrow/Cargo.toml'
+      - 'contracts/escrow/contract-spec.json'
+      - '.github/workflows/abi-snapshot.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'contracts/escrow/src/**'
+      - 'contracts/escrow/Cargo.toml'
+      - 'contracts/escrow/contract-spec.json'
+      - '.github/workflows/abi-snapshot.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  abi-snapshot:
+    name: Escrow ABI Snapshot
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-abi-${{ hashFiles('contracts/escrow/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-abi-
+
+      - name: Build escrow contract (release WASM)
+        run: |
+          cd contracts/escrow
+          cargo build --target wasm32-unknown-unknown --release
+
+      - name: Install Stellar CLI
+        run: |
+          curl -sSL https://github.com/stellar/stellar-cli/releases/download/v21.5.0/stellar-cli-21.5.0-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C /usr/local/bin stellar
+          stellar --version
+
+      - name: Extract current ABI function names
+        run: |
+          stellar contract inspect \
+            --wasm target/wasm32-unknown-unknown/release/escrow.wasm \
+            --output json \
+            > /tmp/current-spec-raw.json
+
+          # Extract and sort function names from the live WASM
+          python3 - <<'EOF'
+          import json, sys
+
+          with open('/tmp/current-spec-raw.json') as f:
+              raw = json.load(f)
+
+          # stellar contract inspect --output json emits an array of spec entries;
+          # each entry has a "function_v0" key when it describes a public function.
+          functions = []
+          entries = raw if isinstance(raw, list) else raw.get('entries', [])
+          for entry in entries:
+              fn = entry.get('function_v0') or entry.get('FunctionV0')
+              if fn:
+                  name = fn.get('name') or fn.get('Name', '')
+                  if name:
+                      functions.append(name)
+
+          functions.sort()
+          with open('/tmp/current-functions.json', 'w') as f:
+              json.dump(functions, f, indent=2)
+
+          print(f'Found {len(functions)} public functions in built WASM')
+          EOF
+
+      - name: Extract baseline ABI function names
+        run: |
+          python3 - <<'EOF'
+          import json
+
+          with open('contracts/escrow/contract-spec.json') as f:
+              baseline = json.load(f)
+
+          functions = sorted(fn['name'] for fn in baseline.get('functions', []))
+          with open('/tmp/baseline-functions.json', 'w') as f:
+              json.dump(functions, f, indent=2)
+
+          print(f'Found {len(functions)} public functions in baseline')
+          EOF
+
+      - name: Compare ABI snapshots
+        run: |
+          if diff -u /tmp/baseline-functions.json /tmp/current-functions.json; then
+            echo "✅ ABI snapshot matches baseline — no accidental changes detected."
+          else
+            echo ""
+            echo "❌ ABI snapshot MISMATCH detected!"
+            echo ""
+            echo "The escrow contract's public function list no longer matches the"
+            echo "committed baseline in contracts/escrow/contract-spec.json."
+            echo ""
+            echo "If this change is intentional, update the baseline by following"
+            echo "the procedure in CONTRIBUTING.md (see 'Updating the ABI snapshot')."
+            echo ""
+            echo "If this change is accidental, revert the function rename/removal"
+            echo "before merging this PR."
+            exit 1
+          fi

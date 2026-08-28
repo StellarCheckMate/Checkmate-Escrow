@@ -88,6 +88,11 @@ The two contracts are separate:
   admin-gated read interfaces. It additionally supports a genuine multi-oracle
   consensus path — see [m-of-n Oracle Consensus](#m-of-n-oracle-consensus).
 
+The complete pipeline — deploying the release WASM artifacts, creating a
+match, depositing both stakes, recording the result, settling, and claiming
+the payout — is exercised end to end by the sandboxed lifecycle suite in
+`e2e-tests/`; see [docs/e2e-testing.md](e2e-testing.md).
+
 ---
 
 ## Oracle Slash Relay
