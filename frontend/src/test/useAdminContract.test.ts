@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useAdminContract, decodeAddress, decodeBoolean } from '../hooks/useAdminContract';
+import { useAdminContract, decodeAddress, decodeBoolean, isContractPausedError } from '../hooks/useAdminContract';
 import * as freighter from '../wallets/freighter';
 import * as albedo from '../wallets/albedo';
 
@@ -241,5 +241,13 @@ describe('useAdminContract', () => {
 
     // Initial state will be loading
     expect(result.current.loading || result.current.admin === null).toBe(true);
+  });
+
+  it('isContractPausedError detects all variations of ContractPaused errors', () => {
+    expect(isContractPausedError(new Error('Transaction rejected: ContractPaused'))).toBe(true);
+    expect(isContractPausedError(new Error('HostError: Error(Contract, #9)'))).toBe(true);
+    expect(isContractPausedError('contract paused by admin')).toBe(true);
+    expect(isContractPausedError(new Error('User rejected signature'))).toBe(false);
+    expect(isContractPausedError(null)).toBe(false);
   });
 });
