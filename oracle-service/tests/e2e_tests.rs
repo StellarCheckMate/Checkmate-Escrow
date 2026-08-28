@@ -115,10 +115,12 @@ impl E2EConfig {
             lichess_api_token: self.lichess_api_token,
             chessdotcom_api_key: self.chessdotcom_api_key,
             poll_interval_secs: 5,
+            chessdotcom_poll_interval_secs: 60,
             max_retries: 3,
             retry_base_delay_secs: 2,
             queue_dir,
             reconciliation_interval_secs: 5,
+            dead_letter_max_entries: 0,
         }
     }
 }
@@ -540,7 +542,7 @@ async fn e2e_dead_letter_store_round_trip() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let queue_dir = tmp.path().to_str().unwrap().to_string();
 
-    let store = DeadLetterStore::new(&queue_dir);
+    let store = DeadLetterStore::new(&queue_dir, 0);
 
     let mut entry = PendingEntry::new(99, "abcdef01".to_string(), Platform::Lichess);
     entry.attempts = 5;

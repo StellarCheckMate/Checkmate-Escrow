@@ -39,6 +39,7 @@ use crate::dead_letter::DeadLetterStore;
 use crate::oracle::errors::{ChessComError, LichessError, OracleServiceError};
 use crate::oracle::{ChessComClient, LichessClient, Winner};
 use crate::queue::{PendingEntry, PendingQueue};
+use crate::reconciliation_cursor::ReconciliationCursor;
 use crate::soroban_client::SorobanClient;
 
 /// The pipeline poller.  Clone-cheap — the inner state is reference-counted.
@@ -50,12 +51,15 @@ pub struct Poller {
 struct PollerInner {
     queue: PendingQueue,
     dead_letter: DeadLetterStore,
+    cursor: ReconciliationCursor,
     soroban: SorobanClient,
     chess_com: ChessComClient,
     lichess: LichessClient,
     signing_key: Zeroizing<[u8; 32]>,
     max_retries: u32,
     retry_base_delay_secs: u64,
+    /// How often (seconds) the Chess.com-specific poll loop wakes.
+    chessdotcom_poll_interval_secs: u64,
     /// Strkey of the oracle contract — used by reconciliation to check
     /// `has_result` before enqueuing a discovered match.
     contract_oracle: String,
@@ -83,13 +87,15 @@ impl Poller {
         Ok(Self {
             inner: Arc::new(PollerInner {
                 queue: PendingQueue::new(&cfg.queue_dir),
-                dead_letter: DeadLetterStore::new(&cfg.queue_dir),
+                dead_letter: DeadLetterStore::new(&cfg.queue_dir, cfg.dead_letter_max_entries),
+                cursor: ReconciliationCursor::new(&cfg.queue_dir),
                 soroban,
                 chess_com,
                 lichess,
                 signing_key: Zeroizing::new(*cfg.oracle_signing_key),
                 max_retries: cfg.max_retries,
                 retry_base_delay_secs: cfg.retry_base_delay_secs,
+                chessdotcom_poll_interval_secs: cfg.chessdotcom_poll_interval_secs,
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
             }),
@@ -121,13 +127,15 @@ impl Poller {
         Ok(Self {
             inner: Arc::new(PollerInner {
                 queue: PendingQueue::new(&cfg.queue_dir),
-                dead_letter: DeadLetterStore::new(&cfg.queue_dir),
+                dead_letter: DeadLetterStore::new(&cfg.queue_dir, cfg.dead_letter_max_entries),
+                cursor: ReconciliationCursor::new(&cfg.queue_dir),
                 soroban,
                 chess_com,
                 lichess,
                 signing_key: Zeroizing::new(*cfg.oracle_signing_key),
                 max_retries: cfg.max_retries,
                 retry_base_delay_secs: cfg.retry_base_delay_secs,
+                chessdotcom_poll_interval_secs: cfg.chessdotcom_poll_interval_secs,
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
             }),
@@ -159,17 +167,36 @@ impl Poller {
         Ok(Self {
             inner: Arc::new(PollerInner {
                 queue: PendingQueue::new(&cfg.queue_dir),
-                dead_letter: DeadLetterStore::new(&cfg.queue_dir),
+                dead_letter: DeadLetterStore::new(&cfg.queue_dir, cfg.dead_letter_max_entries),
+                cursor: ReconciliationCursor::new(&cfg.queue_dir),
                 soroban,
                 chess_com,
                 lichess,
                 signing_key: Zeroizing::new(*cfg.oracle_signing_key),
                 max_retries: cfg.max_retries,
                 retry_base_delay_secs: cfg.retry_base_delay_secs,
+                chessdotcom_poll_interval_secs: cfg.chessdotcom_poll_interval_secs,
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
             }),
         })
+    }
+
+    /// Return the configured Chess.com poll interval in seconds.
+    ///
+    /// Exposed so that the main loop and tests can read it without reaching
+    /// into the `Arc<PollerInner>`.
+    pub fn chessdotcom_poll_interval_secs(&self) -> u64 {
+        self.inner.chessdotcom_poll_interval_secs
+    }
+
+    /// Read the currently persisted reconciliation cursor offset from disk.
+    ///
+    /// Returns `0` if no cursor file exists (i.e. no cycle is in progress or
+    /// the last cycle completed cleanly).  Exposed primarily for integration
+    /// tests that simulate a mid-reconciliation restart.
+    pub async fn reconciliation_cursor_offset(&self) -> u32 {
+        self.inner.cursor.load().await
     }
 
     /// Run a single polling tick: process all due queue entries.
@@ -200,6 +227,50 @@ impl Poller {
         }
     }
 
+    /// Run a Chess.com-specific polling loop that wakes every
+    /// `chessdotcom_poll_interval_secs` seconds.
+    ///
+    /// This allows Chess.com games (which finish more slowly, especially
+    /// classical time controls) to be polled at an independent rate from the
+    /// general Lichess pipeline tick.
+    pub async fn run_chess_com_loop(self) {
+        let interval =
+            tokio::time::Duration::from_secs(self.inner.chessdotcom_poll_interval_secs);
+        loop {
+            // Only process due Chess.com entries.
+            match self.tick_chess_com().await {
+                Ok(n) if n > 0 => {
+                    info!(count = n, "chess.com poller tick: processed due entries");
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    error!("chess.com poller tick error: {}", e);
+                }
+            }
+            tokio::time::sleep(interval).await;
+        }
+    }
+
+    /// Process only Chess.com entries that are due for a retry.
+    ///
+    /// Returns the number of entries processed.  `pub` so tests can call it
+    /// directly without spawning a background loop.
+    pub async fn tick_chess_com(&self) -> Result<usize, OracleServiceError> {
+        let due = self
+            .inner
+            .queue
+            .due_entries()
+            .await?
+            .into_iter()
+            .filter(|e| e.platform == Platform::ChessDotCom)
+            .collect::<Vec<_>>();
+        let count = due.len();
+        for entry in due {
+            self.process_entry(entry).await;
+        }
+        Ok(count)
+    }
+
     /// Enqueue a new match for verification if not already queued.
     pub async fn enqueue(
         &self,
@@ -218,10 +289,25 @@ impl Poller {
     /// file has been lost entirely, or against a queue that already has
     /// entries mid-retry — `PendingQueue::enqueue` dedups on `match_id` and
     /// never touches an existing entry's retry state.
+    ///
+    /// ## Cursor persistence
+    ///
+    /// The current page offset is saved to disk after every page so that a
+    /// service restart mid-reconciliation resumes from where it left off rather
+    /// than restarting from offset 0.  The cursor is cleared when the cycle
+    /// completes successfully.
     pub async fn reconcile(&self) -> Result<(), OracleServiceError> {
         const PAGE_SIZE: u32 = 50;
 
-        let mut offset = 0u32;
+        // Resume from a previously persisted offset (0 if starting fresh).
+        let mut offset = self.inner.cursor.load().await;
+        if offset > 0 {
+            info!(
+                offset,
+                "reconciliation resuming from persisted cursor offset"
+            );
+        }
+
         let mut discovered = 0u32;
 
         loop {
@@ -272,11 +358,28 @@ impl Poller {
                 }
             }
 
+            offset += page_len;
+
+            // Persist the cursor after each successfully processed page so a
+            // restart can resume from here instead of offset 0.
+            if let Err(e) = self.inner.cursor.save(offset).await {
+                // Non-fatal: log and continue — correctness is maintained because
+                // PendingQueue::enqueue is idempotent (already-queued matches are
+                // silently skipped on re-discovery).
+                error!(
+                    offset,
+                    "failed to persist reconciliation cursor (non-fatal): {}", e
+                );
+            }
+
             if page_len < PAGE_SIZE {
                 break;
             }
-            offset += page_len;
         }
+
+        // Cycle complete — remove the cursor file so the next cycle starts
+        // from offset 0 (fresh scan of all active matches).
+        self.inner.cursor.clear().await;
 
         if discovered > 0 {
             info!(count = discovered, "reconciliation cycle complete");

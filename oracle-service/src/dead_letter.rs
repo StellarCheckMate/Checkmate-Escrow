@@ -45,16 +45,32 @@ pub struct DeadLetterEntry {
 }
 
 /// Append-friendly dead-letter file store.
+///
+/// ## Capacity management
+///
+/// When `max_entries > 0` and the store is at capacity, [`DeadLetterStore::push`]
+/// evicts the oldest entry (by `dead_lettered_at`) before writing the new one,
+/// preventing unbounded disk growth in production.
+///
+/// Set `max_entries = 0` to disable the limit (not recommended for production).
 pub struct DeadLetterStore {
     file_path: PathBuf,
+    /// Maximum number of entries to retain.  `0` means no limit.
+    max_entries: usize,
 }
 
 impl DeadLetterStore {
     /// Open (or create) the dead-letter file in `dir`.
-    pub fn new(dir: &str) -> Self {
+    ///
+    /// `max_entries` caps how many entries the store retains.  Pass `0` for
+    /// no limit.  See [`DeadLetterStore`] for eviction behaviour.
+    pub fn new(dir: &str, max_entries: usize) -> Self {
         let mut path = PathBuf::from(dir);
         path.push("dead_letter.json");
-        Self { file_path: path }
+        Self {
+            file_path: path,
+            max_entries,
+        }
     }
 
     /// Load all dead-letter entries from disk.
@@ -98,6 +114,12 @@ impl DeadLetterStore {
     /// Move a failed entry into the dead-letter store and emit an alert log.
     ///
     /// This is the primary external API called by the pipeline poller.
+    ///
+    /// ## Capacity enforcement
+    ///
+    /// If `max_entries > 0` and the store is at or above capacity after
+    /// appending the new entry, the oldest entry (by `dead_lettered_at`) is
+    /// removed first so the store never exceeds `max_entries`.
     pub async fn push(&self, entry: PendingEntry) -> Result<(), OracleServiceError> {
         // ── Alerting ──────────────────────────────────────────────────────
         // Log at ERROR so that any log-based alerting fires.
@@ -121,13 +143,33 @@ impl DeadLetterStore {
 
         let mut entries = self.load().await?;
         // Avoid duplicates (idempotent push)
-        if !entries
+        if entries
             .iter()
             .any(|e| e.entry.match_id == dl.entry.match_id)
         {
-            entries.push(dl);
-            self.save(&entries).await?;
+            return Ok(());
         }
+
+        entries.push(dl);
+
+        // ── Capacity enforcement ──────────────────────────────────────────
+        // Evict oldest entries when the cap is active and would be exceeded.
+        if self.max_entries > 0 && entries.len() > self.max_entries {
+            // Sort by dead_lettered_at ascending so index 0 is the oldest.
+            entries.sort_by_key(|e| e.dead_lettered_at);
+            // Drain from the front until we are back within the limit.
+            let excess = entries.len() - self.max_entries;
+            entries.drain(..excess);
+            tracing::warn!(
+                evicted = excess,
+                max_entries = self.max_entries,
+                "dead-letter store at capacity: evicted oldest {} entr{}",
+                excess,
+                if excess == 1 { "y" } else { "ies" },
+            );
+        }
+
+        self.save(&entries).await?;
         Ok(())
     }
 
@@ -147,7 +189,11 @@ mod tests {
     use tempfile::TempDir;
 
     fn make_store(dir: &TempDir) -> DeadLetterStore {
-        DeadLetterStore::new(dir.path().to_str().unwrap())
+        DeadLetterStore::new(dir.path().to_str().unwrap(), 0) // 0 = no limit
+    }
+
+    fn make_store_with_limit(dir: &TempDir, max: usize) -> DeadLetterStore {
+        DeadLetterStore::new(dir.path().to_str().unwrap(), max)
     }
 
     fn make_entry(match_id: u64) -> PendingEntry {
@@ -193,5 +239,76 @@ mod tests {
         let entries = store.load().await.unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].entry.match_id, 2);
+    }
+
+    /// When the store is at capacity, pushing a new entry evicts the oldest.
+    #[tokio::test]
+    async fn evict_oldest_at_capacity() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store_with_limit(&dir, 3);
+
+        // Push 3 entries — fills to capacity.
+        store.push(make_entry(1)).await.unwrap();
+        store.push(make_entry(2)).await.unwrap();
+        store.push(make_entry(3)).await.unwrap();
+
+        let before = store.load().await.unwrap();
+        assert_eq!(before.len(), 3, "should hold exactly 3 entries at capacity");
+
+        // Push a 4th entry — entry 1 (oldest) should be evicted.
+        store.push(make_entry(4)).await.unwrap();
+
+        let after = store.load().await.unwrap();
+        assert_eq!(
+            after.len(),
+            3,
+            "store should still hold at most max_entries=3 after eviction"
+        );
+
+        let ids: Vec<u64> = after.iter().map(|e| e.entry.match_id).collect();
+        assert!(
+            !ids.contains(&1),
+            "oldest entry (match_id=1) should have been evicted; remaining: {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&4),
+            "new entry (match_id=4) should be present; remaining: {:?}",
+            ids
+        );
+    }
+
+    /// A limit of 1 means only the most recent entry is kept.
+    #[tokio::test]
+    async fn evict_all_but_newest_when_limit_is_one() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store_with_limit(&dir, 1);
+
+        store.push(make_entry(10)).await.unwrap();
+        store.push(make_entry(20)).await.unwrap();
+
+        let entries = store.load().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].entry.match_id, 20,
+            "only the newest entry should remain"
+        );
+    }
+
+    /// With max_entries=0 (unlimited) the store grows without bound.
+    #[tokio::test]
+    async fn no_eviction_when_limit_is_zero() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store_with_limit(&dir, 0);
+
+        for id in 1..=10 {
+            store.push(make_entry(id)).await.unwrap();
+        }
+
+        assert_eq!(
+            store.load().await.unwrap().len(),
+            10,
+            "all 10 entries should be retained when limit is 0"
+        );
     }
 }

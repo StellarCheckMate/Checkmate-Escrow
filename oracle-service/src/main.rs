@@ -22,7 +22,7 @@
 
 use axum::{
     extract::State,
-    http::header,
+    http::{header, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::get,
     Json, Router,
@@ -52,9 +52,17 @@ struct AppState {
     waf: WafState,
 }
 
-async fn health_check(State(state): State<AppState>) -> Json<serde_json::Value> {
+async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
+    use oracle_service::health::HealthStatus;
+
     let status = state.health_checker.status().await;
-    Json(serde_json::to_value(&status).unwrap_or(serde_json::json!(null)))
+    let http_status = if status.status == HealthStatus::Unhealthy {
+        StatusCode::SERVICE_UNAVAILABLE // 503
+    } else {
+        StatusCode::OK // 200
+    };
+    let body = serde_json::to_value(&status).unwrap_or(serde_json::json!(null));
+    (http_status, Json(body))
 }
 
 // ── API documentation handlers ────────────────────────────────────────────────

@@ -51,10 +51,12 @@ fn make_config(
         lichess_api_token: None,
         chessdotcom_api_key: None,
         poll_interval_secs: 1,
+        chessdotcom_poll_interval_secs: 1,
         max_retries,
         retry_base_delay_secs,
         queue_dir: queue_dir.to_string(),
         reconciliation_interval_secs: 1,
+        dead_letter_max_entries: 0,
     }
 }
 
@@ -265,7 +267,7 @@ async fn pipeline_permanent_failure_dead_letters_immediately() {
 
     let poller = Poller::new_with_lichess_base(&cfg, chess_server.uri()).unwrap();
     let queue = PendingQueue::new(dir_str);
-    let dead_letter = DeadLetterStore::new(dir_str);
+    let dead_letter = DeadLetterStore::new(dir_str, 0);
 
     enqueue_due(&queue, 4, "notfound", Platform::Lichess).await;
 
@@ -303,7 +305,7 @@ async fn pipeline_exhausted_retries_moves_to_dead_letter() {
 
     let poller = Poller::new_with_lichess_base(&cfg, chess_server.uri()).unwrap();
     let queue = PendingQueue::new(dir_str);
-    let dead_letter = DeadLetterStore::new(dir_str);
+    let dead_letter = DeadLetterStore::new(dir_str, 0);
 
     enqueue_due(&queue, 5, "exhaust1", Platform::Lichess).await;
 
@@ -395,7 +397,7 @@ async fn pipeline_game_not_finished_is_transient() {
 
     let poller = Poller::new_with_lichess_base(&cfg, chess_server.uri()).unwrap();
     let queue = PendingQueue::new(dir_str);
-    let dead_letter = DeadLetterStore::new(dir_str);
+    let dead_letter = DeadLetterStore::new(dir_str, 0);
 
     enqueue_due(&queue, 6, "ongoing1", Platform::Lichess).await;
 

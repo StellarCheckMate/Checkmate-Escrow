@@ -5,4 +5,5 @@ pub mod middleware;
 pub mod oracle;
 pub mod poller;
 pub mod queue;
+pub mod reconciliation_cursor;
 pub mod soroban_client;
