@@ -153,7 +153,10 @@ fn test_submit_result_batch_mixed_funded_and_unfunded_reports_not_funded() {
 
     assert_eq!(client.get_match(&funded).state, MatchState::Completed);
     assert_eq!(client.get_match(&unfunded_none).state, MatchState::Pending);
-    assert_eq!(client.get_match(&unfunded_partial).state, MatchState::Pending);
+    assert_eq!(
+        client.get_match(&unfunded_partial).state,
+        MatchState::Pending
+    );
 }
 
 #[test]
@@ -188,10 +191,7 @@ fn test_submit_result_batch_already_confirmed_match() {
         &soroban_sdk::vec![&env, (match_a, Winner::Player1)],
         &oracle,
     );
-    assert_eq!(
-        second.get(0).unwrap(),
-        Some(Error::OracleAlreadyConfirmed)
-    );
+    assert_eq!(second.get(0).unwrap(), Some(Error::OracleAlreadyConfirmed));
 }
 
 #[test]

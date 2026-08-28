@@ -40,7 +40,13 @@ fn app() -> axum::Router {
     );
     let cache = Arc::new(RwLock::new(EventCache::new(16)));
     let rpc = Arc::new(SorobanRpcClient::new("http://127.0.0.1:1").unwrap());
-    build_router(db, cache, rpc, Arc::new(ApiCache::disabled()), Some(TEST_API_KEY.to_string()))
+    build_router(
+        db,
+        cache,
+        rpc,
+        Arc::new(ApiCache::disabled()),
+        Some(TEST_API_KEY.to_string()),
+    )
 }
 
 /// Issue a GET and return the status plus the decoded error message (if any).

@@ -179,7 +179,8 @@ impl ChessComClient {
                 continue;
             }
 
-            if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS || retry_count >= MAX_RETRIES {
+            if resp.status() != reqwest::StatusCode::TOO_MANY_REQUESTS || retry_count >= MAX_RETRIES
+            {
                 break resp;
             }
 

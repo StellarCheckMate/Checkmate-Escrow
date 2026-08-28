@@ -23,12 +23,12 @@ use tokio::sync::RwLock;
 use tower::ServiceExt;
 
 use event_indexer::api::{build_router, ApiResponse, Stats};
-use event_indexer::auth::API_KEY_HEADER;
 use event_indexer::api_cache::{
     all_match_list_keys, analytics_key, analytics_ttl, match_key, match_ttl, matches_key,
     pending_matches_ttl, ApiCache, ANALYTICS_STATS, ANALYTICS_TTL_SECS, MATCH_TTL_SECS,
     PENDING_MATCHES_TTL_SECS,
 };
+use event_indexer::auth::API_KEY_HEADER;
 use event_indexer::cache::EventCache;
 use event_indexer::db::Database;
 use event_indexer::models::{MatchInfo, MatchStatus};

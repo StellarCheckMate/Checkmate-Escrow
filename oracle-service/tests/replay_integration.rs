@@ -8,9 +8,9 @@
 //! interactions, stdout/stderr output, and exit codes are all covered
 //! end-to-end rather than through unit stubs.
 
-use oracle_service::{dead_letter::DeadLetterStore, queue::PendingQueue};
 use oracle_service::config::Platform;
 use oracle_service::queue::PendingEntry;
+use oracle_service::{dead_letter::DeadLetterStore, queue::PendingQueue};
 use tempfile::TempDir;
 
 /// Build a `DeadLetterEntry` with the given match_id and attempt count, then
@@ -130,8 +130,7 @@ async fn max_retries_skips_entries_at_or_above_limit() {
     // Entry with 7 attempts (above the limit=5 → should be skipped).
     push_entry(&store, 3, 7).await;
 
-    let (stdout, _stderr, success) =
-        run_replay(queue_dir, &["--all", "--max-retries", "5"]);
+    let (stdout, _stderr, success) = run_replay(queue_dir, &["--all", "--max-retries", "5"]);
 
     assert!(success, "max-retries run must exit 0 when no failures");
 

@@ -1450,7 +1450,11 @@ impl EscrowContract {
         let mut bracket_matches = soroban_sdk::vec![&env];
 
         for i in 0..match_count {
-            if let Some(m) = env.storage().persistent().get::<_, Match>(&DataKey::Match(i)) {
+            if let Some(m) = env
+                .storage()
+                .persistent()
+                .get::<_, Match>(&DataKey::Match(i))
+            {
                 if m.bracket_id == Some(bracket_id) {
                     bracket_matches.push_back(m);
                 }
@@ -2034,7 +2038,12 @@ impl EscrowContract {
 
     /// Submit a draw result — oracle only. This is a convenience wrapper
     /// around `settle_result` with `Winner::Draw`.
-    pub fn submit_draw(env: Env, match_id: u64, oracle: Address, confidence: Option<u8>) -> Result<(), Error> {
+    pub fn submit_draw(
+        env: Env,
+        match_id: u64,
+        oracle: Address,
+        confidence: Option<u8>,
+    ) -> Result<(), Error> {
         if env
             .storage()
             .instance()
@@ -2059,7 +2068,12 @@ impl EscrowContract {
     /// `submit_result_batch` authorize the oracle once for the whole batch
     /// instead of once per match (repeated `require_auth` calls for the same
     /// address within a single invocation are rejected by the host).
-    fn settle_result(env: &Env, match_id: u64, winner: Winner, confidence: Option<u8>) -> Result<(), Error> {
+    fn settle_result(
+        env: &Env,
+        match_id: u64,
+        winner: Winner,
+        confidence: Option<u8>,
+    ) -> Result<(), Error> {
         if winner == Winner::None {
             return Err(Error::InvalidState);
         }
@@ -2305,10 +2319,7 @@ impl EscrowContract {
                 .persistent()
                 .get::<DataKey, Match>(&DataKey::Match(match_id))
                 .is_some_and(|m| {
-                    matches!(
-                        m.state,
-                        MatchState::Completed | MatchState::PendingResult
-                    )
+                    matches!(m.state, MatchState::Completed | MatchState::PendingResult)
                 });
 
             let outcome = if already_settled {

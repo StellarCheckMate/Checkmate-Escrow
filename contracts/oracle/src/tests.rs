@@ -2819,7 +2819,11 @@ fn test_get_all_oracles_paginated_limit_capped_at_100() {
     let oracles = register_n_oracles(&env, &client, &token_addr, 5, 100);
 
     let page = client.get_all_oracles_paginated(&0, &200);
-    assert_eq!(page.len(), 5, "limit=200 is capped to 100 but 5 oracles < 100");
+    assert_eq!(
+        page.len(),
+        5,
+        "limit=200 is capped to 100 but 5 oracles < 100"
+    );
     assert_eq!(page.get(0).unwrap(), oracles[0]);
     assert_eq!(page.get(4).unwrap(), oracles[4]);
 }
@@ -2850,7 +2854,10 @@ fn test_minority_slash_on_draw_finalization() {
         &Winner::Draw,
         &500u64,
     );
-    assert!(client.has_result(&0u64), "Draw must finalize with threshold=1");
+    assert!(
+        client.has_result(&0u64),
+        "Draw must finalize with threshold=1"
+    );
     assert_eq!(client.get_result(&0u64).result, Winner::Draw);
 
     // Stakes before the two Player1 votes.
@@ -2959,22 +2966,26 @@ fn test_draw_finalization_emits_minority_events_for_player_voters() {
     );
 
     // Oracles 1 and 2 vote Player2 — both should trigger minority events.
-    client.try_submit_oracle_result(
-        &oracles[1],
-        &0u64,
-        &String::from_str(&env, "draw_game"),
-        &Platform::Lichess,
-        &Winner::Player2,
-        &200u64,
-    ).ok();
-    client.try_submit_oracle_result(
-        &oracles[2],
-        &0u64,
-        &String::from_str(&env, "draw_game"),
-        &Platform::Lichess,
-        &Winner::Player2,
-        &200u64,
-    ).ok();
+    client
+        .try_submit_oracle_result(
+            &oracles[1],
+            &0u64,
+            &String::from_str(&env, "draw_game"),
+            &Platform::Lichess,
+            &Winner::Player2,
+            &200u64,
+        )
+        .ok();
+    client
+        .try_submit_oracle_result(
+            &oracles[2],
+            &0u64,
+            &String::from_str(&env, "draw_game"),
+            &Platform::Lichess,
+            &Winner::Player2,
+            &200u64,
+        )
+        .ok();
 
     let events = env.events().all();
     let expected_topics = soroban_sdk::vec![

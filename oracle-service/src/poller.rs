@@ -36,12 +36,12 @@ use zeroize::Zeroizing;
 
 use crate::config::{OracleConfig, Platform};
 use crate::dead_letter::DeadLetterStore;
+use crate::metrics;
 use crate::oracle::errors::{ChessComError, LichessError, OracleServiceError};
 use crate::oracle::{ChessComClient, LichessClient, Winner};
 use crate::queue::{PendingEntry, PendingQueue};
 use crate::result_cache::ResultCache;
 use crate::soroban_client::SorobanClient;
-use crate::metrics;
 
 /// The pipeline poller.  Clone-cheap — the inner state is reference-counted.
 #[derive(Clone)]
@@ -230,7 +230,11 @@ impl Poller {
         game_id: String,
         platform: Platform,
     ) -> Result<bool, OracleServiceError> {
-        let added = self.inner.queue.enqueue(match_id, game_id, platform).await?;
+        let added = self
+            .inner
+            .queue
+            .enqueue(match_id, game_id, platform)
+            .await?;
         if added {
             let depth = self.inner.queue.load().await?.len();
             metrics::set_queue_depth(depth);
@@ -340,12 +344,7 @@ impl Poller {
 
         // ── Cache check ──────────────────────────────────────────────────
         // Skip the platform API call if there is a non-expired cached result.
-        if let Some(cached_winner) = self
-            .inner
-            .result_cache
-            .get(entry.platform, &game_id)
-            .await
-        {
+        if let Some(cached_winner) = self.inner.result_cache.get(entry.platform, &game_id).await {
             info!(
                 match_id,
                 game_id = %game_id,
@@ -375,7 +374,11 @@ impl Poller {
 
         match winner_result {
             Ok(winner) => {
-                info!(match_id, ?winner, "result fetched; caching and submitting to Soroban");
+                info!(
+                    match_id,
+                    ?winner,
+                    "result fetched; caching and submitting to Soroban"
+                );
                 // Populate the cache so subsequent retries (if submission fails)
                 // don't need to call the platform API again within the TTL window.
                 self.inner

@@ -398,7 +398,10 @@ mod tests {
         set_base_env();
         env::remove_var("EVENT_INDEXER_API_KEY");
         let cfg = Config::from_env().unwrap();
-        assert!(cfg.api_key.is_none(), "no key is a supported (fail-closed) setup");
+        assert!(
+            cfg.api_key.is_none(),
+            "no key is a supported (fail-closed) setup"
+        );
     }
 
     #[test]
