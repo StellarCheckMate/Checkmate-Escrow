@@ -182,8 +182,9 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 | `token`            | `Address`       | Token contract address used for staking (any allowlisted Stellar Asset Contract, e.g. XLM or USDC — see [Token Support](security.md#smart-contract-limitations)). |
 | `game_id`          | `String`        | External game ID from the chess platform. |
 | `platform`         | `Platform`      | Chess platform: `Lichess` or `ChessDotCom`. |
-| `state`            | `MatchState`    | Current lifecycle state (see below). |
-| `winner`           | `Winner`        | Match outcome once completed; defaults to `Draw` until set. |
+| `state` | `MatchState` | Current lifecycle state (see below). |
+| `bracket_id` | `Option<u64>` | Optional bracket/tournament identifier for tournament-mode matches. `None` for standard matches. |
+| `winner` | `Winner` | Match outcome once completed; defaults to `Draw` until set. |
 | `created_ledger`   | `u32`           | Ledger sequence at match creation. |
 | `completed_ledger` | `Option<u32>`   | Ledger sequence at completion or cancellation, if applicable. |
 | `vested_at`        | `Option<u64>`   | Unix timestamp at which a completed payout's vesting period ends, if the protocol config has a non-zero `vesting_duration_seconds`. `None` when vesting does not apply. |
@@ -443,6 +444,12 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_completed_matches` | `() -> Result<Vec<Match>, Error>` | Returns all matches in `Completed` state. Scans every match ever created in linear time — prefer `get_completed_matches_paginated` for contracts with a large match count. |
 | `get_completed_matches_paginated` | `(offset: u32, limit: u32) -> Result<Vec<Match>, Error>` | Paginated version of `get_completed_matches`, ordered by match ID ascending. |
 | `get_match_history` | `(player: Option<Address>, limit: u32, offset: u32) -> Result<Vec<Match>, Error>` | Returns a page of `Completed`/`Cancelled` matches, newest first. Pass `player` to restrict to that address's matches, or `None` for the full protocol-wide history. `offset`/`limit` paginate over the filtered result set. |
+| `get_cancelled_matches_paginated` | `(offset: u32, limit: u32) -> Result<Vec<Match>, Error>` | Paginated version of `get_completed_matches` filtered to `Cancelled` state only. |
+| `get_player_stats` | `(player: Address) -> PlayerStats` | Returns aggregated statistics for a player including total matches, wins, losses, and draws. |
+| `is_currently_escrowed` | `(match_id: u64) -> bool` | Returns `true` if the match has funds currently held in escrow (i.e. not yet fully paid out or refunded). |
+| `create_match_tournament` | `(player1: Address, player2: Address, stake_amount: i128, token: Address, game_id: String, platform: Platform, bracket_id: u64) -> u64` | Creates a tournament/bracket match with an associated `bracket_id`. |
+| `get_bracket_matches` | `(bracket_id: u64) -> Vec<Match>` | Returns all matches associated with a given bracket/tournament. |
+| `get_oracle_rotation_state` | `(oracle: Address) -> OracleRotationState` | Returns the current rotation state for the specified oracle. |
 
 #### Balance Snapshot Queries
 
