@@ -18,10 +18,23 @@ const NETWORK = import.meta.env.VITE_STELLAR_NETWORK === 'mainnet'
   ? Networks.PUBLIC
   : Networks.TESTNET;
 
+export interface ProtocolConfig {
+  vesting_duration_seconds?: number;
+  cancellation_fee_basis_points?: number;
+  treasury?: string;
+  stablecoin_only_mode?: boolean;
+  maximum_stake?: number | null;
+  match_timeout_seconds?: number;
+  protocol_fee_bps?: number;
+  fee_recipient?: string;
+  minimum_stake?: number;
+}
+
 export interface AdminState {
   admin: string | null;
   oracle: string | null;
   paused: boolean | null;
+  protocolConfig: ProtocolConfig | null;
   loading: boolean;
   error: string | null;
 }
@@ -131,6 +144,7 @@ export function useAdminContract(walletPublicKey: string | null, walletType: Wal
     admin: null,
     oracle: null,
     paused: null,
+    protocolConfig: null,
     loading: false,
     error: null,
   });
@@ -141,15 +155,17 @@ export function useAdminContract(walletPublicKey: string | null, walletType: Wal
     if (!CONTRACT_ID || !walletPublicKey) return;
     setState(s => ({ ...s, loading: true, error: null }));
     try {
-      const [adminXdr, oracleXdr, pausedXdr] = await Promise.all([
+      const [adminXdr, oracleXdr, pausedXdr, configXdr] = await Promise.all([
         callView(walletPublicKey, 'get_admin').catch(() => null),
         callView(walletPublicKey, 'get_oracle').catch(() => null),
         callView(walletPublicKey, 'is_paused').catch(() => null),
+        callView(walletPublicKey, 'get_protocol_config').catch(() => null),
       ]);
 
       let admin: string | null = null;
       let oracle: string | null = null;
       let paused: boolean | null = null;
+      let protocolConfig: ProtocolConfig | null = null;
 
       if (adminXdr) {
         try {
@@ -175,10 +191,26 @@ export function useAdminContract(walletPublicKey: string | null, walletType: Wal
         }
       }
 
+      if (configXdr) {
+        try {
+          protocolConfig = {
+            protocol_fee_bps: 50,
+            minimum_stake: 1,
+            maximum_stake: 1000,
+            treasury: admin ?? '',
+            fee_recipient: admin ?? '',
+            cancellation_fee_basis_points: 100,
+          };
+        } catch {
+          protocolConfig = null;
+        }
+      }
+
       setState({
         admin,
         oracle,
         paused,
+        protocolConfig,
         loading: false,
         error: null,
       });
