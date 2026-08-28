@@ -188,3 +188,7 @@ mod dispute_rollback;
 mod platform_stats;
 mod protocol_config;
 mod stablecoin;
+mod issue_1342;
+mod issue_1343;
+mod issue_1344;
+mod issue_1345;
