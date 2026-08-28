@@ -245,9 +245,9 @@ fn test_register_oracle_with_stake_accumulates_near_i128_max() {
     let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
 
     // Mint enough for three top-ups near u32::MAX and one near i128 max
-    let top_up1: i128 = 3_000_000_000;  // 3 billion
-    let top_up2: i128 = 2_000_000_000;  // 2 billion
-    let top_up3: i128 = 1_500_000_000;  // 1.5 billion
+    let top_up1: i128 = 3_000_000_000; // 3 billion
+    let top_up2: i128 = 2_000_000_000; // 2 billion
+    let top_up3: i128 = 1_500_000_000; // 1.5 billion
 
     asset_client.mint(&oracle_admin, &top_up1);
     client.register_oracle_with_stake(&oracle_admin, &top_up1, &token_addr);
@@ -259,7 +259,10 @@ fn test_register_oracle_with_stake_accumulates_near_i128_max() {
     client.register_oracle_with_stake(&oracle_admin, &top_up3, &token_addr);
 
     // Total stake should be the sum of all three top-ups
-    assert_eq!(balance_client.balance(&contract_id), top_up1 + top_up2 + top_up3);
+    assert_eq!(
+        balance_client.balance(&contract_id),
+        top_up1 + top_up2 + top_up3
+    );
 
     // The recorded stake is the cumulative sum, not just the last call.
     let registration: OracleRegistration = env.as_contract(&contract_id, || {
