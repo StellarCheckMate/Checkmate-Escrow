@@ -16,7 +16,7 @@
 /// - `#9` — `RateLimitExceeded` — Oracle exceeded hourly/daily submission quota
 ///
 /// See [`docs/error-codes.md`](../../docs/error-codes.md) for all 21 error codes with causes and recovery actions.
-mod errors;
+pub mod errors;
 pub mod types;
 
 use errors::Error;
