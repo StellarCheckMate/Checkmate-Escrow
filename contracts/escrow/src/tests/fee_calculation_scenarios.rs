@@ -15,6 +15,7 @@ fn test_cancellation_fee_calculation_correct() {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     let match_id = client.create_match(
@@ -46,6 +47,7 @@ fn test_zero_cancellation_fee_accepted() {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     let match_id = client.create_match(
@@ -76,6 +78,7 @@ fn test_high_cancellation_fee_allowed() {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     let match_id = client.create_match(
@@ -107,6 +110,7 @@ fn test_fee_applied_to_deposited_amount() {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     let stake = 100i128;
@@ -174,6 +178,7 @@ fn test_tier_based_fee_adjustment() {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     let bronze_match = client.create_match(

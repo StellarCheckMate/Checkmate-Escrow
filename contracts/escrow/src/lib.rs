@@ -2321,6 +2321,35 @@ impl EscrowContract {
         Ok(outcomes)
     }
 
+    /// Deposit into multiple matches in a single transaction. Issue #1335.
+    ///
+    /// Follows the same pattern as `submit_result_batch`: each entry is
+    /// attempted independently and failures are collected rather than
+    /// aborting the whole batch.
+    ///
+    /// Returns a `Vec<Option<Error>>` where `None` means success and
+    /// `Some(e)` carries the error for that entry.
+    pub fn deposit_batch(
+        env: Env,
+        entries: Vec<(u64, Address)>,
+    ) -> Result<Vec<Option<Error>>, Error> {
+        if env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+        {
+            return Err(Error::ContractPaused);
+        }
+
+        let mut outcomes = Vec::new(&env);
+        for (match_id, player) in entries.iter() {
+            let outcome = Self::deposit(env.clone(), match_id, player);
+            outcomes.push_back(outcome.err());
+        }
+        Ok(outcomes)
+    }
+
     /// Cancel a pending match and refund any deposits.
     /// Either player can cancel a pending match.
     pub fn cancel_match(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
@@ -6283,6 +6312,7 @@ impl EscrowContract {
                 protocol_fee_bps: 0,
                 fee_recipient: env.current_contract_address(),
                 minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
             })
     }
 
@@ -6331,6 +6361,12 @@ impl EscrowContract {
             .checked_mul(config.protocol_fee_bps as i128)
             .ok_or(Error::Overflow)?
             / 10_000;
+        // Apply per-match fee cap if set (issue #1337).
+        let fee = if let Some(cap) = config.max_protocol_fee {
+            fee.min(cap)
+        } else {
+            fee
+        };
         Ok(fee)
     }
 }
