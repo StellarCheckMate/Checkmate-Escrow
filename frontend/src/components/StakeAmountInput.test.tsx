@@ -40,4 +40,48 @@ describe('StakeAmountInput', () => {
     fireEvent.change(input, { target: { value: '10' } });
     expect(onChange).toHaveBeenCalledTimes(1);
   });
+
+  test('blocks input below minimum_stake from contract config', () => {
+    const { rerender } = render(
+      <StakeAmountInput
+        tokenSymbol="XLM"
+        value="25"
+        onChange={onChange}
+        minimum_stake={50}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Amount must be at least 50');
+
+    rerender(
+      <StakeAmountInput
+        tokenSymbol="XLM"
+        value="50"
+        onChange={onChange}
+        minimum_stake={50}
+      />
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  test('blocks input exceeding maximum_stake from contract config', () => {
+    const { rerender } = render(
+      <StakeAmountInput
+        tokenSymbol="XLM"
+        value="1500"
+        onChange={onChange}
+        maximum_stake={1000}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Amount cannot exceed 1000');
+
+    rerender(
+      <StakeAmountInput
+        tokenSymbol="XLM"
+        value="1000"
+        onChange={onChange}
+        maximum_stake={1000}
+      />
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });
