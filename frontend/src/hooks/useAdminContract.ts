@@ -126,6 +126,18 @@ export async function callView(walletPublicKey: string, method: string): Promise
   return json.result?.results?.[0]?.xdr ?? null;
 }
 
+export function isContractPausedError(error: unknown): boolean {
+  if (!error) return false;
+  const msg = typeof error === 'string' ? error : (error as Error).message || String(error);
+  return (
+    msg.includes('ContractPaused') ||
+    msg.includes('#9') ||
+    msg.includes('Error(Contract, #9)') ||
+    msg.toLowerCase().includes('contract paused') ||
+    msg.toLowerCase().includes('contract is paused')
+  );
+}
+
 export function useAdminContract(walletPublicKey: string | null, walletType: WalletType | null) {
   const [state, setState] = useState<AdminState>({
     admin: null,
@@ -227,7 +239,12 @@ export function useAdminContract(walletPublicKey: string | null, walletType: Wal
       await fetchAdminState();
       return true;
     } catch (err) {
-      setActionError((err as Error).message);
+      if (isContractPausedError(err)) {
+        setState(s => ({ ...s, paused: true }));
+        setActionError('Contract is currently paused. Actions are disabled until unpaused.');
+      } else {
+        setActionError((err as Error).message);
+      }
       return false;
     } finally {
       setActionLoading(false);
