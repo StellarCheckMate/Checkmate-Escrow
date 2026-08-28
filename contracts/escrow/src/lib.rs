@@ -866,6 +866,29 @@ impl EscrowContract {
             .unwrap_or_else(|| soroban_sdk::vec![&env])
     }
 
+    /// Lists all currently frozen players — admin only.
+    ///
+    /// This authenticated view provides an explicit administrative audit path
+    /// without requiring callers to read the contract's persistent storage.
+    pub fn admin_list_frozen_players(env: Env, caller: Address) -> Result<soroban_sdk::Vec<Address>, Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        caller.require_auth();
+        if caller != admin {
+            return Err(Error::Unauthorized);
+        }
+
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&PlayerFreezeKey::FrozenPlayers)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]))
+    }
+
     /// Internal helper — rejects `player` with `Error::ContractPaused` when
     /// frozen. Used by `create_match` (all variants) and `deposit`.
     fn require_player_not_frozen(env: &Env, player: &Address) -> Result<(), Error> {
