@@ -52,6 +52,7 @@ fn setup_multi_token_fixture() -> (
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     // Deploy two distinct tokens (e.g. USDC and XLM)

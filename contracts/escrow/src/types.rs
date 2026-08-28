@@ -65,6 +65,10 @@ pub struct ProtocolConfig {
     pub fee_recipient: Address,
     /// Minimum stake amount enforced in create_match (default 1).
     pub minimum_stake: i128,
+    /// Optional absolute cap on the protocol fee per match (in token units).
+    /// When set, `fee = min(calculated_fee, max_protocol_fee)`.
+    /// `None` means no cap (default).
+    pub max_protocol_fee: Option<i128>,
 }
 
 /// A single fee tier entry: matches with a stake up to `max_stake` are charged

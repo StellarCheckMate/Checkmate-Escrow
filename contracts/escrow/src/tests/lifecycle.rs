@@ -914,6 +914,7 @@ fn test_concurrent_matches_remain_isolated() {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     let match_one = client.create_match(
@@ -2322,6 +2323,7 @@ fn test_update_protocol_config() {
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     let config = client.get_protocol_config();
@@ -2345,6 +2347,7 @@ fn test_vesting_enforced() {
         protocol_fee_bps: 0,
         fee_recipient: _admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
 
     let id = client.create_match(

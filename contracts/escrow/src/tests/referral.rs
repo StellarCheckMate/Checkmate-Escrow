@@ -95,6 +95,7 @@ fn setup_referral_match(
         protocol_fee_bps: 0,
         fee_recipient: admin.clone(),
         minimum_stake: crate::DEFAULT_MINIMUM_STAKE,
+                max_protocol_fee: None,
     });
     client.set_referral_share_bps(&referral_share_bps);
 
