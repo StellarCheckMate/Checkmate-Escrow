@@ -303,9 +303,22 @@ impl EscrowContract {
         if config.protocol_fee_bps > 10_000 {
             return Err(Error::InvalidAmount);
         }
+        let old_mode: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProtocolConfig)
+            .map(|c: ProtocolConfig| c.stablecoin_only_mode)
+            .unwrap_or(false);
+        let new_mode = config.stablecoin_only_mode;
         env.storage()
             .instance()
             .set(&DataKey::ProtocolConfig, &config);
+        if old_mode != new_mode {
+            env.events().publish(
+                (Symbol::new(&env, "escrow"), Symbol::new(&env, "stablecoin_mode")),
+                new_mode,
+            );
+        }
         Ok(())
     }
 
@@ -618,6 +631,23 @@ impl EscrowContract {
     /// Return the current allowlist as an ordered list.
     pub fn get_allowed_tokens(env: Env) -> Result<soroban_sdk::Vec<Address>, Error> {
         Ok(Self::get_allowed_token_list(&env))
+    }
+
+    /// Return a paginated slice of the allowlist.
+    pub fn get_allowed_tokens_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Address> {
+        let all = Self::get_allowed_token_list(&env);
+        let mut result = soroban_sdk::vec![&env];
+        let total = all.len();
+        let start = offset.min(total);
+        let end = (start.saturating_add(limit)).min(total);
+        for i in start..end {
+            result.push_back(all.get(i).unwrap());
+        }
+        result
     }
 
     fn get_allowed_token_list(env: &Env) -> soroban_sdk::Vec<Address> {
@@ -2752,6 +2782,13 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Update the heartbeat for a match — player only.
+    ///
+    /// Alias for `heartbeat_match` with the parameter order specified in issue #1343.
+    pub fn update_heartbeat(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
+        Self::heartbeat_match(env, match_id, caller)
+    }
+
     // ── Heartbeat (refreshes `last_heartbeat` to keep the rollback window alive) ──
 
     /// Refresh the match `last_heartbeat` to the current ledger timestamp.
@@ -4302,6 +4339,16 @@ impl EscrowContract {
             MATCH_TTL_LEDGERS,
         );
         Ok(dispute)
+    }
+
+    /// Get the dispute for a match by match ID.
+    pub fn get_dispute_details(env: Env, match_id: u64) -> Result<Dispute, Error> {
+        let dispute_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MatchDispute(match_id))
+            .ok_or(Error::DisputeNotFound)?;
+        Self::get_dispute(env, dispute_id)
     }
 
     /// Return the dispute ID for a match, if one exists.
