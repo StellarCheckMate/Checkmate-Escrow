@@ -95,6 +95,52 @@ the payout — is exercised end to end by the sandboxed lifecycle suite in
 
 ---
 
+## Oracle Slash Relay
+
+### Overview
+
+When a dispute is overturned by community vote in the escrow contract, the `mark_dispute_for_oracle_slash` function emits an `oracle_slash_signal` event containing the dispute ID, the oracle address to slash, and the amount to slash. An off-chain relay service listens for these events and automatically calls the oracle contract's `slash_oracle` function to execute the slashing.
+
+This relay automates the economic penalty for oracles implicated in overturned disputes, ensuring that the oracle accountability mechanism described in the architecture documentation is fully operational.
+
+### Relay Design
+
+The oracle slash relay is designed to be:
+
+1. **Idempotent** — Processing the same `oracle_slash_signal` event multiple times does not double-slash. The relay tracks processed signals in memory and skips duplicates.
+2. **Safe** — If an oracle named in a signal is not registered on the oracle contract, the relay logs a warning and skips slashing rather than crashing.
+3. **Resilient** — Network or contract failures are handled gracefully with retries and error logging.
+
+### Event Format
+
+The `oracle_slash_signal` event has the following format:
+
+```
+Topic: ["dispute", "oracle_slash_signal"]
+Data: (dispute_id: u64, oracle: Address, slash_amount: i128)
+```
+
+The relay extracts these fields and calls `slash_oracle(oracle, slash_amount)` on the oracle contract.
+
+### Integration
+
+The relay is integrated into the oracle service (`oracle-service/src/slash_relay.rs`) and is automatically enabled when the service starts. It:
+
+1. Subscribes to `oracle_slash_signal` events from the configured escrow contract
+2. For each signal, verifies the oracle is registered on the oracle contract
+3. Calls `slash_oracle` with the specified amount
+4. Records the processed signal to prevent double-slashing
+
+### Testing
+
+The relay is thoroughly tested via:
+
+- **Contract-side tests** (`contracts/escrow/src/tests/slash_relay_tests.rs`) that verify the escrow contract correctly emits slash signals
+- **Relay-side tests** (`oracle-service/src/slash_relay.rs`) that verify idempotency and error handling
+- **Integration tests** that verify the full flow from signal emission to oracle slashing
+
+---
+
 ## m-of-n Oracle Consensus
 
 ### Background

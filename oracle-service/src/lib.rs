@@ -6,5 +6,5 @@ pub mod middleware;
 pub mod oracle;
 pub mod poller;
 pub mod queue;
-pub mod result_cache;
+pub mod slash_relay;
 pub mod soroban_client;

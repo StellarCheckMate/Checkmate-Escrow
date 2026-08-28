@@ -411,7 +411,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_dispute_period` | `(&Env) -> u32` | Returns the currently configured dispute period. |
 | `get_dispute` | `(dispute_id: u64) -> Dispute` | Returns the stored dispute record. |
 | `get_match_dispute_id` | `(match_id: u64) -> u64` | Returns the dispute ID associated with a match, if one has been raised. |
-| `mark_dispute_for_oracle_slash` | `(dispute_id: u64, slash_amount: i128) -> Result<(), Error>` | Admin-only. For a `ResolvedOverturned` dispute, signals (via event) that the implicated oracle should be slashed by `slash_amount` (up to `dispute.dispute_bond`). Does not itself move funds — the oracle contract's `slash_oracle` must be invoked separately. |
+| `mark_dispute_for_oracle_slash` | `(dispute_id: u64, slash_amount: i128) -> Result<(), Error>` | Admin-only. For a `ResolvedOverturned` dispute, emits an `oracle_slash_signal` event containing the oracle address and slash amount. An off-chain relay service automatically listens for this event and invokes the oracle contract's `slash_oracle` to execute the penalty. See [Oracle Slash Relay](oracle.md#oracle-slash-relay) for details. |
 | `set_dispute_bond_basis_points` | `(basis_points: u32) -> Result<(), Error>` | Admin-only. Sets the dispute bond requirement as basis points of match stake (1–10,000). |
 | `get_dispute_bond_basis_points` | `() -> u32` | Returns the current dispute bond basis points (default `DEFAULT_DISPUTE_BOND_BASIS_POINTS`). |
 | `set_minimum_hold_duration` | `(duration: u32) -> Result<(), Error>` | Admin-only. Sets the minimum token-holding duration (in ledgers) required for a vote on `vote_on_dispute` to count. |

@@ -1,17 +1,6 @@
 use super::*;
 use soroban_sdk::testutils::Ledger as _;
 
-// ── Dispute period configuration ──────────────────────────────────────────
-
-fn setup_with_dispute_period(
-    period: u32,
-) -> (Env, Address, Address, Address, Address, Address, Address) {
-    let (env, contract_id, oracle, player1, player2, token, admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-    client.set_dispute_period(&period);
-    (env, contract_id, oracle, player1, player2, token, admin)
-}
-
 fn create_funded_active_match(
     client: &EscrowContractClient,
     env: &Env,
