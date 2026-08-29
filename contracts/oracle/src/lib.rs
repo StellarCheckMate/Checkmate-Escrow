@@ -23,7 +23,8 @@ use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
 use types::{
     BatchResultEntry, CandidateTally, ConsensusState, DataKey, OracleMetrics, OracleRegistration,
-    OracleVoteRecord, Platform, RateLimitConfig, RateLimitStatus, RateWindow, ResultEntry, Winner,
+    OracleSubmissionEntry, OracleVoteRecord, Platform, RateLimitConfig, RateLimitStatus,
+    RateWindow, ResultEntry, Winner,
 };
 
 /// Maximum response time SLA threshold, in milliseconds (5 seconds).
@@ -295,13 +296,16 @@ impl OracleContract {
         );
 
         let expiry = env.ledger().timestamp() + DEFAULT_CACHE_TTL_SECS;
-        let cache_key = DataKey::OracleCache(game_id, platform);
+        let cache_key = DataKey::OracleCache(game_id.clone(), platform.clone());
         env.storage()
             .persistent()
             .set(&cache_key, &(result.clone(), expiry));
         env.storage()
             .persistent()
             .extend_ttl(&cache_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        // Index this submission in the per-oracle history list (#1364).
+        Self::append_oracle_submission(&env, &admin, match_id, game_id, platform, result.clone());
 
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("result")),
@@ -408,13 +412,23 @@ impl OracleContract {
                 MATCH_TTL_LEDGERS,
             );
 
-            let cache_key = DataKey::OracleCache(entry.game_id, entry.platform);
+            let cache_key = DataKey::OracleCache(entry.game_id.clone(), entry.platform.clone());
             env.storage()
                 .persistent()
                 .set(&cache_key, &(entry.result.clone(), expiry));
             env.storage()
                 .persistent()
                 .extend_ttl(&cache_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+            // Index this submission in the per-oracle history list (#1364).
+            Self::append_oracle_submission(
+                &env,
+                &admin,
+                entry.match_id,
+                entry.game_id,
+                entry.platform,
+                entry.result.clone(),
+            );
 
             env.events().publish(
                 (Symbol::new(&env, "oracle"), symbol_short!("result")),
@@ -636,7 +650,7 @@ impl OracleContract {
                     platform: winning.platform.clone(),
                     result: winning.result.clone(),
                     submitted_ledger: env.ledger().sequence(),
-                    submitter: oracle,
+                    submitter: oracle.clone(),
                 },
             );
             env.storage().persistent().extend_ttl(
@@ -653,6 +667,19 @@ impl OracleContract {
             env.storage()
                 .persistent()
                 .extend_ttl(&cache_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+            // Index this submission in each winning oracle's per-address history (#1364).
+            for k in 0..winning.submitters.len() {
+                let winning_oracle = winning.submitters.get(k).unwrap();
+                Self::append_oracle_submission(
+                    &env,
+                    &winning_oracle,
+                    match_id,
+                    winning.game_id.clone(),
+                    winning.platform.clone(),
+                    winning.result.clone(),
+                );
+            }
 
             // Majority wins, minority is slashed: every oracle that voted for
             // a losing candidate is automatically penalized.
@@ -1014,12 +1041,101 @@ impl OracleContract {
             .get(&DataKey::MatchVotes(match_id))
     }
 
+    /// Return the in-progress consensus state for a match.
+    ///
+    /// This is a public view function for monitoring tools that need to know
+    /// how many oracles have voted and whether consensus has been reached or
+    /// has deadlocked into a disputed state.
+    ///
+    /// Returns `None` when:
+    /// - No oracle has voted on `match_id` yet.
+    /// - The match has already been finalized (the tally is cleared on
+    ///   finalization, so `get_result` should be used instead).
+    pub fn get_consensus_state(env: Env, match_id: u64) -> Option<ConsensusState> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&DataKey::MatchVotes(match_id))
+    }
+
+    /// Return a paginated slice of the submission history for a specific oracle.
+    ///
+    /// Entries are ordered from oldest to newest.  Use `offset` and `limit` to
+    /// page through the history without unbounded storage reads.
+    ///
+    /// - `oracle`  — the oracle address whose history to query.
+    /// - `offset`  — zero-based index of the first entry to return.
+    /// - `limit`   — maximum number of entries to return per page (capped at 100).
+    ///
+    /// Returns an empty `Vec` when `offset` is beyond the end of the list or
+    /// the oracle has never submitted a result.
+    pub fn get_oracle_submissions(
+        env: Env,
+        oracle: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<OracleSubmissionEntry> {
+        extend_instance_ttl(&env);
+        let list: Vec<OracleSubmissionEntry> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::OracleSubmissionList(oracle))
+            .unwrap_or(Vec::new(&env));
+
+        let limit = limit.min(100);
+        let total = list.len();
+        if offset >= total {
+            return Vec::new(&env);
+        }
+
+        let end = (offset + limit).min(total);
+        let mut page = Vec::new(&env);
+        for i in offset..end {
+            page.push_back(list.get(i).unwrap());
+        }
+        page
+    }
+
     /// Read the configured consensus threshold, defaulting to 1.
     fn consensus_threshold(env: &Env) -> u32 {
         env.storage()
             .instance()
             .get(&DataKey::ConsensusThreshold)
             .unwrap_or(DEFAULT_CONSENSUS_THRESHOLD)
+    }
+
+    /// Append a new entry to the per-oracle submission history list stored
+    /// under `DataKey::OracleSubmissionList(oracle)`.
+    ///
+    /// Called after a result has been successfully committed to persistent
+    /// storage so the list always reflects confirmed submissions.
+    fn append_oracle_submission(
+        env: &Env,
+        oracle: &Address,
+        match_id: u64,
+        game_id: String,
+        platform: Platform,
+        result: Winner,
+    ) {
+        let list_key = DataKey::OracleSubmissionList(oracle.clone());
+        let mut list: Vec<OracleSubmissionEntry> = env
+            .storage()
+            .persistent()
+            .get(&list_key)
+            .unwrap_or(Vec::new(env));
+
+        list.push_back(OracleSubmissionEntry {
+            match_id,
+            game_id,
+            platform,
+            result,
+            submitted_ledger: env.ledger().sequence(),
+        });
+
+        env.storage().persistent().set(&list_key, &list);
+        env.storage()
+            .persistent()
+            .extend_ttl(&list_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
 
     /// Count registered oracles that (a) still hold a positive stake and

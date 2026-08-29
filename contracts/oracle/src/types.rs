@@ -126,6 +126,29 @@ pub enum DataKey {
     /// Cached result for a (game_id, platform) pair to avoid redundant lookups.
     /// Stores `(Winner, expiry_timestamp)`.
     OracleCache(String, Platform),
+    /// Ordered list of submission entries for a specific oracle address.
+    /// Stores `Vec<OracleSubmissionEntry>` indexed by the oracle's address.
+    OracleSubmissionList(Address),
+}
+
+/// A single entry in an oracle's per-address submission history.
+///
+/// Written to `DataKey::OracleSubmissionList(oracle)` whenever that oracle
+/// successfully records a result via `submit_result`, `submit_batch_results`,
+/// or `submit_oracle_result`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct OracleSubmissionEntry {
+    /// On-chain match identifier.
+    pub match_id: u64,
+    /// Platform-specific game identifier.
+    pub game_id: String,
+    /// The chess platform this result was sourced from.
+    pub platform: Platform,
+    /// The submitted match result.
+    pub result: Winner,
+    /// Ledger sequence number at which this submission was recorded.
+    pub submitted_ledger: u32,
 }
 
 /// Configurable submission limits for a single oracle address.

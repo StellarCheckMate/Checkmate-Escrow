@@ -146,7 +146,8 @@ pub async fn waf_middleware(
     let uri = req.uri().to_string();
 
     if uri.len() > MAX_URI_LEN {
-        warn!(uri_len = uri.len(), "WAF: URI too long");
+        let ip = extract_ip(&req);
+        warn!(client_ip = %ip, uri_len = uri.len(), "WAF: URI too long");
         return bad_request(
             "uri_too_long",
             "Request URI exceeds maximum allowed length.",
@@ -154,7 +155,8 @@ pub async fn waf_middleware(
     }
 
     if uri.contains('\0') {
-        warn!("WAF: null byte in URI");
+        let ip = extract_ip(&req);
+        warn!(client_ip = %ip, "WAF: null byte in URI");
         return bad_request("invalid_uri", "Request URI contains invalid characters.");
     }
 
@@ -166,7 +168,8 @@ pub async fn waf_middleware(
         .and_then(|s| s.parse::<u64>().ok())
     {
         if content_length > MAX_BODY_BYTES {
-            warn!(content_length, "WAF: request body too large");
+            let ip = extract_ip(&req);
+            warn!(client_ip = %ip, content_length, "WAF: request body too large");
             return payload_too_large();
         }
     }
@@ -177,7 +180,7 @@ pub async fn waf_middleware(
         let mut guard = state.burst.lock().await;
         let entry = guard.entry(ip.clone()).or_insert_with(BurstEntry::new);
         if entry.record_and_check() {
-            warn!(ip = %ip, "WAF: burst rate exceeded");
+            warn!(client_ip = %ip, "WAF: burst rate exceeded");
             drop(guard);
             return burst_blocked();
         }

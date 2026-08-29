@@ -13,6 +13,10 @@ path = "src/main.rs"
 name = "oracle-replay"
 path = "src/bin/replay.rs"
 
+[[bin]]
+name = "oracle-export-csv"
+path = "src/bin/export_csv.rs"
+
 [dependencies]
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
