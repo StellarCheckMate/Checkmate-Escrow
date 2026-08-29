@@ -99,13 +99,96 @@ fn test_slash_oracle_reduces_stake_and_transfers_tokens() {
     client.register_oracle_with_stake(&oracle_admin, &300i128, &token_addr);
 
     let admin_balance_before = balance_client.balance(&oracle_admin);
-    client.slash_oracle(&oracle_admin, &75i128);
+    client.slash_oracle(&oracle_admin, &0u64, &75i128);
+    client.finalize_slash(&oracle_admin, &0u64);
 
     assert_eq!(balance_client.balance(&contract_id), 225);
     assert_eq!(
         balance_client.balance(&oracle_admin),
         admin_balance_before + 75
     );
+}
+
+#[test]
+fn test_slash_oracle_stages_pending_slash_without_immediate_transfer() {
+    // Slashing must not move funds or reduce stake until finalize_slash is
+    // called after the grace period — governance needs a window to
+    // intervene before funds actually move.
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    asset_client.mint(&oracle_admin, &300);
+    client.register_oracle_with_stake(&oracle_admin, &300i128, &token_addr);
+    client.set_slashing_grace_period(&100u32);
+
+    client.slash_oracle(&oracle_admin, &0u64, &75i128);
+
+    // No funds have moved yet, and the oracle's stake is unaffected.
+    assert_eq!(balance_client.balance(&contract_id), 300);
+    let pending = client.get_pending_slash(&oracle_admin, &0u64);
+    assert!(pending.is_some(), "expected a staged pending slash");
+    assert_eq!(pending.unwrap().slash_amount, 75);
+
+    // Finalizing before the grace period has elapsed must fail.
+    let result = client.try_finalize_slash(&oracle_admin, &0u64);
+    assert!(
+        result.is_err(),
+        "finalize_slash should fail before the grace period elapses"
+    );
+}
+
+#[test]
+fn test_admin_cancel_slash_prevents_finalization() {
+    // Governance intervention: a slash staged due to a bug or data
+    // corruption can be cancelled before it takes effect.
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    asset_client.mint(&oracle_admin, &300);
+    client.register_oracle_with_stake(&oracle_admin, &300i128, &token_addr);
+
+    client.slash_oracle(&oracle_admin, &0u64, &75i128);
+    assert!(client.get_pending_slash(&oracle_admin, &0u64).is_some());
+
+    client.admin_cancel_slash(&oracle_admin, &0u64);
+    assert!(
+        client.get_pending_slash(&oracle_admin, &0u64).is_none(),
+        "cancelled slash must no longer be pending"
+    );
+
+    // Stake and balances are untouched, and finalizing now fails.
+    assert_eq!(balance_client.balance(&contract_id), 300);
+    let result = client.try_finalize_slash(&oracle_admin, &0u64);
+    assert!(result.is_err(), "cancelled slash must not be finalizable");
+}
+
+#[test]
+fn test_finalize_slash_succeeds_immediately_with_zero_grace_period() {
+    // Default grace period is 0 ledgers, so finalize_slash should succeed
+    // right after staging — preserves pre-grace-period behavior when the
+    // feature is not configured.
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+    let balance_client = soroban_sdk::token::Client::new(&env, &token_addr);
+
+    asset_client.mint(&oracle_admin, &300);
+    client.register_oracle_with_stake(&oracle_admin, &300i128, &token_addr);
+
+    let admin_balance_before = balance_client.balance(&oracle_admin);
+    client.slash_oracle(&oracle_admin, &0u64, &75i128);
+    client.finalize_slash(&oracle_admin, &0u64);
+
+    assert_eq!(balance_client.balance(&contract_id), 225);
+    assert_eq!(
+        balance_client.balance(&oracle_admin),
+        admin_balance_before + 75
+    );
+    assert!(client.get_pending_slash(&oracle_admin, &0u64).is_none());
 }
 
 #[test]
@@ -176,7 +259,8 @@ fn test_slash_oracle_can_slash_cumulative_stake_after_top_up() {
     // A slash larger than either individual top-up, but within the
     // cumulative total, must succeed.
     let admin_balance_before = balance_client.balance(&oracle_admin);
-    client.slash_oracle(&oracle_admin, &450i128);
+    client.slash_oracle(&oracle_admin, &0u64, &450i128);
+    client.finalize_slash(&oracle_admin, &0u64);
 
     assert_eq!(balance_client.balance(&contract_id), 50);
     assert_eq!(
@@ -339,7 +423,8 @@ fn test_submit_result_rejects_registered_oracle_without_sufficient_stake() {
 
     asset_client.mint(&oracle_admin, &100);
     client.register_oracle_with_stake(&oracle_admin, &100i128, &token_addr);
-    client.slash_oracle(&oracle_admin, &100i128);
+    client.slash_oracle(&oracle_admin, &0u64, &100i128);
+    client.finalize_slash(&oracle_admin, &0u64);
 
     let result = client.try_submit_result(
         &0u64,
@@ -2172,7 +2257,8 @@ fn test_submit_oracle_result_rejects_zero_stake() {
     let client = OracleContractClient::new(&env, &contract_id);
     let oracles = register_n_oracles(&env, &client, &token_addr, 1, 100);
 
-    client.slash_oracle(&oracles[0], &100i128);
+    client.slash_oracle(&oracles[0], &0u64, &100i128);
+    client.finalize_slash(&oracles[0], &0u64);
 
     let result = client.try_submit_oracle_result(
         &oracles[0],

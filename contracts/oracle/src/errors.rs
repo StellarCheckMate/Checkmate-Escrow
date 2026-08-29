@@ -57,4 +57,10 @@ pub enum Error {
     /// from the token backing an existing registration for the same oracle
     /// address — stake denominated in two different tokens cannot be summed.
     StakeTokenMismatch = 22,
+    /// No pending slash exists for the given (oracle, match_id) pair — it was
+    /// never staged, already finalized, or already cancelled.
+    SlashNotFound = 23,
+    /// `finalize_slash` was called before `slashing_grace_period_ledgers`
+    /// ledgers have elapsed since the slash was staged.
+    SlashGracePeriodNotElapsed = 24,
 }

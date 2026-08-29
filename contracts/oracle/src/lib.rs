@@ -23,8 +23,8 @@ use errors::Error;
 use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env, String, Symbol, Vec};
 use types::{
     BatchResultEntry, CandidateTally, ConsensusState, DataKey, OracleMetrics, OracleRegistration,
-    OracleSubmissionEntry, OracleVoteRecord, Platform, RateLimitConfig, RateLimitStatus,
-    RateWindow, ResultEntry, Winner,
+    OracleSubmissionEntry, OracleVoteRecord, PendingSlash, Platform, RateLimitConfig,
+    RateLimitStatus, RateWindow, ResultEntry, Winner,
 };
 
 /// Maximum response time SLA threshold, in milliseconds (5 seconds).
@@ -180,10 +180,60 @@ impl OracleContract {
         Ok(())
     }
 
-    /// Slash a registered oracle's stake. Admin-only.
+    /// Set the number of ledgers a staged slash must wait before it can be
+    /// finalized via [`Self::finalize_slash`]. Admin-only.
+    ///
+    /// Setting this to `0` restores immediate-finalization behavior (a
+    /// staged slash becomes eligible on the very ledger it was staged).
+    pub fn set_slashing_grace_period(
+        env: Env,
+        grace_period_ledgers: u32,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::SlashingGracePeriodLedgers, &grace_period_ledgers);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("slash_gp")),
+            (grace_period_ledgers, admin),
+        );
+        Ok(())
+    }
+
+    /// Get the current slashing grace period, in ledgers. Defaults to 0
+    /// (immediate finalization) if never configured.
+    pub fn get_slashing_grace_period(env: Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::SlashingGracePeriodLedgers)
+            .unwrap_or(0)
+    }
+
+    /// Stage a slash of a registered oracle's stake. Admin-only.
+    ///
+    /// The slash is not applied immediately — it is recorded as a
+    /// [`PendingSlash`] and must be finalized via [`Self::finalize_slash`]
+    /// after `slashing_grace_period_ledgers` ledgers have elapsed. This
+    /// gives governance a window to intervene with
+    /// [`Self::admin_cancel_slash`] if the slash was triggered by a
+    /// contract bug or data corruption rather than genuine oracle
+    /// misbehavior.
+    ///
+    /// `match_id` is the match whose result triggered the slash, and is
+    /// used only as an identifier for the pending slash (an oracle can have
+    /// at most one pending slash per match).
     pub fn slash_oracle(
         env: Env,
         oracle_address: Address,
+        match_id: u64,
         slash_amount: i128,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
@@ -194,7 +244,7 @@ impl OracleContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        let mut registration: OracleRegistration = env
+        let registration: OracleRegistration = env
             .storage()
             .instance()
             .get(&DataKey::OracleRegistration(oracle_address.clone()))
@@ -204,21 +254,130 @@ impl OracleContract {
             return Err(Error::InsufficientStake);
         }
 
+        let grace_period: u32 = Self::get_slashing_grace_period(env.clone());
+        let staged_ledger = env.ledger().sequence();
+        let pending = PendingSlash {
+            oracle_address: oracle_address.clone(),
+            match_id,
+            slash_amount,
+            token: registration.token.clone(),
+            staged_ledger,
+            eligible_ledger: staged_ledger.saturating_add(grace_period),
+        };
+        env.storage().instance().set(
+            &DataKey::PendingSlash(oracle_address.clone(), match_id),
+            &pending,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("slashstg")),
+            (oracle_address, match_id, slash_amount, admin),
+        );
+
+        Ok(())
+    }
+
+    /// Finalize a previously staged slash once its grace period has
+    /// elapsed, transferring the slashed stake to the admin (treasury).
+    /// Anyone may call this (it only executes what governance already had
+    /// the opportunity to cancel), but it is expected to be called by the
+    /// off-chain oracle service once `eligible_ledger` has passed.
+    ///
+    /// # Errors
+    /// - [`Error::SlashNotFound`] — no pending slash for this (oracle, match_id).
+    /// - [`Error::SlashGracePeriodNotElapsed`] — called before `eligible_ledger`.
+    pub fn finalize_slash(
+        env: Env,
+        oracle_address: Address,
+        match_id: u64,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+
+        let key = DataKey::PendingSlash(oracle_address.clone(), match_id);
+        let pending: PendingSlash = env
+            .storage()
+            .instance()
+            .get(&key)
+            .ok_or(Error::SlashNotFound)?;
+
+        if env.ledger().sequence() < pending.eligible_ledger {
+            return Err(Error::SlashGracePeriodNotElapsed);
+        }
+
+        let mut registration: OracleRegistration = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_address.clone()))
+            .ok_or(Error::InsufficientStake)?;
+
+        let slash_amount = pending.slash_amount.min(registration.oracle_stake);
         registration.oracle_stake -= slash_amount;
         env.storage().instance().set(
             &DataKey::OracleRegistration(oracle_address.clone()),
             &registration,
         );
+        env.storage().instance().remove(&key);
 
-        let token_client = token::Client::new(&env, &registration.token);
-        token_client.transfer(&env.current_contract_address(), &admin, &slash_amount);
+        if slash_amount > 0 {
+            let token_client = token::Client::new(&env, &pending.token);
+            token_client.transfer(&env.current_contract_address(), &admin, &slash_amount);
+        }
 
         env.events().publish(
             (Symbol::new(&env, "oracle"), symbol_short!("slash")),
-            (oracle_address, slash_amount),
+            (oracle_address, match_id, slash_amount),
         );
 
         Ok(())
+    }
+
+    /// Cancel a staged slash before it is finalized — governance
+    /// intervention for slashes triggered by a contract bug or data
+    /// corruption rather than genuine oracle misbehavior. Admin-only.
+    ///
+    /// # Errors
+    /// - [`Error::SlashNotFound`] — no pending slash for this (oracle, match_id).
+    pub fn admin_cancel_slash(
+        env: Env,
+        oracle_address: Address,
+        match_id: u64,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        let key = DataKey::PendingSlash(oracle_address.clone(), match_id);
+        if !env.storage().instance().has(&key) {
+            return Err(Error::SlashNotFound);
+        }
+        env.storage().instance().remove(&key);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("slashcxl")),
+            (oracle_address, match_id, admin),
+        );
+
+        Ok(())
+    }
+
+    /// Return the pending slash staged for (oracle_address, match_id), if any.
+    pub fn get_pending_slash(
+        env: Env,
+        oracle_address: Address,
+        match_id: u64,
+    ) -> Option<PendingSlash> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PendingSlash(oracle_address, match_id))
     }
 
     /// Admin submits a verified match result on-chain.
