@@ -21,6 +21,8 @@ mod events;
 mod fee_calculation_scenarios;
 mod fee_tiers;
 mod fuzz;
+mod fuzz_game_id;
+mod proptest_fee_tiers;
 mod index;
 mod integration;
 mod invariants;

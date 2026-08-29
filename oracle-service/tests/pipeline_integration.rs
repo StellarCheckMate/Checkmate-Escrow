@@ -411,3 +411,101 @@ async fn pipeline_game_not_finished_is_transient() {
     // No dead-letter entries.
     assert!(dead_letter.load().await.unwrap().is_empty());
 }
+
+/// #1365 — invalid game_id is dead-lettered immediately, without making any
+/// API call to the chess platform.
+///
+/// When the oracle pipeline picks up an entry whose `game_id` does not match
+/// the expected format for the stored `platform`, it should:
+///
+/// 1. Skip the cache lookup and the platform HTTP call entirely.
+/// 2. Move the entry to the dead-letter store on the very first tick.
+/// 3. Leave the dead-letter entry with a descriptive `last_error` message.
+#[tokio::test]
+async fn invalid_game_id_dead_lettered_without_api_call_lichess() {
+    // A chess API server that must NOT receive any requests.
+    let chess_server = MockServer::start().await;
+    let rpc_server = MockServer::start().await;
+
+    let dir = TempDir::new().unwrap();
+    let dir_str = dir.path().to_str().unwrap();
+    let cfg = make_config(&rpc_server.uri(), dir_str, 3, 1);
+
+    let poller = Poller::new_with_lichess_base(&cfg, chess_server.uri()).unwrap();
+    let queue = PendingQueue::new(dir_str);
+    let dead_letter = DeadLetterStore::new(dir_str, 0);
+
+    // Enqueue an entry with a structurally invalid Lichess game_id (wrong length).
+    enqueue_due(&queue, 99, "bad!", Platform::Lichess).await;
+    assert_eq!(queue.load().await.unwrap().len(), 1);
+
+    // Run one tick — the entry should bypass the API and go straight to dead-letter.
+    poller.tick().await.unwrap();
+
+    // Queue must be empty after the tick.
+    let remaining = queue.load().await.unwrap();
+    assert!(
+        remaining.is_empty(),
+        "expected queue empty after invalid game_id, got: {:?}",
+        remaining
+    );
+
+    // Entry must be in the dead-letter store.
+    let dl_entries = dead_letter.load().await.unwrap();
+    assert_eq!(dl_entries.len(), 1, "expected one dead-letter entry");
+    assert_eq!(dl_entries[0].entry.match_id, 99);
+    assert_eq!(dl_entries[0].entry.game_id, "bad!");
+
+    // The dead-letter entry must carry a descriptive error mentioning the game_id.
+    let err_msg = dl_entries[0]
+        .entry
+        .last_error
+        .as_deref()
+        .unwrap_or("");
+    assert!(
+        !err_msg.is_empty(),
+        "dead-letter entry must have a last_error message"
+    );
+
+    // The chess API must never have been called.
+    assert_eq!(
+        chess_server.received_requests().await.unwrap().len(),
+        0,
+        "chess API must not be called for an invalid game_id"
+    );
+}
+
+/// #1365 — invalid Chess.com game_id (non-numeric) is dead-lettered immediately.
+#[tokio::test]
+async fn invalid_game_id_dead_lettered_without_api_call_chess_com() {
+    let chess_server = MockServer::start().await;
+    let rpc_server = MockServer::start().await;
+
+    let dir = TempDir::new().unwrap();
+    let dir_str = dir.path().to_str().unwrap();
+    let cfg = make_config(&rpc_server.uri(), dir_str, 3, 1);
+
+    let poller = Poller::new_with_chess_com_base(&cfg, chess_server.uri()).unwrap();
+    let queue = PendingQueue::new(dir_str);
+    let dead_letter = DeadLetterStore::new(dir_str, 0);
+
+    // "abcdefgh" is not a valid Chess.com game_id (must be 7-12 digits).
+    enqueue_due(&queue, 100, "abcdefgh", Platform::ChessDotCom).await;
+
+    poller.tick().await.unwrap();
+
+    // Queue must be empty.
+    assert!(queue.load().await.unwrap().is_empty());
+
+    // Dead-letter must have the entry.
+    let dl_entries = dead_letter.load().await.unwrap();
+    assert_eq!(dl_entries.len(), 1);
+    assert_eq!(dl_entries[0].entry.match_id, 100);
+
+    // No chess API call made.
+    assert_eq!(
+        chess_server.received_requests().await.unwrap().len(),
+        0,
+        "chess API must not be called for an invalid Chess.com game_id"
+    );
+}

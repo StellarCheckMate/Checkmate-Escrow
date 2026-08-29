@@ -17,3 +17,4 @@ soroban-sdk = { workspace = true, features = ["testutils"] }
 oracle = { path = "../oracle" }
 quickcheck = "1.0"
 quickcheck_macros = "1.0"
+proptest = "1.4"
