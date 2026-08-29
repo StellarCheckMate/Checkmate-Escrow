@@ -483,6 +483,36 @@ pub fn validate_offset(field: &str, raw: &str) -> ValidationResult<i64> {
     Ok(value)
 }
 
+/// Validate a `completed_after` / `completed_before` ledger sequence bound.
+pub fn validate_ledger_sequence(field: &str, raw: &str) -> ValidationResult<u32> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(ValidationError::new(field, "must not be empty"));
+    }
+    if !trimmed.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(ValidationError::new(
+            field,
+            "must be a non-negative whole number",
+        ));
+    }
+    trimmed
+        .parse::<u32>()
+        .map_err(|_| ValidationError::new(field, "is out of range for a ledger sequence"))
+}
+
+/// Reject an inverted `completed_after`/`completed_before` ledger range.
+pub fn validate_ledger_range(after: Option<u32>, before: Option<u32>) -> ValidationResult<()> {
+    if let (Some(after), Some(before)) = (after, before) {
+        if after > before {
+            return Err(ValidationError::new(
+                "completed_after",
+                "must not be later than completed_before",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn parse_i64(field: &str, raw: &str) -> ValidationResult<i64> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {

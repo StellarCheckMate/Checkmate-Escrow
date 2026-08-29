@@ -201,6 +201,12 @@ pub struct AnalyticsQuery {
 pub struct TransactionHistoryQuery {
     pub from_date: Option<String>,
     pub to_date: Option<String>,
+    /// Inclusive lower bound on the ledger sequence a matched transaction's
+    /// event was recorded at. Used for "matches completed between ledger X
+    /// and ledger Y" audit queries.
+    pub completed_after: Option<String>,
+    /// Inclusive upper bound on the ledger sequence.
+    pub completed_before: Option<String>,
     pub limit: Option<String>,
     pub offset: Option<String>,
     /// Accepted as either `type` (documented) or `tx_type`.
@@ -842,6 +848,22 @@ pub fn build_transaction_filters(
     }
 
     validation::validate_date_range(filters.from_date, filters.to_date)?;
+
+    if let Some(raw) = non_empty(&query.completed_after) {
+        filters.completed_after = Some(validation::validate_ledger_sequence(
+            "completed_after",
+            raw,
+        )?);
+    }
+
+    if let Some(raw) = non_empty(&query.completed_before) {
+        filters.completed_before = Some(validation::validate_ledger_sequence(
+            "completed_before",
+            raw,
+        )?);
+    }
+
+    validation::validate_ledger_range(filters.completed_after, filters.completed_before)?;
 
     filters.limit = match non_empty(&query.limit) {
         Some(raw) => validation::validate_limit("limit", raw)?,
