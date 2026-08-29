@@ -44,6 +44,7 @@ use crate::{
         AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters,
         TokenAnalytics,
     },
+    metrics,
     request_id,
     rpc::SorobanRpcClient,
     transactions::{
@@ -266,6 +267,7 @@ pub fn build_router(
     };
     Router::new()
         .route("/health", get(health_check))
+        .route("/metrics", get(metrics_handler))
         .route("/api/docs", get(api_docs_ui))
         .route("/api/openapi.yaml", get(api_openapi_yaml))
         .route("/events", get(get_events))
@@ -389,6 +391,27 @@ async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<Health
             cache_shared,
         }),
     )
+}
+
+/// `GET /metrics` — Prometheus text-format metrics scrape endpoint.
+///
+/// Exposes `indexer_matches_total`, `indexer_rpc_lag_seconds` and
+/// `indexer_cache_hit_ratio` (plus standard process metrics when the
+/// `process` feature is enabled) in the text/plain; version=0.0.4 format
+/// expected by Prometheus. The cache hit ratio is computed from the live
+/// counters on every scrape rather than tracked incrementally, so it is
+/// always exact.
+async fn metrics_handler(State(state): State<AppState>) -> Response {
+    metrics::set_cache_hit_ratio(state.api_cache.stats().hit_rate());
+    let body = metrics::render();
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
 }
 
 /// `GET /events` – query events with optional filters.

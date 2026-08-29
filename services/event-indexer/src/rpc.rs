@@ -169,9 +169,13 @@ pub async fn event_poller(
         {
             Ok(Some(ledger)) => {
                 info!("Events polled up to ledger: {}", ledger);
+                update_rpc_lag_metric(&rpc, ledger).await;
             }
             Ok(None) => {
                 debug!("No new events in this poll");
+                if let Some(ledger) = last_ledger {
+                    update_rpc_lag_metric(&rpc, ledger).await;
+                }
             }
             Err(e) => {
                 error!("Error polling events: {}", e);
@@ -186,6 +190,21 @@ pub async fn event_poller(
         }
 
         sleep(Duration::from_secs(poll_interval_secs)).await;
+    }
+}
+
+/// Refresh `indexer_rpc_lag_seconds` from the gap between the latest network
+/// ledger and `last_polled_ledger`. Best-effort: an RPC failure here must not
+/// interrupt the poll loop, so the error is logged and the previous gauge
+/// value is left in place.
+async fn update_rpc_lag_metric(rpc: &Arc<SorobanRpcClient>, last_polled_ledger: u32) {
+    match rpc.get_ledger().await {
+        Ok(latest_ledger) => {
+            crate::metrics::set_rpc_lag_from_ledger_gap(latest_ledger, last_polled_ledger);
+        }
+        Err(e) => {
+            debug!("Failed to refresh RPC lag metric: {}", e);
+        }
     }
 }
 
@@ -249,6 +268,7 @@ async fn poll_events(
             }
 
             db.insert_event(&indexed_event).await?;
+            crate::metrics::inc_matches_indexed();
 
             let mut cache_lock = cache.write().await;
             cache_lock.insert(indexed_event.clone());
