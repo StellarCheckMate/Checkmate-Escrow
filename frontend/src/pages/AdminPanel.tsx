@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAdminContract } from '../hooks/useAdminContract';
 import { ConfirmDialog } from '../components/admin/ConfirmDialog';
 import type { WalletState, WalletType } from '../wallets/types';
@@ -34,6 +34,33 @@ export function AdminPanel({ wallet }: Props) {
   const [oracleInput, setOracleInput] = useState('');
   const [newAdminInput, setNewAdminInput] = useState('');
   const [actionLog, setActionLog] = useState<string[]>([]);
+
+  // ── Protocol Config form state, pre-populated from on-chain values ──────
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const [treasuryInput, setTreasuryInput] = useState('');
+  const [feeRecipientInput, setFeeRecipientInput] = useState('');
+  const [protocolFeeBpsInput, setProtocolFeeBpsInput] = useState('');
+  const [vestingDurationInput, setVestingDurationInput] = useState('');
+  const [matchTimeoutInput, setMatchTimeoutInput] = useState('');
+  const [cancellationFeeBpsInput, setCancellationFeeBpsInput] = useState('');
+  const [minimumStakeInput, setMinimumStakeInput] = useState('');
+  const [stablecoinOnlyInput, setStablecoinOnlyInput] = useState(false);
+
+  // Fetch + pre-populate happens once per successful load of on-chain
+  // config, so we don't clobber in-progress admin edits on every refresh.
+  useEffect(() => {
+    if (!admin.protocolConfig || configLoaded) return;
+    const cfg = admin.protocolConfig;
+    setTreasuryInput(cfg.treasury ?? '');
+    setFeeRecipientInput(cfg.feeRecipient ?? '');
+    setProtocolFeeBpsInput(cfg.protocolFeeBps !== null ? String(cfg.protocolFeeBps) : '');
+    setVestingDurationInput(cfg.vestingDurationSeconds !== null ? String(cfg.vestingDurationSeconds) : '');
+    setMatchTimeoutInput(cfg.matchTimeoutSeconds !== null ? String(cfg.matchTimeoutSeconds) : '');
+    setCancellationFeeBpsInput(cfg.cancellationFeeBasisPoints !== null ? String(cfg.cancellationFeeBasisPoints) : '');
+    setMinimumStakeInput(cfg.minimumStake ?? '');
+    setStablecoinOnlyInput(cfg.stablecoinOnlyMode ?? false);
+    setConfigLoaded(true);
+  }, [admin.protocolConfig, configLoaded]);
 
   function log(msg: string) {
     setActionLog(prev => [`${new Date().toISOString()}  ${msg}`, ...prev].slice(0, 50));
@@ -197,6 +224,86 @@ export function AdminPanel({ wallet }: Props) {
           >
             Transfer Admin
           </button>
+        </div>
+      </section>
+
+      {/* ── Protocol Config ────────────────────────────────────── */}
+      <section aria-labelledby="protocol-config-heading">
+        <h2 id="protocol-config-heading">Protocol Config</h2>
+        {!configLoaded && <p aria-live="polite">Loading current config…</p>}
+        <div>
+          <label htmlFor="treasury-input">Treasury address</label>
+          <input
+            id="treasury-input"
+            type="text"
+            value={treasuryInput}
+            onChange={e => setTreasuryInput(e.target.value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="fee-recipient-input">Fee recipient address</label>
+          <input
+            id="fee-recipient-input"
+            type="text"
+            value={feeRecipientInput}
+            onChange={e => setFeeRecipientInput(e.target.value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="protocol-fee-bps-input">Protocol fee (bps)</label>
+          <input
+            id="protocol-fee-bps-input"
+            type="number"
+            value={protocolFeeBpsInput}
+            onChange={e => setProtocolFeeBpsInput(e.target.value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="vesting-duration-input">Vesting duration (seconds)</label>
+          <input
+            id="vesting-duration-input"
+            type="number"
+            value={vestingDurationInput}
+            onChange={e => setVestingDurationInput(e.target.value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="match-timeout-input">Match timeout (seconds)</label>
+          <input
+            id="match-timeout-input"
+            type="number"
+            value={matchTimeoutInput}
+            onChange={e => setMatchTimeoutInput(e.target.value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="cancellation-fee-bps-input">Cancellation fee (bps)</label>
+          <input
+            id="cancellation-fee-bps-input"
+            type="number"
+            value={cancellationFeeBpsInput}
+            onChange={e => setCancellationFeeBpsInput(e.target.value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="minimum-stake-input">Minimum stake</label>
+          <input
+            id="minimum-stake-input"
+            type="text"
+            value={minimumStakeInput}
+            onChange={e => setMinimumStakeInput(e.target.value)}
+          />
+        </div>
+        <div>
+          <label htmlFor="stablecoin-only-input">
+            <input
+              id="stablecoin-only-input"
+              type="checkbox"
+              checked={stablecoinOnlyInput}
+              onChange={e => setStablecoinOnlyInput(e.target.checked)}
+            />
+            Stablecoin-only mode
+          </label>
         </div>
       </section>
 

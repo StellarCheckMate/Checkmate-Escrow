@@ -22,6 +22,7 @@ export interface AdminState {
   admin: string | null;
   oracle: string | null;
   paused: boolean | null;
+  protocolConfig: ProtocolConfigForm | null;
   loading: boolean;
   error: string | null;
 }
@@ -126,6 +127,110 @@ export async function callView(walletPublicKey: string, method: string): Promise
   return json.result?.results?.[0]?.xdr ?? null;
 }
 
+export interface ProtocolConfigForm {
+  vestingDurationSeconds: number | null;
+  cancellationFeeBasisPoints: number | null;
+  treasury: string | null;
+  stablecoinOnlyMode: boolean | null;
+  matchTimeoutSeconds: number | null;
+  protocolFeeBps: number | null;
+  feeRecipient: string | null;
+  minimumStake: string | null;
+}
+
+function decodeU32(scVal: xdr.ScVal): number | null {
+  try {
+    if (scVal.switch().name === 'scvU32') return scVal.u32();
+    if (scVal.switch().name === 'scvI128' || scVal.switch().name === 'scvU128') {
+      // Large numeric fields (e.g. stake amounts) - best-effort decode.
+      return Number(scValToBigIntString(scVal));
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function scValToBigIntString(scVal: xdr.ScVal): string {
+  try {
+    const parts = scVal.switch().name === 'scvI128' ? scVal.i128() : scVal.u128();
+    const hi = BigInt(parts.hi().toString());
+    const lo = BigInt(parts.lo().toString());
+    return ((hi << BigInt(64)) + lo).toString();
+  } catch {
+    return '0';
+  }
+}
+
+/**
+ * Decodes a `ProtocolConfig` struct returned as an XDR-encoded `ScVal` map
+ * (Soroban serializes `#[contracttype]` structs with named fields as an
+ * `ScMap` keyed by symbol). Missing/unrecognized fields decode to `null`
+ * rather than throwing, so the admin form can still render partial data.
+ */
+export function decodeProtocolConfig(xdrBase64: string): ProtocolConfigForm {
+  const empty: ProtocolConfigForm = {
+    vestingDurationSeconds: null,
+    cancellationFeeBasisPoints: null,
+    treasury: null,
+    stablecoinOnlyMode: null,
+    matchTimeoutSeconds: null,
+    protocolFeeBps: null,
+    feeRecipient: null,
+    minimumStake: null,
+  };
+  try {
+    const buffer = decodeXdrBuffer(xdrBase64);
+    const val = xdr.ScVal.fromXDR(buffer);
+    if (val.switch().name !== 'scvMap') return empty;
+    const entries = val.map() ?? [];
+    const result = { ...empty };
+    for (const entry of entries) {
+      const key = entry.key();
+      if (key.switch().name !== 'scvSymbol') continue;
+      const fieldName = key.sym().toString();
+      const value = entry.val();
+      switch (fieldName) {
+        case 'vesting_duration_seconds':
+          result.vestingDurationSeconds = decodeU32(value);
+          break;
+        case 'cancellation_fee_basis_points':
+          result.cancellationFeeBasisPoints = decodeU32(value);
+          break;
+        case 'treasury':
+          result.treasury = value.switch().name === 'scvAddress'
+            ? Address.fromScAddress(value.address()).toString()
+            : null;
+          break;
+        case 'stablecoin_only_mode':
+          result.stablecoinOnlyMode = value.switch().name === 'scvBool' ? value.b() : null;
+          break;
+        case 'match_timeout_seconds':
+          result.matchTimeoutSeconds = decodeU32(value);
+          break;
+        case 'protocol_fee_bps':
+          result.protocolFeeBps = decodeU32(value);
+          break;
+        case 'fee_recipient':
+          result.feeRecipient = value.switch().name === 'scvAddress'
+            ? Address.fromScAddress(value.address()).toString()
+            : null;
+          break;
+        case 'minimum_stake':
+          result.minimumStake = value.switch().name === 'scvI128' || value.switch().name === 'scvU128'
+            ? scValToBigIntString(value)
+            : null;
+          break;
+        default:
+          break;
+      }
+    }
+    return result;
+  } catch {
+    return empty;
+  }
+}
+
 export function isContractPausedError(error: unknown): boolean {
   if (!error) return false;
   const msg = typeof error === 'string' ? error : (error as Error).message || String(error);
@@ -143,6 +248,7 @@ export function useAdminContract(walletPublicKey: string | null, walletType: Wal
     admin: null,
     oracle: null,
     paused: null,
+    protocolConfig: null,
     loading: false,
     error: null,
   });
@@ -153,15 +259,17 @@ export function useAdminContract(walletPublicKey: string | null, walletType: Wal
     if (!CONTRACT_ID || !walletPublicKey) return;
     setState(s => ({ ...s, loading: true, error: null }));
     try {
-      const [adminXdr, oracleXdr, pausedXdr] = await Promise.all([
+      const [adminXdr, oracleXdr, pausedXdr, protocolConfigXdr] = await Promise.all([
         callView(walletPublicKey, 'get_admin').catch(() => null),
         callView(walletPublicKey, 'get_oracle').catch(() => null),
         callView(walletPublicKey, 'is_paused').catch(() => null),
+        callView(walletPublicKey, 'get_protocol_config').catch(() => null),
       ]);
 
       let admin: string | null = null;
       let oracle: string | null = null;
       let paused: boolean | null = null;
+      let protocolConfig: ProtocolConfigForm | null = null;
 
       if (adminXdr) {
         try {
@@ -187,10 +295,19 @@ export function useAdminContract(walletPublicKey: string | null, walletType: Wal
         }
       }
 
+      if (protocolConfigXdr) {
+        try {
+          protocolConfig = decodeProtocolConfig(protocolConfigXdr);
+        } catch {
+          protocolConfig = null;
+        }
+      }
+
       setState({
         admin,
         oracle,
         paused,
+        protocolConfig,
         loading: false,
         error: null,
       });
