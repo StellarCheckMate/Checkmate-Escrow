@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { MatchStatusBadge } from './MatchStatusBadge';
+import { formatTokenAmount } from '../../utils/tokenFormat';
 
 export interface MatchDetailProps {
   matchId: number;
@@ -9,6 +10,8 @@ export interface MatchDetailProps {
   token: string;
   status: 'pending' | 'active' | 'completed' | 'cancelled';
   platform: 'lichess' | 'chessdotcom';
+  /** Decimal places for `token`; when set, stakeAmount is formatted from raw units. */
+  tokenDecimals?: number;
 }
 
 /**
@@ -27,8 +30,11 @@ export function MatchDetail({
   token,
   status,
   platform,
+  tokenDecimals,
 }: MatchDetailProps) {
   const [copied, setCopied] = useState(false);
+  const displayStake =
+    tokenDecimals !== undefined ? formatTokenAmount(stakeAmount, tokenDecimals) : stakeAmount;
 
   const handleCopyLink = async () => {
     const link = buildMatchLink(matchId);
@@ -51,7 +57,7 @@ export function MatchDetail({
       <dl>
         <dt>Player 1</dt><dd>{player1}</dd>
         <dt>Player 2</dt><dd>{player2}</dd>
-        <dt>Stake</dt><dd>{stakeAmount} {token}</dd>
+        <dt>Stake</dt><dd>{displayStake} {token}</dd>
         <dt>Platform</dt><dd>{platform === 'lichess' ? 'Lichess' : 'Chess.com'}</dd>
       </dl>
       <button type="button" onClick={handleCopyLink}>
