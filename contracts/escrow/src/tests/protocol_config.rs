@@ -127,6 +127,40 @@ fn test_get_protocol_config_unaffected_by_transfer_admin() {
     );
 }
 
+/// `set_protocol_config` must reject a `treasury` equal to the contract's
+/// own address, since vested payouts would loop back into the contract.
+#[test]
+fn test_set_protocol_config_rejects_self_referential_treasury() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let mut cfg = custom_config(&env, &admin);
+    cfg.treasury = contract_id.clone();
+
+    let result = client.try_set_protocol_config(&cfg);
+    assert!(
+        result.is_err(),
+        "treasury == contract address must be rejected"
+    );
+}
+
+/// `set_protocol_config` must reject a `fee_recipient` equal to the
+/// contract's own address for the same reason.
+#[test]
+fn test_set_protocol_config_rejects_self_referential_fee_recipient() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let mut cfg = custom_config(&env, &admin);
+    cfg.fee_recipient = contract_id.clone();
+
+    let result = client.try_set_protocol_config(&cfg);
+    assert!(
+        result.is_err(),
+        "fee_recipient == contract address must be rejected"
+    );
+}
+
 /// `set_protocol_config` must be rejected when called by a non-admin.
 #[test]
 fn test_set_protocol_config_rejected_for_non_admin() {

@@ -307,6 +307,13 @@ impl EscrowContract {
         if config.protocol_fee_bps > 10_000 {
             return Err(Error::InvalidAmount);
         }
+        let contract_address = env.current_contract_address();
+        if config.treasury == contract_address {
+            return Err(Error::InvalidAddress);
+        }
+        if config.fee_recipient == contract_address {
+            return Err(Error::InvalidAddress);
+        }
         let old_mode: bool = env
             .storage()
             .instance()
