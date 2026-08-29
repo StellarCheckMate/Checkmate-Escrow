@@ -30,6 +30,7 @@
 
 use std::sync::Arc;
 
+use chrono::Utc;
 use ed25519_dalek::SigningKey;
 use tracing::{error, info, info_span, warn, Instrument};
 use zeroize::Zeroizing;
@@ -40,8 +41,10 @@ use crate::metrics;
 use crate::oracle::errors::{ChessComError, LichessError, OracleServiceError};
 use crate::oracle::{ChessComClient, LichessClient, Winner};
 use crate::queue::{PendingEntry, PendingQueue};
+use crate::reconciliation_cursor::ReconciliationCursor;
 use crate::result_cache::ResultCache;
 use crate::soroban_client::SorobanClient;
+use crate::submission_log::{SubmissionLog, SubmissionRecord};
 
 /// The pipeline poller.  Clone-cheap — the inner state is reference-counted.
 #[derive(Clone)]
@@ -71,6 +74,9 @@ struct PollerInner {
     /// In-memory LRU cache for oracle results, keyed by (platform, game_id).
     /// Avoids redundant API calls on retry within the TTL window.
     result_cache: ResultCache,
+    /// Persistent audit log of all successfully-submitted oracle results.
+    /// Appended to by `submit_and_complete` so `oracle-export-csv` can read it.
+    submission_log: SubmissionLog,
 }
 
 impl Poller {
@@ -103,6 +109,7 @@ impl Poller {
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
                 result_cache: ResultCache::with_defaults(),
+                submission_log: SubmissionLog::new(&cfg.queue_dir),
             }),
         })
     }
@@ -144,6 +151,7 @@ impl Poller {
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
                 result_cache: ResultCache::with_defaults(),
+                submission_log: SubmissionLog::new(&cfg.queue_dir),
             }),
         })
     }
@@ -185,6 +193,7 @@ impl Poller {
                 contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
                 result_cache: ResultCache::with_defaults(),
+                submission_log: SubmissionLog::new(&cfg.queue_dir),
             }),
         })
     }
@@ -524,6 +533,20 @@ impl Poller {
                     if let Ok(entries) = self.inner.queue.load().await {
                         metrics::set_queue_depth(entries.len());
                     }
+                }
+
+                // Append to the persistent audit log so oracle-export-csv can
+                // produce a full CSV trail (#1362).
+                let record = SubmissionRecord::new(
+                    match_id,
+                    entry.game_id,
+                    entry.platform,
+                    &winner,
+                    Utc::now(),
+                    tx_hash,
+                );
+                if let Err(e) = self.inner.submission_log.append(record).await {
+                    error!(match_id, "failed to append to submission log: {}", e);
                 }
             }
             Err(e) => {
