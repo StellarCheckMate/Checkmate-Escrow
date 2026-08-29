@@ -661,10 +661,14 @@ async fn get_pending_matches(
 ///
 /// `/matches/:match_id` is the frontend-facing alias of `/match/:match_id`.
 ///
-/// Cached for 5 seconds and invalidated eagerly on any contract event for this
-/// match, so the TTL only bounds staleness for matches nothing is happening to.
-/// Only successful lookups are cached — a `404` for a match that is about to be
-/// indexed must not be sticky.
+/// Cached with a state-aware TTL (see [`api_cache::ttl_for_status`]) and
+/// invalidated eagerly on any contract event for this match, so the TTL only
+/// bounds staleness for matches nothing is happening to. `Active` matches get
+/// a short TTL (default 5s, `INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS`) since
+/// players are watching them live; terminal matches (`Completed`,
+/// `Cancelled`, `Expired`) get a much longer one since they never change
+/// again. Only successful lookups are cached — a `404` for a match that is
+/// about to be indexed must not be sticky.
 async fn get_match_info(
     State(state): State<AppState>,
     Path(match_id): Path<u64>,
@@ -684,10 +688,8 @@ async fn get_match_info(
 
     match state.db.build_match_info(match_id).await {
         Ok(Some(match_info)) => {
-            state
-                .api_cache
-                .set_json(&cache_key, &match_info, api_cache::match_ttl())
-                .await;
+            let ttl = api_cache::ttl_for_status(&match_info.status);
+            state.api_cache.set_json(&cache_key, &match_info, ttl).await;
             (
                 StatusCode::OK,
                 Json(ApiResponse {
