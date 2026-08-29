@@ -11,6 +11,13 @@
 //!     - request bodies larger than 1 MiB (413)
 //!     - URIs longer than 2 048 characters (400)
 //!     - URIs containing null bytes (400)
+//!
+//! - [`ip_allowlist`] — second-factor protection for admin endpoints
+//!   (`/admin/*`). Even with a valid API key, requests from source IPs
+//!   outside the `ORACLE_ADMIN_ALLOWED_IPS` CIDR allowlist are rejected
+//!   with `403 Forbidden`, so a leaked admin API key alone is not enough
+//!   to reach admin functionality.
 
+pub mod ip_allowlist;
 pub mod rate_limit;
 pub mod waf;
