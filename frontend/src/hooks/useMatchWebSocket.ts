@@ -242,6 +242,7 @@ export function useMatchWebSocket({
         }
 
         case 'ping':
+        case 'PING':
           ws.send(JSON.stringify({ type: 'pong', server_time: new Date().toISOString() }));
           break;
 
