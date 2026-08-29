@@ -3,6 +3,8 @@ use oracle_service::oracle::{ChessComClient, ChessComError, ChessComGameResult};
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[tokio::test]
 async fn validate_game_id_rejects_empty() {
     let err = ChessComClient::validate_game_id("").unwrap_err();
@@ -53,6 +55,44 @@ async fn fetch_result_maps_draw() {
 
     let res = client.fetch_result("123").await.unwrap();
     assert_eq!(res.winner, contracts_oracle::types::Winner::Draw);
+}
+
+#[tokio::test]
+async fn fetch_result_reloads_rotated_api_key_after_unauthorized() {
+    let _env_lock = ENV_LOCK.lock().unwrap();
+    std::env::set_var("CHESSDOTCOM_API_KEY", "old-key");
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/pub/game/888"))
+        .and(wiremock::matchers::header("authorization", "Bearer old-key"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/pub/game/888"))
+        .and(wiremock::matchers::header("authorization", "Bearer new-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "end": {"result": "white"}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = ChessComClient::new_with_base_and_timeout(
+        server.uri(),
+        std::time::Duration::from_secs(30),
+    )
+    .unwrap();
+    std::env::set_var("CHESSDOTCOM_API_KEY", "new-key");
+
+    let result = client.fetch_result("888").await.unwrap();
+
+    assert_eq!(result.winner, contracts_oracle::types::Winner::Player1);
+    server.verify().await;
+    std::env::remove_var("CHESSDOTCOM_API_KEY");
 }
 
 #[tokio::test]
