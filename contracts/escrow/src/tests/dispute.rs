@@ -1449,3 +1449,62 @@ fn test_small_balances_unchanged_behavior() {
     let dispute_final = client.get_dispute(&dispute_id);
     assert_eq!(dispute_final.state, DisputeState::ResolvedUpheld);
 }
+
+#[test]
+fn test_dispute_bond_tier_schedule_varies_by_stake() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Per-tier schedule mirroring the fee-tier pattern: stakes up to 50 pay a
+    // 5% bond (500 bps); larger stakes drop to a 1% bond (100 bps).
+    let mut cfg = client.get_protocol_config().unwrap();
+    cfg.dispute_bond_tier_schedule = soroban_sdk::vec![
+        &env,
+        DisputeBondTier {
+            max_stake: 50,
+            bond_basis_points: 500,
+        },
+        DisputeBondTier {
+            max_stake: i128::MAX,
+            bond_basis_points: 100,
+        },
+    ];
+    client.set_protocol_config(&cfg);
+
+    // stake 50 → first tier (500 bps) → 50 * 500 / 10_000 = 2.5 → 2
+    let m1 =
+        create_funded_active_match_with_stake(&client, &env, &player1, &player2, &token, "bndt1", 50);
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&m1, &Winner::Player1, &oracle);
+    let d1 = client.dispute_oracle_result(&m1, &player2, &String::from_str(&env, "evidence"));
+    assert_eq!(client.get_dispute(&d1).dispute_bond, 2);
+
+    // stake 100 → catch-all second tier (100 bps) → 100 * 100 / 10_000 = 1
+    let m2 =
+        create_funded_active_match_with_stake(&client, &env, &player1, &player2, &token, "bndt2", 100);
+    env.ledger().set_sequence_number(1100);
+    client.submit_result(&m2, &Winner::Player1, &oracle);
+    let d2 = client.dispute_oracle_result(&m2, &player2, &String::from_str(&env, "evidence"));
+    assert_eq!(client.get_dispute(&d2).dispute_bond, 1);
+}
+
+#[test]
+fn test_dispute_bond_tier_schedule_falls_back_to_global_when_empty() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Keep the schedule empty (setup default) and rely on the global value.
+    client.set_dispute_bond_basis_points(&100);
+
+    let match_id =
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "bndglb01");
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "evidence"));
+
+    // Global 100 bps → 100 * 100 / 10_000 = 1
+    assert_eq!(client.get_dispute(&dispute_id).dispute_bond, 1);
+}

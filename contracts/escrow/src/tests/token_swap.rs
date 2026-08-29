@@ -74,6 +74,7 @@ fn setup_swap_match(
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     // Register token A (stake token) and token B (preferred payout token)

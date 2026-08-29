@@ -62,6 +62,7 @@ Pending ──► Active ──► Completed
 | `admin` / `unpaused`      | `unpause`           | `()`                                         |
 | `admin` / `oracle_up`     | `update_oracle`     | `(old_oracle, new_oracle)`                   |
 | `admin` / `xfer`          | `transfer_admin`    | `(old_admin, new_admin)`                     |
+| `admin` / `fee_tiers_set` | `set_fee_tiers`     | `tiers.len()` (u32)                          |
 | `match` / `created`       | `create_match`      | `(match_id, player1, player2, stake_amount)` |
 | `match` / `completed`     | `submit_result`     | `(match_id, winner, payout_amount)`          |
 | `match` / `cancelled`     | `cancel_match`      | `match_id`                                   |

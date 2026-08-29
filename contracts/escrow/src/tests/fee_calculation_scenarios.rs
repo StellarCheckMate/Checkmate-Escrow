@@ -16,6 +16,7 @@ fn test_cancellation_fee_calculation_correct() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     let match_id = client.create_match(
@@ -48,6 +49,7 @@ fn test_zero_cancellation_fee_accepted() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     let match_id = client.create_match(
@@ -79,6 +81,7 @@ fn test_high_cancellation_fee_allowed() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     let match_id = client.create_match(
@@ -111,6 +114,7 @@ fn test_fee_applied_to_deposited_amount() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     let stake = 100i128;
@@ -179,6 +183,7 @@ fn test_tier_based_fee_adjustment() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     let bronze_match = client.create_match(

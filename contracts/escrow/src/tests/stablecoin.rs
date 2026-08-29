@@ -14,7 +14,7 @@ use super::*;
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 /// Enable stablecoin-only mode on the contract.
-fn enable_stablecoin_mode(client: &EscrowContractClient, admin: &Address) {
+fn enable_stablecoin_mode(env: &Env, client: &EscrowContractClient, admin: &Address) {
     client.set_protocol_config(&ProtocolConfig {
         vesting_duration_seconds: 0,
         cancellation_fee_basis_points: 0,
@@ -26,6 +26,7 @@ fn enable_stablecoin_mode(client: &EscrowContractClient, admin: &Address) {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![env],
     });
 }
 
@@ -148,7 +149,7 @@ fn test_stablecoin_mode_rejects_non_stablecoin_token() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    enable_stablecoin_mode(&client, &admin);
+    enable_stablecoin_mode(&env, &client, &admin);
 
     // `token` is NOT registered as a stablecoin issuer.
     let result = client.try_create_match(
@@ -173,7 +174,7 @@ fn test_stablecoin_mode_accepts_registered_stablecoin_token() {
 
     // Register the token as a stablecoin issuer, then enable mode.
     client.add_stablecoin_issuer(&token);
-    enable_stablecoin_mode(&client, &admin);
+    enable_stablecoin_mode(&env, &client, &admin);
 
     let id = client.create_match(
         &player1,
@@ -194,7 +195,7 @@ fn test_stablecoin_mode_can_be_toggled_off() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    enable_stablecoin_mode(&client, &admin);
+    enable_stablecoin_mode(&env, &client, &admin);
 
     // Token not registered — must fail.
     let result = client.try_create_match(
@@ -219,6 +220,7 @@ fn test_stablecoin_mode_can_be_toggled_off() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     // Same token should now succeed.
@@ -246,7 +248,7 @@ fn test_multiple_stablecoin_issuers_can_coexist() {
 
     client.add_stablecoin_issuer(&token);
     client.add_stablecoin_issuer(&token2_addr);
-    enable_stablecoin_mode(&client, &admin);
+    enable_stablecoin_mode(&env, &client, &admin);
 
     let id1 = client.create_match(
         &player1,

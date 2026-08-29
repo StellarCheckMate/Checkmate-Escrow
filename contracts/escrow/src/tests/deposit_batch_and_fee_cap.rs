@@ -149,6 +149,7 @@ fn setup_with_fee(fee_bps: u32, max_fee: Option<i128>) -> (
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
         max_protocol_fee: max_fee,
+        dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
     (env, contract_id, oracle, player1, player2, token, admin)
 }
@@ -248,6 +249,7 @@ fn test_protocol_config_stores_and_retrieves_max_protocol_fee() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
         max_protocol_fee: Some(75),
+        dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     let config = client.get_protocol_config();

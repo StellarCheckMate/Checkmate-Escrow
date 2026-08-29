@@ -22,6 +22,7 @@ fn test_cancellation_fee_deduction() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     // Initial balances
@@ -84,6 +85,7 @@ fn test_cancellation_fee_with_custom_config() {
         fee_recipient: new_treasury.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     };
 
     env.mock_all_auths();

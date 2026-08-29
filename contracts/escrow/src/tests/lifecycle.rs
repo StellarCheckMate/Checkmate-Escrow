@@ -915,6 +915,7 @@ fn test_concurrent_matches_remain_isolated() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     let match_one = client.create_match(
@@ -2324,6 +2325,7 @@ fn test_update_protocol_config() {
         fee_recipient: admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     let config = client.get_protocol_config();
@@ -2348,6 +2350,7 @@ fn test_vesting_enforced() {
         fee_recipient: _admin.clone(),
         minimum_stake: DEFAULT_MINIMUM_STAKE,
                 max_protocol_fee: None,
+                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     });
 
     let id = client.create_match(
