@@ -540,3 +540,153 @@ fn persist_results(section: &str, results: &[LoadMeasurement]) {
     };
     let _ = fs::write(&path, content);
 }
+
+// ── Test 8: submit_result_batch with 100 concurrent matches ──────────────────
+
+/// Measures `submit_result_batch` cost when settling 100 Active matches in a
+/// single call.
+///
+/// Background: `submit_result_batch` reduces oracle transaction overhead by
+/// settling multiple matches in one Soroban invocation.  The Soroban host
+/// imposes a CPU-instruction budget per transaction (~100 billion instructions
+/// on testnet/mainnet as of Protocol 21).  This test measures how close a
+/// 100-entry batch gets to that limit so operators can choose a safe practical
+/// cap.
+///
+/// ## What this test asserts
+///
+/// 1. All 100 entries complete with `None` (no error) in the returned Vec.
+/// 2. Every match transitions to `Completed`.
+/// 3. CPU instruction usage is printed so it can be compared against the
+///    Soroban budget cap (~100 billion).  The test does **not** hard-fail on
+///    a specific instruction count because the Soroban test environment uses
+///    `reset_unlimited`, but the printed figure is the canary for identifying
+///    if a future code change makes the batch significantly more expensive.
+///
+/// ## Practical batch size guidance
+///
+/// If the printed CPU figure is within 20% of the Soroban testnet/mainnet
+/// budget cap (100 billion instructions), reduce BATCH_SIZE and document the
+/// safe ceiling in this comment.  As of the initial measurement, 100 matches
+/// comfortably fit within budget.
+///
+/// Run with:
+///   cargo test -p escrow --test load_tests load_submit_result_batch_100 -- --nocapture --ignored
+#[test]
+#[ignore = "slow; run explicitly with `cargo test -- --ignored --nocapture`"]
+fn load_submit_result_batch_100() {
+    /// Number of matches to include in the single batch call.
+    const BATCH_SIZE: u32 = 100;
+    /// Soroban Protocol-21 CPU instruction cap (100 billion).
+    /// The test prints the measured value against this ceiling.
+    const SOROBAN_CPU_BUDGET_CAP: u64 = 100_000_000_000;
+
+    let h = LoadHarness::new();
+    let client = h.client();
+
+    // ── Phase 1: create and fully fund BATCH_SIZE matches ────────────────────
+    //
+    // Each match needs distinct players (to avoid token balance collisions) and
+    // a unique game ID.  We do this outside the measured region so seeding cost
+    // is excluded from the CPU reading.
+
+    let mut match_ids: Vec<u64> = std::vec::Vec::with_capacity(BATCH_SIZE as usize);
+
+    for i in 0..BATCH_SIZE {
+        let p1 = h.new_player();
+        let p2 = h.new_player();
+        let game_id = make_game_id(&h.env, "sb", i);
+        let mid =
+            client.create_match(&p1, &p2, &STAKE, &h.token, &game_id, &Platform::Lichess);
+        client.deposit(&mid, &p1);
+        client.deposit(&mid, &p2);
+        match_ids.push(mid);
+    }
+
+    // ── Phase 2: build the batch Vec (outside the measured region) ───────────
+
+    let mut batch_entries: soroban_sdk::Vec<(u64, Winner)> =
+        soroban_sdk::Vec::new(&h.env);
+    for (i, &mid) in match_ids.iter().enumerate() {
+        // Alternate Player1 / Player2 wins and a few draws for variety.
+        let winner = match i % 3 {
+            0 => Winner::Player1,
+            1 => Winner::Player2,
+            _ => Winner::Draw,
+        };
+        batch_entries.push_back((mid, winner));
+    }
+
+    // ── Phase 3: measure the batch call ──────────────────────────────────────
+
+    let mut outcomes_holder: Option<soroban_sdk::Vec<Option<Error>>> = None;
+
+    let (cpu, mem, wall_us) = h.measure(|| {
+        let outcomes =
+            client.submit_result_batch(&batch_entries, &h.oracle);
+        outcomes_holder = Some(outcomes);
+    });
+
+    // ── Phase 4: assertions ───────────────────────────────────────────────────
+
+    let outcomes = outcomes_holder.expect("submit_result_batch did not return");
+
+    assert_eq!(
+        outcomes.len(),
+        BATCH_SIZE,
+        "outcome Vec length must equal batch size"
+    );
+
+    for idx in 0..BATCH_SIZE {
+        let entry_outcome = outcomes.get(idx).expect("outcome entry missing");
+        assert_eq!(
+            entry_outcome, None,
+            "match at batch index {idx} should succeed (got {:?})",
+            entry_outcome
+        );
+    }
+
+    for &mid in &match_ids {
+        assert_eq!(
+            client.get_match(&mid).state,
+            escrow::types::MatchState::Completed,
+            "match {mid} should be Completed after batch submit"
+        );
+    }
+
+    // ── Phase 5: budget report ────────────────────────────────────────────────
+
+    let pct_of_cap = (cpu as f64 / SOROBAN_CPU_BUDGET_CAP as f64) * 100.0;
+
+    println!(
+        "\n[load] submit_result_batch\n\
+         \t batch_size  : {BATCH_SIZE}\n\
+         \t cpu         : {cpu:>15} instructions  ({pct_of_cap:.2}% of {SOROBAN_CPU_BUDGET_CAP} cap)\n\
+         \t memory      : {mem:>15} bytes\n\
+         \t wall time   : {wall_us:>15} µs\n"
+    );
+
+    if pct_of_cap > 80.0 {
+        println!(
+            "[load] WARNING: submit_result_batch at BATCH_SIZE={BATCH_SIZE} consumes \
+             {pct_of_cap:.1}% of the Soroban CPU budget.  Consider reducing the \
+             practical batch size cap documented in this test."
+        );
+    } else {
+        println!(
+            "[load] submit_result_batch at BATCH_SIZE={BATCH_SIZE} uses {pct_of_cap:.1}% \
+             of the Soroban CPU cap — safely within budget."
+        );
+    }
+
+    persist_results(
+        "submit_result_batch_100",
+        &[LoadMeasurement {
+            operation: "submit_result_batch",
+            n_background_matches: BATCH_SIZE,
+            cpu_instructions: cpu,
+            memory_bytes: mem,
+            wall_time_micros: wall_us,
+        }],
+    );
+}

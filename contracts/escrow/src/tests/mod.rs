@@ -196,6 +196,7 @@ pub fn mint_player_balance(asset_client: &StellarAssetClient, player: &Address, 
 }
 mod cancellation_fee;
 mod dispute_rollback;
+mod error_variants;
 mod platform_stats;
 mod protocol_config;
 mod stablecoin;

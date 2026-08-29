@@ -1254,6 +1254,11 @@ The complete public function surface of `OracleContract` (`contracts/oracle/src/
 
 ## Troubleshooting
 
+> **Comprehensive troubleshooting guide:** For a full operator runbook covering
+> dead-letter backlog, RPC connectivity, Lichess/Chess.com API errors, stale
+> game IDs, and replay commands, see
+> [docs/oracle-troubleshooting.md](oracle-troubleshooting.md).
+
 ### Rate limit exceeded (`RateLimitExceeded`)
 
 **Symptom:** `submit_result` or `submit_batch_results` returns
