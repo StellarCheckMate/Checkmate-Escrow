@@ -444,6 +444,26 @@ impl Poller {
             "attempting result verification",
         );
 
+        // ── Pre-validation: check game_id format before calling the API ──
+        // If the game_id stored on-chain is structurally invalid (e.g. due to
+        // a contract-level validation bug or corrupted data), every API call
+        // will fail unconditionally.  We short-circuit here to avoid exhausting
+        // all retries on an ID that can never succeed, and send the entry
+        // directly to the dead-letter store.
+        if let Err(reason) = validate_game_id(entry.platform, &game_id) {
+            warn!(
+                match_id,
+                game_id = %game_id,
+                platform = %entry.platform,
+                %reason,
+                "game_id failed pre-validation; dead-lettering without API call",
+            );
+            entry.last_error = Some(reason);
+            entry.attempts = self.inner.max_retries;
+            self.exhaust_entry(entry).await;
+            return;
+        }
+
         // ── Cache check ──────────────────────────────────────────────────
         // Skip the platform API call if there is a non-expired cached result.
         if let Some(cached_winner) = self.inner.result_cache.get(entry.platform, &game_id).await {
@@ -604,5 +624,150 @@ fn classify_chess_com_error(e: ChessComError) -> FetchError {
         | ChessComError::RateLimited { .. }
         | ChessComError::ConcurrencyLimitReached
         | ChessComError::InvalidResponse => FetchError::Transient(e.to_string()),
+    }
+}
+
+// ── Pre-flight game_id validation ─────────────────────────────────────────────
+
+/// Validate a `game_id` against the expected format for `platform` **before**
+/// making any API call.
+///
+/// This guard sits at the pipeline level so that a structurally invalid ID
+/// stored on-chain (e.g. due to a contract-level validation bug or data
+/// corruption) is caught immediately, without exhausting all retry attempts
+/// on HTTP calls that will always fail.
+///
+/// Returns `Ok(())` when the ID is valid, or `Err(reason)` with a human-
+/// readable description when it is not.
+///
+/// ## Validation rules (mirrors `validate_game_id_format` in the escrow contract)
+///
+/// - **Lichess**: exactly 8 or 12 ASCII alphanumeric characters.
+/// - **Chess.com**: 7–12 ASCII digit characters.
+/// - Both platforms: non-empty, ≤ 64 bytes (shared contract constant).
+pub(crate) fn validate_game_id(platform: Platform, game_id: &str) -> Result<(), String> {
+    let len = game_id.len();
+
+    if len == 0 {
+        return Err("game_id is empty".to_string());
+    }
+    if len > 64 {
+        return Err(format!(
+            "game_id is too long ({} bytes, max 64)",
+            len
+        ));
+    }
+
+    match platform {
+        Platform::Lichess => {
+            if (len != 8 && len != 12) || !game_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err(format!(
+                    "invalid Lichess game_id '{}': must be 8 or 12 ASCII alphanumeric characters",
+                    game_id
+                ));
+            }
+        }
+        Platform::ChessDotCom => {
+            if !(7..=12).contains(&len) || !game_id.chars().all(|c| c.is_ascii_digit()) {
+                return Err(format!(
+                    "invalid Chess.com game_id '{}': must be 7–12 ASCII digit characters",
+                    game_id
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod validate_game_id_tests {
+    use super::*;
+
+    // ── Lichess ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn lichess_valid_8_char() {
+        assert!(validate_game_id(Platform::Lichess, "abcd1234").is_ok());
+    }
+
+    #[test]
+    fn lichess_valid_12_char() {
+        assert!(validate_game_id(Platform::Lichess, "abcdef123456").is_ok());
+    }
+
+    #[test]
+    fn lichess_empty_rejected() {
+        assert!(validate_game_id(Platform::Lichess, "").is_err());
+    }
+
+    #[test]
+    fn lichess_wrong_length_rejected() {
+        for len in [1, 7, 9, 10, 11, 13, 63, 64] {
+            let id: String = "a".repeat(len);
+            assert!(
+                validate_game_id(Platform::Lichess, &id).is_err(),
+                "expected rejection for Lichess id of length {len}"
+            );
+        }
+    }
+
+    #[test]
+    fn lichess_non_alphanumeric_rejected() {
+        assert!(validate_game_id(Platform::Lichess, "abcd12!@").is_err());
+        assert!(validate_game_id(Platform::Lichess, "abcd-123").is_err());
+        assert!(validate_game_id(Platform::Lichess, "abcd 123").is_err());
+    }
+
+    #[test]
+    fn lichess_oversized_rejected() {
+        let id: String = "a".repeat(65);
+        assert!(validate_game_id(Platform::Lichess, &id).is_err());
+    }
+
+    // ── Chess.com ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn chess_com_valid_7_digits() {
+        assert!(validate_game_id(Platform::ChessDotCom, "1234567").is_ok());
+    }
+
+    #[test]
+    fn chess_com_valid_12_digits() {
+        assert!(validate_game_id(Platform::ChessDotCom, "123456789012").is_ok());
+    }
+
+    #[test]
+    fn chess_com_empty_rejected() {
+        assert!(validate_game_id(Platform::ChessDotCom, "").is_err());
+    }
+
+    #[test]
+    fn chess_com_too_short_rejected() {
+        for len in [1, 2, 3, 4, 5, 6] {
+            let id: String = "1".repeat(len);
+            assert!(
+                validate_game_id(Platform::ChessDotCom, &id).is_err(),
+                "expected rejection for Chess.com id of length {len}"
+            );
+        }
+    }
+
+    #[test]
+    fn chess_com_too_long_rejected() {
+        let id: String = "1".repeat(13);
+        assert!(validate_game_id(Platform::ChessDotCom, &id).is_err());
+    }
+
+    #[test]
+    fn chess_com_non_digits_rejected() {
+        assert!(validate_game_id(Platform::ChessDotCom, "1234abc8").is_err());
+        assert!(validate_game_id(Platform::ChessDotCom, "1234567!").is_err());
+    }
+
+    #[test]
+    fn chess_com_oversized_rejected() {
+        let id: String = "1".repeat(65);
+        assert!(validate_game_id(Platform::ChessDotCom, &id).is_err());
     }
 }
