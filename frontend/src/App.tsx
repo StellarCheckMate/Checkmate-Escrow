@@ -1,6 +1,7 @@
 import { useWallet } from './hooks/useWallet'
 import { WalletConnector } from './components/wallet/WalletConnector'
 import { AdminPanel } from './pages/AdminPanel'
+import { ThemeToggle } from './components/ThemeToggle'
 import './App.css'
 
 function App() {
@@ -14,6 +15,7 @@ function App() {
 
   return (
     <main id="landing">
+      <ThemeToggle />
       <h1>Checkmate-Escrow</h1>
       <p className="tagline">Trustless chess wagering on Stellar — stake, play, get paid instantly.</p>
       <WalletConnector wallet={wallet} />
