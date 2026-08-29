@@ -21,6 +21,12 @@ info:
     > interactively. Use the provided `curl` / JS / Python / Rust examples to see how to invoke them
     > with the Stellar CLI or SDKs.
 
+    ## API Versioning
+
+    Event Indexer HTTP endpoints are versioned via a URI prefix (`/v1/...`). See
+    "API Versioning" in `docs/architecture.md` for the deprecation notice period and
+    breaking-change policy. `/health` and `/indexer/health` are unversioned liveness probes.
+
     ## Match Lifecycle
 
     ```
@@ -2435,7 +2441,7 @@ paths:
                   detail:
                     type: string
 
-  /indexer/events:
+  /v1/indexer/events:
     get:
       tags: [Event Indexer]
       summary: Query indexed events with optional filters
@@ -2504,7 +2510,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError'
 
-  /indexer/events/{match_id}:
+  /v1/indexer/events/{match_id}:
     get:
       tags: [Event Indexer]
       summary: Get all events for a specific match
@@ -2554,7 +2560,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError'
 
-  /indexer/matches:
+  /v1/indexer/matches:
     get:
       tags: [Event Indexer]
       summary: List matches, optionally filtered by status
@@ -2589,7 +2595,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError'
 
-  /indexer/match/{match_id}:
+  /v1/indexer/match/{match_id}:
     get:
       tags: [Event Indexer]
       summary: Get full match summary with all events
@@ -2626,7 +2632,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ApiError'
 
-  /indexer/stats:
+  /v1/indexer/stats:
     get:
       tags: [Event Indexer]
       summary: Get service-level statistics

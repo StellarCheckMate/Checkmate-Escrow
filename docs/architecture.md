@@ -165,6 +165,52 @@ The contract enforces state validation at every entry point. Invalid transitions
 
 All invalid attempts return `InvalidState` error.
 
+## API Versioning
+
+The Event Indexer (and other off-chain HTTP services, e.g. the Oracle service) expose a
+versioned REST API so that clients can rely on stable contracts while the backend evolves.
+
+### Versioning Scheme
+
+- All indexer HTTP endpoints are served under a URI version prefix: `/v1/...`
+  (e.g. `/v1/indexer/events`, `/v1/indexer/matches`, `/v1/indexer/match/{match_id}`).
+- The version segment refers to the **API contract**, not the service's internal release
+  version. Internal releases (bug fixes, performance work, new optional fields) do not bump
+  the version.
+- Unversioned infrastructure endpoints (`/health`, `/indexer/health`) are excluded from
+  versioning since they are liveness/readiness probes, not data contracts.
+- A new major version (`/v2/`, `/v3/`, ...) is introduced only when a **breaking change**
+  is required. Non-breaking changes (new optional fields, new endpoints, new optional query
+  parameters) are shipped within the current version.
+
+### Breaking Change Policy
+
+A change is considered breaking if it does any of the following to an existing `/vN/` endpoint:
+
+- Removes or renames a field, endpoint, or query parameter
+- Changes the type or semantics of an existing field
+- Changes existing default behavior in a way that changes response shape or values
+- Tightens validation such that previously-valid requests are rejected
+
+Additive, backward-compatible changes (new optional fields, new endpoints, new enum
+variants clients are expected to treat as opaque strings) are **not** breaking and are
+released within the current version without a deprecation cycle.
+
+### Deprecation Notice Period
+
+When a breaking change requires a new major version:
+
+1. The new version (`/vN+1/`) is released alongside the existing version.
+2. The previous version is marked `Deprecated` in `docs/openapi.yaml` and in the
+   `Deprecation` / `Sunset` HTTP response headers returned by deprecated endpoints.
+3. The deprecated version remains fully supported for a minimum of **90 days** from the
+   date the replacement version ships.
+4. After the notice period, the deprecated version may be removed in a subsequent release;
+   removal is announced in `CHANGELOG.md` at least 2 weeks in advance of the removal date.
+
+Security fixes are backported to all supported versions for the duration of their
+deprecation window, regardless of this policy.
+
 ## Stable Public API
 
 The following types and contract functions are considered stable. External integrations and tooling should rely only on these.
