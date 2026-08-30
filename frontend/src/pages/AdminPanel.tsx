@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAdminContract } from '../hooks/useAdminContract';
 import { ConfirmDialog } from '../components/admin/ConfirmDialog';
 import type { WalletState, WalletType } from '../wallets/types';
@@ -34,6 +34,28 @@ export function AdminPanel({ wallet }: Props) {
   const [oracleInput, setOracleInput] = useState('');
   const [newAdminInput, setNewAdminInput] = useState('');
   const [actionLog, setActionLog] = useState<string[]>([]);
+  const [configForm, setConfigForm] = useState({
+    protocol_fee_bps: '',
+    minimum_stake: '',
+    maximum_stake: '',
+    treasury: '',
+    fee_recipient: '',
+    cancellation_fee_basis_points: '',
+  });
+
+  // Pre-populate protocol config fields whenever on-chain config is loaded/refreshed
+  useEffect(() => {
+    if (admin.protocolConfig) {
+      setConfigForm({
+        protocol_fee_bps: admin.protocolConfig.protocol_fee_bps !== undefined ? String(admin.protocolConfig.protocol_fee_bps) : '',
+        minimum_stake: admin.protocolConfig.minimum_stake !== undefined ? String(admin.protocolConfig.minimum_stake) : '',
+        maximum_stake: admin.protocolConfig.maximum_stake !== undefined && admin.protocolConfig.maximum_stake !== null ? String(admin.protocolConfig.maximum_stake) : '',
+        treasury: admin.protocolConfig.treasury ?? '',
+        fee_recipient: admin.protocolConfig.fee_recipient ?? '',
+        cancellation_fee_basis_points: admin.protocolConfig.cancellation_fee_basis_points !== undefined ? String(admin.protocolConfig.cancellation_fee_basis_points) : '',
+      });
+    }
+  }, [admin.protocolConfig]);
 
   function log(msg: string) {
     setActionLog(prev => [`${new Date().toISOString()}  ${msg}`, ...prev].slice(0, 50));
@@ -197,6 +219,70 @@ export function AdminPanel({ wallet }: Props) {
           >
             Transfer Admin
           </button>
+        </div>
+      </section>
+
+      {/* ── Protocol Configuration ────────────────────────────── */}
+      <section aria-labelledby="config-heading">
+        <h2 id="config-heading">Protocol Configuration</h2>
+        <div>
+          <div>
+            <label htmlFor="protocol-fee-bps">Protocol Fee (bps)</label>
+            <input
+              id="protocol-fee-bps"
+              type="number"
+              value={configForm.protocol_fee_bps}
+              onChange={e => setConfigForm(f => ({ ...f, protocol_fee_bps: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label htmlFor="minimum-stake">Minimum Stake</label>
+            <input
+              id="minimum-stake"
+              type="number"
+              value={configForm.minimum_stake}
+              onChange={e => setConfigForm(f => ({ ...f, minimum_stake: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label htmlFor="maximum-stake">Maximum Stake</label>
+            <input
+              id="maximum-stake"
+              type="number"
+              value={configForm.maximum_stake}
+              onChange={e => setConfigForm(f => ({ ...f, maximum_stake: e.target.value }))}
+              placeholder="Unlimited"
+            />
+          </div>
+          <div>
+            <label htmlFor="treasury-address">Treasury Address</label>
+            <input
+              id="treasury-address"
+              type="text"
+              value={configForm.treasury}
+              onChange={e => setConfigForm(f => ({ ...f, treasury: e.target.value }))}
+              placeholder="G…"
+            />
+          </div>
+          <div>
+            <label htmlFor="fee-recipient">Fee Recipient</label>
+            <input
+              id="fee-recipient"
+              type="text"
+              value={configForm.fee_recipient}
+              onChange={e => setConfigForm(f => ({ ...f, fee_recipient: e.target.value }))}
+              placeholder="G…"
+            />
+          </div>
+          <div>
+            <label htmlFor="cancellation-fee-bps">Cancellation Fee (bps)</label>
+            <input
+              id="cancellation-fee-bps"
+              type="number"
+              value={configForm.cancellation_fee_basis_points}
+              onChange={e => setConfigForm(f => ({ ...f, cancellation_fee_basis_points: e.target.value }))}
+            />
+          </div>
         </div>
       </section>
 
