@@ -73,18 +73,40 @@ stellar contract invoke \
     --admin "$ESCROW_ADMIN" \
     --deployer "$DEPLOYER_ADDRESS"
 
+echo "🔍 Verifying deployment health..."
+ESCROW_HEALTH=$(stellar contract invoke \
+    --id "$ESCROW_CONTRACT_ID" \
+    --source "$DEPLOYER_KEYPAIR" \
+    --network "$NETWORK" \
+    -- \
+    is_initialized 2>&1) || {
+        echo "❌ Health check failed: Escrow contract is not initialized or unreachable."
+        exit 1
+    }
+
+if [[ "$ESCROW_HEALTH" != *"true"* ]]; then
+    echo "❌ Health check verification failed: Escrow is_initialized returned $ESCROW_HEALTH"
+    exit 1
+fi
+
+echo "   ✅ Escrow health check verified (is_initialized: true)"
+
+RPC_URL=${STELLAR_RPC_URL:-"https://soroban-testnet.stellar.org"}
+
 echo ""
-echo "✅ Deployment complete!"
+echo "✅ Deployment and health verification complete!"
 echo ""
-echo "📋 Contract Addresses:"
+echo "📋 Deployment Details:"
+echo "   Network:          $NETWORK"
+echo "   RPC URL:          $RPC_URL"
 echo "   Oracle Contract:  $ORACLE_CONTRACT_ID"
 echo "   Escrow Contract:  $ESCROW_CONTRACT_ID"
 echo ""
 echo "🔧 Update your .env file with:"
 echo "   CONTRACT_ESCROW=$ESCROW_CONTRACT_ID"
 echo "   CONTRACT_ORACLE=$ORACLE_CONTRACT_ID"
+echo "   VITE_STELLAR_RPC_URL=$RPC_URL"
 echo ""
 echo "🧪 Test the deployment:"
 echo "   stellar contract invoke --id $ESCROW_CONTRACT_ID --network $NETWORK -- get_admin"
 echo "   stellar contract invoke --id $ORACLE_CONTRACT_ID --network $NETWORK -- get_admin"
-<parameter name="filePath">/home/farouq/Desktop/Checkmate-Escrow/scripts/deploy_testnet.sh
