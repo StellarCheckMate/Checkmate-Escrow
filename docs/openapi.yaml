@@ -2653,3 +2653,137 @@ paths:
                 data:
                   total_events: 15000
                   cache_size: 342
+
+  /indexer/transactions/player/{player_address}:
+    get:
+      tags: [Event Indexer]
+      summary: Get a player's transaction history
+      description: |
+        Returns a paginated, filterable history of a player's financial
+        transactions (deposits, payouts, fees) derived from indexed contract
+        events.
+
+        `completed_after` / `completed_before` filter by the **ledger
+        sequence** the underlying event was recorded at (inclusive on both
+        ends), letting auditors query "all matches completed between ledger
+        X and ledger Y" for reporting purposes.
+
+        **curl example:**
+        ```bash
+        curl "http://localhost:8080/transactions/player/GABC...?completed_after=1000&completed_before=2000"
+        ```
+      operationId: getPlayerTransactions
+      servers:
+        - url: http://localhost:8080
+          description: Event Indexer (local dev)
+      parameters:
+        - name: player_address
+          in: path
+          required: true
+          schema:
+            type: string
+          example: GABC...
+        - name: type
+          in: query
+          required: false
+          description: Filter by transaction type.
+          schema:
+            type: string
+            enum: [deposit, payout, fee]
+        - name: token
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: from_date
+          in: query
+          required: false
+          description: ISO-8601 or `YYYY-MM-DD` lower bound on the transaction timestamp.
+          schema:
+            type: string
+        - name: to_date
+          in: query
+          required: false
+          description: ISO-8601 or `YYYY-MM-DD` upper bound on the transaction timestamp.
+          schema:
+            type: string
+        - name: completed_after
+          in: query
+          required: false
+          description: Inclusive lower bound on the ledger sequence the match's event was recorded at.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+          example: 1000
+        - name: completed_before
+          in: query
+          required: false
+          description: Inclusive upper bound on the ledger sequence the match's event was recorded at.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+          example: 2000
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+        - name: sort_by
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [timestamp, amount, match_id, type]
+        - name: sort_order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+      responses:
+        '200':
+          description: A page of the player's transaction history.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      transactions:
+                        type: array
+                        items:
+                          type: object
+                      total:
+                        type: integer
+                      limit:
+                        type: integer
+                      offset:
+                        type: integer
+                      has_more:
+                        type: boolean
+        '400':
+          description: Invalid query parameter (e.g. inverted ledger range).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+        '500':
+          description: Database error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'

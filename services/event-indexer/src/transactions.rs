@@ -186,6 +186,11 @@ pub struct TransactionHistoryFilters {
     pub token: Option<String>,
     pub from_date: Option<DateTime<Utc>>,
     pub to_date: Option<DateTime<Utc>>,
+    /// Lower bound (inclusive) on `ledger_sequence`, for querying "all matches
+    /// completed between ledger X and ledger Y".
+    pub completed_after: Option<u32>,
+    /// Upper bound (inclusive) on `ledger_sequence`.
+    pub completed_before: Option<u32>,
     pub limit: i64,
     pub offset: i64,
     pub sort_by: TransactionSortField,
@@ -201,6 +206,8 @@ impl TransactionHistoryFilters {
             token: None,
             from_date: None,
             to_date: None,
+            completed_after: None,
+            completed_before: None,
             limit: DEFAULT_PAGE_LIMIT,
             offset: 0,
             sort_by: TransactionSortField::Timestamp,
@@ -477,6 +484,22 @@ mod tests {
         f.tx_type = Some(TransactionType::Deposit);
         let patterns = f.event_type_patterns();
         assert_eq!(patterns, vec!["%deposit%", "%funded%"]);
+    }
+
+    #[test]
+    fn ledger_range_filters_default_to_unset() {
+        let f = TransactionHistoryFilters::new("GABC");
+        assert!(f.completed_after.is_none());
+        assert!(f.completed_before.is_none());
+    }
+
+    #[test]
+    fn ledger_range_filters_can_be_set() {
+        let mut f = TransactionHistoryFilters::new("GABC");
+        f.completed_after = Some(100);
+        f.completed_before = Some(200);
+        assert_eq!(f.completed_after, Some(100));
+        assert_eq!(f.completed_before, Some(200));
     }
 
     // ── Pagination metadata ───────────────────────────────────────────────

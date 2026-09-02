@@ -34,6 +34,7 @@ const PLAYER_ISOLATED: &str = "GADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA
 const PLAYER_FIELDS: &str = "GAEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSH7S";
 const PLAYER_REORG: &str = "GAFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAUCQKBIFAVXXV";
 const PLAYER_UNRELATED: &str = "GAFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWCYLBMFQWYPX";
+const PLAYER_LEDGER: &str = "GAGQ6JQL7OGQ6JQL7OGQ6JQL7OGQ6JQL7OGQ6JQL7OGQ6JQL7OGQ6ZKX";
 /// Never seeded by any test — used to prove an empty history is a success.
 const PLAYER_WITH_NO_HISTORY: &str = "GAGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYDAMBQGAYXH2";
 const OPPONENT: &str = "GAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEARIHQ";
@@ -71,6 +72,8 @@ fn every_supported_parameter_is_parsed() {
         token: Some("XLM".to_string()),
         sort_by: Some("amount".to_string()),
         sort_order: Some("asc".to_string()),
+        completed_after: Some("100".to_string()),
+        completed_before: Some("200".to_string()),
     };
 
     let filters = build_transaction_filters(PLAYER_MIXED, &q).unwrap();
@@ -86,6 +89,41 @@ fn every_supported_parameter_is_parsed() {
         "2026-01-01T00:00:00+00:00"
     );
     assert!(filters.to_date.is_some());
+    assert_eq!(filters.completed_after, Some(100));
+    assert_eq!(filters.completed_before, Some(200));
+}
+
+#[test]
+fn ledger_range_parameters_are_parsed() {
+    let q = TransactionHistoryQuery {
+        completed_after: Some("1000".to_string()),
+        completed_before: Some("2000".to_string()),
+        ..Default::default()
+    };
+    let filters = build_transaction_filters(PLAYER_MIXED, &q).unwrap();
+    assert_eq!(filters.completed_after, Some(1000));
+    assert_eq!(filters.completed_before, Some(2000));
+}
+
+#[test]
+fn inverted_ledger_range_is_rejected() {
+    let q = TransactionHistoryQuery {
+        completed_after: Some("2000".to_string()),
+        completed_before: Some("1000".to_string()),
+        ..Default::default()
+    };
+    let err = build_transaction_filters(PLAYER_MIXED, &q).unwrap_err();
+    assert_eq!(err.field, "completed_after");
+}
+
+#[test]
+fn non_numeric_ledger_bound_is_rejected() {
+    let q = TransactionHistoryQuery {
+        completed_after: Some("not-a-number".to_string()),
+        ..Default::default()
+    };
+    let err = build_transaction_filters(PLAYER_MIXED, &q).unwrap_err();
+    assert_eq!(err.field, "completed_after");
 }
 
 #[test]
@@ -551,6 +589,58 @@ async fn history_filters_by_date_range() {
     let (rows, total) = db.query_player_transactions(&empty).await.expect("query");
     assert_eq!(total, 0);
     assert!(rows.is_empty());
+
+    cleanup(&db, &ids).await;
+}
+
+#[tokio::test]
+async fn history_filters_by_ledger_range() {
+    let Some(db) = database().await else {
+        println!("Skipping history_filters_by_ledger_range: DATABASE_URL not set");
+        return;
+    };
+
+    let now = Utc::now();
+    // `event()` sets `ledger_sequence = match_id as u32`.
+    let ids = ["txh-ledger-low", "txh-ledger-mid", "txh-ledger-high"];
+    seed(
+        &db,
+        &[
+            event(ids[0], 500, "match:deposit", PLAYER_LEDGER, "100", "XLM", now),
+            event(ids[1], 750, "match:deposit", PLAYER_LEDGER, "200", "XLM", now),
+            event(ids[2], 900, "match:deposit", PLAYER_LEDGER, "300", "XLM", now),
+        ],
+    )
+    .await;
+
+    // Only the match at ledger 750 falls within [600, 800].
+    let mut windowed = TransactionHistoryFilters::new(PLAYER_LEDGER);
+    windowed.completed_after = Some(600);
+    windowed.completed_before = Some(800);
+    let (rows, total) = db
+        .query_player_transactions(&windowed)
+        .await
+        .expect("query");
+    assert_eq!(total, 1);
+    assert_eq!(rows[0].match_id, 750);
+
+    // `completed_after` alone excludes the low ledger.
+    let mut after_only = TransactionHistoryFilters::new(PLAYER_LEDGER);
+    after_only.completed_after = Some(700);
+    let (_, total) = db
+        .query_player_transactions(&after_only)
+        .await
+        .expect("query");
+    assert_eq!(total, 2);
+
+    // `completed_before` alone excludes the high ledger.
+    let mut before_only = TransactionHistoryFilters::new(PLAYER_LEDGER);
+    before_only.completed_before = Some(800);
+    let (_, total) = db
+        .query_player_transactions(&before_only)
+        .await
+        .expect("query");
+    assert_eq!(total, 2);
 
     cleanup(&db, &ids).await;
 }

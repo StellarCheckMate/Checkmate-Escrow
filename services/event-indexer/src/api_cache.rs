@@ -43,10 +43,24 @@ use crate::models::MatchStatus;
 
 /// TTL for the match-list endpoint, including the pending-match list.
 pub const PENDING_MATCHES_TTL_SECS: u64 = 10;
-/// TTL for a single match summary.
+/// TTL for a single match summary. Used as the fallback for statuses that are
+/// neither actively changing nor terminal (e.g. `Pending`).
 pub const MATCH_TTL_SECS: u64 = 5;
 /// TTL for analytics responses.
 pub const ANALYTICS_TTL_SECS: u64 = 60;
+
+/// Default TTL for a match in the `Active` state, before checking the
+/// `INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS` override.
+///
+/// Active matches change state frequently (moves, clock updates, dispute
+/// votes), so players watching an ongoing match must not see a response
+/// that is stale for longer than a couple of seconds.
+pub const DEFAULT_ACTIVE_MATCH_CACHE_TTL_SECS: u64 = 5;
+
+/// TTL for a match in a terminal state (`Completed`, `Cancelled`, `Expired`).
+/// Terminal matches never change again, so they can be cached far longer than
+/// the default without any staleness risk.
+pub const COMPLETED_MATCH_CACHE_TTL_SECS: u64 = 300;
 
 pub fn pending_matches_ttl() -> Duration {
     Duration::from_secs(PENDING_MATCHES_TTL_SECS)
@@ -58,6 +72,36 @@ pub fn match_ttl() -> Duration {
 
 pub fn analytics_ttl() -> Duration {
     Duration::from_secs(ANALYTICS_TTL_SECS)
+}
+
+/// TTL for a match currently `Active`, read from
+/// `INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS` (default 5s) so operators can tune it
+/// without a redeploy. Falls back to the default on an unset or unparsable
+/// value rather than failing the request.
+pub fn active_match_ttl() -> Duration {
+    let secs = std::env::var("INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_ACTIVE_MATCH_CACHE_TTL_SECS);
+    Duration::from_secs(secs)
+}
+
+pub fn completed_match_ttl() -> Duration {
+    Duration::from_secs(COMPLETED_MATCH_CACHE_TTL_SECS)
+}
+
+/// State-aware TTL for the single-match endpoint: terminal states are cached
+/// much longer than actively-changing ones, so a match that will never change
+/// again does not get re-fetched on every poll from a spectator's client.
+pub fn ttl_for_status(status: &MatchStatus) -> Duration {
+    match status {
+        MatchStatus::Active => active_match_ttl(),
+        MatchStatus::Completed | MatchStatus::Cancelled | MatchStatus::Expired => {
+            completed_match_ttl()
+        }
+        MatchStatus::Pending => match_ttl(),
+    }
 }
 
 // ── Key namespace ─────────────────────────────────────────────────────────────
@@ -524,6 +568,106 @@ mod tests {
         assert_eq!(pending_matches_ttl().as_secs(), 10);
         assert_eq!(match_ttl().as_secs(), 5);
         assert_eq!(analytics_ttl().as_secs(), 60);
+    }
+
+    // ── State-aware TTL ──────────────────────────────────────────────────
+
+    /// Serializes access to `INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS` since
+    /// `std::env::set_var` mutates process-global state and `cargo test` runs
+    /// tests in parallel by default.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn active_match_ttl_defaults_when_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS");
+        assert_eq!(
+            active_match_ttl().as_secs(),
+            DEFAULT_ACTIVE_MATCH_CACHE_TTL_SECS
+        );
+    }
+
+    #[test]
+    fn active_match_ttl_honors_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS", "2");
+        assert_eq!(active_match_ttl().as_secs(), 2);
+        std::env::remove_var("INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS");
+    }
+
+    #[test]
+    fn active_match_ttl_ignores_invalid_override() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS", "not-a-number");
+        assert_eq!(
+            active_match_ttl().as_secs(),
+            DEFAULT_ACTIVE_MATCH_CACHE_TTL_SECS
+        );
+        std::env::remove_var("INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS");
+    }
+
+    #[test]
+    fn active_match_ttl_is_shorter_than_completed_match_ttl() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS");
+        assert!(active_match_ttl() < completed_match_ttl());
+    }
+
+    #[test]
+    fn ttl_for_status_maps_terminal_states_to_the_long_ttl() {
+        for status in [
+            MatchStatus::Completed,
+            MatchStatus::Cancelled,
+            MatchStatus::Expired,
+        ] {
+            assert_eq!(ttl_for_status(&status), completed_match_ttl());
+        }
+    }
+
+    #[test]
+    fn ttl_for_status_maps_active_to_the_short_ttl() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS");
+        assert_eq!(ttl_for_status(&MatchStatus::Active), active_match_ttl());
+    }
+
+    /// The whole point of state-aware TTLs: an entry cached with the active
+    /// TTL must expire well before one cached with the completed TTL, so
+    /// players watching an ongoing match never see stale state for as long as
+    /// a spectator checking back on a finished one would tolerate.
+    #[tokio::test]
+    async fn active_match_cache_expires_before_completed_match_cache() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS", "1");
+
+        let cache = ApiCache::in_memory();
+        let active_key = match_key(101);
+        let completed_key = match_key(102);
+
+        cache
+            .set_json(&active_key, &payload(101), ttl_for_status(&MatchStatus::Active))
+            .await;
+        cache
+            .set_json(
+                &completed_key,
+                &payload(102),
+                ttl_for_status(&MatchStatus::Completed),
+            )
+            .await;
+
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+
+        let active: Option<Payload> = cache.get_json(&active_key).await;
+        let completed: Option<Payload> = cache.get_json(&completed_key).await;
+
+        assert!(active.is_none(), "active match TTL must have expired");
+        assert_eq!(
+            completed,
+            Some(payload(102)),
+            "completed match TTL must still be live"
+        );
+
+        std::env::remove_var("INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS");
     }
 
     // ── Round-trip ────────────────────────────────────────────────────────
