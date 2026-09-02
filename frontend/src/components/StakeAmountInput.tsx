@@ -1,4 +1,5 @@
 import React, { useId } from 'react';
+import { formatTokenAmount } from '../utils/tokenFormat';
 
 export type StakeAmountInputProps = {
   /** HTML id for the input element – needed for label association */
@@ -17,6 +18,12 @@ export type StakeAmountInputProps = {
   maximum_stake?: number;
   /** Alias max */
   max?: number;
+  /**
+   * Decimal places for `tokenSymbol` (e.g. 7 for most Stellar assets). When
+   * set, the input is treated as accepting a raw integer (stroops) amount
+   * and a human-readable preview is shown below the field.
+   */
+  tokenDecimals?: number;
 };
 
 /**
@@ -35,10 +42,13 @@ export const StakeAmountInput: React.FC<StakeAmountInputProps> = ({
   minimum_stake,
   maximum_stake,
   max,
+  tokenDecimals,
 }) => {
   const errorId = useId();
   const numericValue = Number(value);
   const isValidNumber = !isNaN(numericValue) && value.trim() !== '';
+  const humanReadablePreview =
+    tokenDecimals !== undefined && isValidNumber ? formatTokenAmount(value, tokenDecimals) : null;
 
   const effectiveMin = minimum_stake !== undefined ? minimum_stake : min;
   const effectiveMax = maximum_stake !== undefined ? maximum_stake : max;
@@ -95,6 +105,11 @@ export const StakeAmountInput: React.FC<StakeAmountInputProps> = ({
       {hasError && (
         <span id={errorId} role="alert" style={{ color: 'red', fontSize: '0.875rem' }}>
           {errorMessage}
+        </span>
+      )}
+      {humanReadablePreview !== null && !hasError && (
+        <span style={{ display: 'block', fontSize: '0.75rem', color: '#666' }}>
+          ≈ {humanReadablePreview} {tokenSymbol}
         </span>
       )}
     </div>

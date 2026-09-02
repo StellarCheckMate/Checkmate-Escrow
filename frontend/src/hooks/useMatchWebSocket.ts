@@ -82,6 +82,12 @@ export interface UseMatchWebSocketReturn {
   events: IndexedEvent[];
   /** Error message if status === 'error' */
   error: string | null;
+  /**
+   * Number of consecutive reconnection attempts made since the last
+   * successful connection. Resets to 0 on a successful 'welcome' handshake.
+   * Useful for showing "Reconnecting… (attempt N)" in the UI.
+   */
+  reconnectAttempts: number;
   /** Force a re-connection (e.g. after an error) */
   reconnect: () => void;
 }
@@ -133,6 +139,7 @@ export function useMatchWebSocket({
   const [latestEvent, setLatestEvent] = useState<IndexedEvent | null>(null);
   const [events, setEvents] = useState<IndexedEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [reconnectAttempts, setReconnectAttempts] = useState(0);
 
   // Adjust status synchronously during render when `enabled` flips to false,
   // instead of from inside an effect (avoids a cascading extra render).
@@ -210,6 +217,7 @@ export function useMatchWebSocket({
       switch (msg.type) {
         case 'welcome': {
           retryCountRef.current = 0; // reset back-off on successful handshake
+          setReconnectAttempts(0);
           setStatus('subscribing');
           const ids = matchIdsRef.current;
           const addrs = playerAddressesRef.current;
@@ -266,9 +274,10 @@ export function useMatchWebSocket({
       const backoff = Math.min(BASE_BACKOFF_MS * 2 ** retryCountRef.current, MAX_BACKOFF_MS);
       const jitter = Math.random() * 500;
       retryCountRef.current += 1;
+      setReconnectAttempts(retryCountRef.current);
 
       setStatus('reconnecting');
-      setError(`Disconnected (${reason}). Reconnecting in ${Math.round(backoff)}ms…`);
+      setError(`Disconnected (${reason}). Reconnecting in ${Math.round(backoff)}ms… (attempt ${retryCountRef.current})`);
 
       retryTimerRef.current = setTimeout(() => {
         if (enabledRef.current || reconnectRequestedRef.current) {
@@ -338,10 +347,11 @@ export function useMatchWebSocket({
     clearRetryTimer();
     reconnectRequestedRef.current = true;
     retryCountRef.current = 0;
+    setReconnectAttempts(0);
     setStatus('connecting');
     setError(null);
     connect();
   }, [connect, clearRetryTimer]);
 
-  return { status, latestEvent, events, error, reconnect };
+  return { status, latestEvent, events, error, reconnectAttempts, reconnect };
 }

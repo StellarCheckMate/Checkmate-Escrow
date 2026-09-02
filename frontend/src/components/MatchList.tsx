@@ -8,6 +8,8 @@ interface Match {
   token: string;
   status: 'pending' | 'active' | 'completed' | 'cancelled';
   platform: 'lichess' | 'chessdotcom';
+  /** Decimal places for `token`; when set, stakeAmount is formatted from raw units. */
+  tokenDecimals?: number;
 }
 
 interface MatchListProps {
