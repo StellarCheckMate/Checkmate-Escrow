@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { StakeAmountInput } from '../StakeAmountInput';
+import { LichessGamePicker } from './LichessGamePicker';
 
 export interface CreateMatchData {
   player2: string;
@@ -88,6 +89,9 @@ export function CreateMatchForm({ onSubmit }: CreateMatchFormProps) {
         <input id="gameId" value={form.gameId} onChange={set('gameId')} />
         {errors.gameId && <span role="alert">{errors.gameId}</span>}
       </div>
+      {form.platform === 'lichess' && (
+        <LichessGamePicker onSelect={gameId => setForm(f => ({ ...f, gameId }))} />
+      )}
       <div>
         <label htmlFor="platform">Platform</label>
         <select id="platform" value={form.platform} onChange={set('platform')}>

@@ -24,6 +24,7 @@ function App() {
 
   return (
     <main id="landing">
+      <ThemeToggle />
       <h1>Checkmate-Escrow</h1>
       <p className="tagline">Trustless chess wagering on Stellar — stake, play, get paid instantly.</p>
       <WalletConnector wallet={wallet} />

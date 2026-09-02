@@ -74,11 +74,53 @@ stellar contract invoke \
     --deployer "$DEPLOYER_ADDRESS"
 
 echo ""
-echo "✅ Deployment complete!"
+echo "🩺 Verifying deployment health..."
+
+RPC_URL=${SOROBAN_RPC_URL:-"https://soroban-testnet.stellar.org"}
+
+check_initialized() {
+    local name="$1"
+    local contract_id="$2"
+    local result
+
+    if ! result=$(stellar contract invoke \
+        --id "$contract_id" \
+        --source "$DEPLOYER_KEYPAIR" \
+        --network "$NETWORK" \
+        -- \
+        is_initialized 2>&1); then
+        echo "❌ Health check failed for $name contract ($contract_id):"
+        echo "   $result"
+        return 1
+    fi
+
+    if [[ "$result" != *"true"* ]]; then
+        echo "❌ $name contract ($contract_id) reports not initialized: $result"
+        return 1
+    fi
+
+    echo "   ✅ $name contract is initialized"
+    return 0
+}
+
+HEALTH_OK=1
+check_initialized "Oracle" "$ORACLE_CONTRACT_ID" || HEALTH_OK=0
+check_initialized "Escrow" "$ESCROW_CONTRACT_ID" || HEALTH_OK=0
+
+if [[ "$HEALTH_OK" -ne 1 ]]; then
+    echo ""
+    echo "❌ Deployment health check failed. One or more contracts are not initialized."
+    exit 1
+fi
+
+echo ""
+echo "✅ Deployment complete and verified healthy!"
 echo ""
 echo "📋 Contract Addresses:"
 echo "   Oracle Contract:  $ORACLE_CONTRACT_ID"
 echo "   Escrow Contract:  $ESCROW_CONTRACT_ID"
+echo ""
+echo "🌐 RPC URL: $RPC_URL"
 echo ""
 echo "🔧 Update your .env file with:"
 echo "   CONTRACT_ESCROW=$ESCROW_CONTRACT_ID"
