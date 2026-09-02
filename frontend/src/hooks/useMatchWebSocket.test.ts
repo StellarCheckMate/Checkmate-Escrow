@@ -364,4 +364,41 @@ describe('useMatchWebSocket', () => {
       expect(result.current.error).toMatch(/SUBSCRIBE_ERROR/);
     });
   });
+
+  describe('ping/pong keepalive', () => {
+    it('responds with a pong when the server sends a ping', async () => {
+      renderHook(() =>
+        useMatchWebSocket({ url: 'ws://localhost:8090' }),
+      );
+      const ws = MockWebSocket.lastInstance();
+      const sendSpy = vi.spyOn(ws, 'send');
+      act(() => ws.simulateOpen());
+      act(() => ws.simulateMessage({ type: 'welcome', protocol_version: 1, server_time: '' }));
+
+      act(() => ws.simulateMessage({ type: 'ping' }));
+
+      await waitFor(() => {
+        const pong = sendSpy.mock.calls.find(([data]) => {
+          const parsed = JSON.parse(data as string);
+          return parsed.type === 'pong';
+        });
+        expect(pong).toBeDefined();
+      });
+    });
+
+    it('does not change connection status when a ping is received', async () => {
+      const { result } = renderHook(() =>
+        useMatchWebSocket({ url: 'ws://localhost:8090' }),
+      );
+      const ws = MockWebSocket.lastInstance();
+      act(() => ws.simulateOpen());
+      act(() => ws.simulateMessage({ type: 'welcome', protocol_version: 1, server_time: '' }));
+
+      await waitFor(() => expect(result.current.status).toBe('ready'));
+
+      act(() => ws.simulateMessage({ type: 'ping' }));
+
+      expect(result.current.status).toBe('ready');
+    });
+  });
 });
