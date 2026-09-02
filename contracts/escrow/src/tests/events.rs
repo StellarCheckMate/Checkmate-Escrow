@@ -477,7 +477,7 @@ fn test_set_match_timeout_emits_event() {
 
 #[test]
 fn test_remove_allowed_token_emits_event() {
-    let (env, contract_id, _oracle, _player1, _player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, _player1, _player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
     client.add_allowed_token(&token);
@@ -495,8 +495,33 @@ fn test_remove_allowed_token_emits_event() {
     assert!(matched.is_some(), "token_remove event not emitted");
 
     let (_, _, data) = matched.unwrap();
-    let ev_token: Address = TryFromVal::try_from_val(&env, &data).unwrap();
+    let (ev_token, ev_caller): (Address, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_token, token);
+    assert_eq!(ev_caller, admin, "event payload must include the caller address");
+}
+
+/// Regression test for the admin audit-trail requirement: every admin
+/// mutation must include the calling admin's address in its event payload,
+/// not just the mutated resource.
+#[test]
+fn test_admin_events_include_caller_address() {
+    let (env, contract_id, _oracle, _player1, _player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_allowed_token(&token);
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("token_add").into_val(&env),
+    ];
+    let (_, _, data) = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics)
+        .expect("token_add event not emitted");
+    let (ev_token, ev_caller): (Address, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_token, token);
+    assert_eq!(ev_caller, admin, "token_add event must include caller address");
 }
 
 #[test]

@@ -174,6 +174,11 @@ pub enum ConfigError {
 /// - `ORACLE_QUEUE_DIR` (default: `./oracle-queue`)
 /// - `ORACLE_RECONCILIATION_INTERVAL_SECS` (default: 60)
 /// - `ORACLE_DEAD_LETTER_MAX_ENTRIES` (default: 1000; 0 = unlimited)
+/// - `ORACLE_ADMIN_ALLOWED_IPS` — comma-separated CIDR ranges permitted to
+///   reach `/admin/*` endpoints (default: empty, i.e. deny-all). See
+///   [`crate::middleware::ip_allowlist`].
+/// - `ORACLE_ENV` — set to `production` to enforce HTTPS-only
+///   `STELLAR_RPC_URL` at [`crate::soroban_client::SorobanClient`] startup.
 pub fn load() -> Result<OracleConfig, ConfigError> {
     let rpc_url = require_env("STELLAR_RPC_URL")?;
 

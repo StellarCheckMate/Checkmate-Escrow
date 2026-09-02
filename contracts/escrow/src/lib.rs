@@ -320,9 +320,13 @@ impl EscrowContract {
         if old_mode != new_mode {
             env.events().publish(
                 (Symbol::new(&env, "escrow"), Symbol::new(&env, "stablecoin_mode")),
-                new_mode,
+                (new_mode, admin.clone()),
             );
         }
+        env.events().publish(
+            (Symbol::new(&env, "admin"), Symbol::new(&env, "protocol_config_set")),
+            admin,
+        );
         Ok(())
     }
 
@@ -462,7 +466,7 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("token_add")),
-            token,
+            (token, admin),
         );
         Ok(())
     }
@@ -503,8 +507,10 @@ impl EscrowContract {
 
         Self::remove_allowed_token_from_list(&env, &token);
 
-        env.events()
-            .publish((Symbol::new(&env, "admin"), symbol_short!("tok_rm")), token);
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("tok_rm")),
+            (token, admin),
+        );
         Ok(())
     }
 
@@ -762,7 +768,7 @@ impl EscrowContract {
                 Symbol::new(&env, "admin"),
                 Symbol::new(&env, "tok_blacklist"),
             ),
-            token,
+            (token, reason, admin),
         );
         Ok(())
     }
@@ -1029,7 +1035,7 @@ impl EscrowContract {
                 Symbol::new(&env, "admin"),
                 Symbol::new(&env, "fee_tiers_set"),
             ),
-            tiers.len(),
+            (tiers.len(), admin),
         );
         Ok(())
     }

@@ -152,6 +152,13 @@ export class ConnectionManager {
       this.handleMessage(clientId, ws, data.toString());
     });
 
+    // Fires on every disconnect path — a clean close, an abrupt drop (network
+    // blip, tab closed, process crash), or a server-initiated terminate() from
+    // the heartbeat loop below. A client is never required to send an
+    // 'unsubscribe' message first, so subscription cleanup must not depend on
+    // one: without this, a client that just disappears would leave its
+    // entries in SubscriptionManager's matchIndex/playerIndex forever, a slow
+    // memory leak in a long-running server.
     ws.on('close', (code, reason) => {
       const reasonStr = reason.toString() || `code=${code}`;
       state.disconnectReason = reasonStr;

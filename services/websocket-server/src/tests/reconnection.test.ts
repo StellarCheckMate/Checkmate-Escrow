@@ -245,6 +245,58 @@ describe('WebSocket reconnection handling', () => {
     ws2.close();
   });
 
+  // ── 2b. Abrupt disconnect (no unsubscribe) still cleans up subscriptions ──
+  //
+  // Regression test: connectionManager.ts must remove a client's subscriptions
+  // on the raw WebSocket 'close' event, not only in response to an explicit
+  // 'unsubscribe' message. Otherwise a client that just drops off (network
+  // blip, tab closed, crash) leaves its entries in SubscriptionManager's
+  // matchIndex/playerIndex forever — a memory leak in long-running servers.
+
+  it('removes a client\'s subscriptions when it disconnects without unsubscribing', async () => {
+    // Client A subscribes to match 40 and disconnects abruptly (ws.close(),
+    // never sends an 'unsubscribe' message).
+    const clientA = await connectClient(wsPort);
+    await waitForMessage(clientA, 'welcome');
+    clientA.send(JSON.stringify({ type: 'subscribe', payload: { match_ids: [40] } }));
+    await waitForMessage(clientA, 'subscribed');
+
+    // Client B also subscribes to match 40 and stays connected.
+    const clientB = await connectClient(wsPort);
+    await waitForMessage(clientB, 'welcome');
+    clientB.send(JSON.stringify({ type: 'subscribe', payload: { match_ids: [40] } }));
+    await waitForMessage(clientB, 'subscribed');
+
+    expect(manager.connectionCount).toBe(2);
+
+    clientA.close();
+    await waitForClose(clientA);
+
+    // The disconnected client must be gone from the connection count...
+    expect(manager.connectionCount).toBe(1);
+
+    // ...and, more importantly, its match-40 subscription must no longer be
+    // in the routing index: broadcasting a match-40 event must not attempt
+    // to deliver to A's (now-closed) socket, and B must still receive it.
+    const received = await new Promise<{ event: IndexedEvent } | null>((resolve) => {
+      const timer = setTimeout(() => resolve(null), 3_000);
+      clientB.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString()) as { type: string; event?: IndexedEvent };
+        if (msg.type === 'event') {
+          clearTimeout(timer);
+          resolve(msg as { event: IndexedEvent });
+        }
+      });
+    });
+
+    indexer.setEvents([makeEvent({ match_id: 40, ledger_sequence: 7000 })]);
+    const delivered = await received;
+    expect(delivered).not.toBeNull();
+    expect(delivered?.event.match_id).toBe(40);
+
+    clientB.close();
+  });
+
   // ── 3. Multiple sequential reconnections all work correctly ───────────
 
   it('handles multiple sequential reconnections without leaking state', async () => {

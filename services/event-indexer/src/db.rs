@@ -595,6 +595,20 @@ impl Database {
             idx += 1;
         }
 
+        // `ledger_sequence` is stored as INTEGER; the domain range (u32) fits
+        // comfortably since Stellar ledger sequences stay well under 2^31.
+        if let Some(after) = filters.completed_after {
+            where_sql.push_str(&format!(" AND ledger_sequence >= ${idx}"));
+            params.push(Box::new(after as i32));
+            idx += 1;
+        }
+
+        if let Some(before) = filters.completed_before {
+            where_sql.push_str(&format!(" AND ledger_sequence <= ${idx}"));
+            params.push(Box::new(before as i32));
+            idx += 1;
+        }
+
         // ── Total (before pagination) ─────────────────────────────────────
         let count_sql = format!("SELECT COUNT(*)::BIGINT FROM events{}", where_sql);
         let count_refs: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params

@@ -44,6 +44,7 @@ use crate::{
         AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters,
         TokenAnalytics,
     },
+    metrics,
     request_id,
     rpc::SorobanRpcClient,
     transactions::{
@@ -201,6 +202,12 @@ pub struct AnalyticsQuery {
 pub struct TransactionHistoryQuery {
     pub from_date: Option<String>,
     pub to_date: Option<String>,
+    /// Inclusive lower bound on the ledger sequence a matched transaction's
+    /// event was recorded at. Used for "matches completed between ledger X
+    /// and ledger Y" audit queries.
+    pub completed_after: Option<String>,
+    /// Inclusive upper bound on the ledger sequence.
+    pub completed_before: Option<String>,
     pub limit: Option<String>,
     pub offset: Option<String>,
     /// Accepted as either `type` (documented) or `tx_type`.
@@ -260,6 +267,7 @@ pub fn build_router(
     };
     Router::new()
         .route("/health", get(health_check))
+        .route("/metrics", get(metrics_handler))
         .route("/api/docs", get(api_docs_ui))
         .route("/api/openapi.yaml", get(api_openapi_yaml))
         .route("/events", get(get_events))
@@ -383,6 +391,27 @@ async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<Health
             cache_shared,
         }),
     )
+}
+
+/// `GET /metrics` — Prometheus text-format metrics scrape endpoint.
+///
+/// Exposes `indexer_matches_total`, `indexer_rpc_lag_seconds` and
+/// `indexer_cache_hit_ratio` (plus standard process metrics when the
+/// `process` feature is enabled) in the text/plain; version=0.0.4 format
+/// expected by Prometheus. The cache hit ratio is computed from the live
+/// counters on every scrape rather than tracked incrementally, so it is
+/// always exact.
+async fn metrics_handler(State(state): State<AppState>) -> Response {
+    metrics::set_cache_hit_ratio(state.api_cache.stats().hit_rate());
+    let body = metrics::render();
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
 }
 
 /// `GET /events` – query events with optional filters.
@@ -655,10 +684,14 @@ async fn get_pending_matches(
 ///
 /// `/matches/:match_id` is the frontend-facing alias of `/match/:match_id`.
 ///
-/// Cached for 5 seconds and invalidated eagerly on any contract event for this
-/// match, so the TTL only bounds staleness for matches nothing is happening to.
-/// Only successful lookups are cached — a `404` for a match that is about to be
-/// indexed must not be sticky.
+/// Cached with a state-aware TTL (see [`api_cache::ttl_for_status`]) and
+/// invalidated eagerly on any contract event for this match, so the TTL only
+/// bounds staleness for matches nothing is happening to. `Active` matches get
+/// a short TTL (default 5s, `INDEXER_ACTIVE_MATCH_CACHE_TTL_SECS`) since
+/// players are watching them live; terminal matches (`Completed`,
+/// `Cancelled`, `Expired`) get a much longer one since they never change
+/// again. Only successful lookups are cached — a `404` for a match that is
+/// about to be indexed must not be sticky.
 async fn get_match_info(
     State(state): State<AppState>,
     Path(match_id): Path<u64>,
@@ -678,10 +711,8 @@ async fn get_match_info(
 
     match state.db.build_match_info(match_id).await {
         Ok(Some(match_info)) => {
-            state
-                .api_cache
-                .set_json(&cache_key, &match_info, api_cache::match_ttl())
-                .await;
+            let ttl = api_cache::ttl_for_status(&match_info.status);
+            state.api_cache.set_json(&cache_key, &match_info, ttl).await;
             (
                 StatusCode::OK,
                 Json(ApiResponse {
@@ -842,6 +873,22 @@ pub fn build_transaction_filters(
     }
 
     validation::validate_date_range(filters.from_date, filters.to_date)?;
+
+    if let Some(raw) = non_empty(&query.completed_after) {
+        filters.completed_after = Some(validation::validate_ledger_sequence(
+            "completed_after",
+            raw,
+        )?);
+    }
+
+    if let Some(raw) = non_empty(&query.completed_before) {
+        filters.completed_before = Some(validation::validate_ledger_sequence(
+            "completed_before",
+            raw,
+        )?);
+    }
+
+    validation::validate_ledger_range(filters.completed_after, filters.completed_before)?;
 
     filters.limit = match non_empty(&query.limit) {
         Some(raw) => validation::validate_limit("limit", raw)?,

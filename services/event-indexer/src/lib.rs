@@ -6,6 +6,7 @@ pub mod config;
 pub mod db;
 pub mod id_gen;
 pub mod leader;
+pub mod metrics;
 pub mod models;
 pub mod request_id;
 pub mod rpc;

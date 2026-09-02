@@ -1,37 +1,68 @@
-import { useMatch } from '../../hooks/useMatch';
-import { MatchDetailSkeleton } from './MatchDetailSkeleton';
+import { useState } from 'react';
 import { MatchStatusBadge } from './MatchStatusBadge';
+import { formatTokenAmount } from '../../utils/tokenFormat';
 
-interface MatchDetailProps {
-  matchId: number | null;
+export interface MatchDetailProps {
+  matchId: number;
+  player1: string;
+  player2: string;
+  stakeAmount: string;
+  token: string;
+  status: 'pending' | 'active' | 'completed' | 'cancelled';
+  platform: 'lichess' | 'chessdotcom';
+  /** Decimal places for `token`; when set, stakeAmount is formatted from raw units. */
+  tokenDecimals?: number;
 }
 
-export function MatchDetail({ matchId }: MatchDetailProps) {
-  const { match, loading, error } = useMatch(matchId);
+/**
+ * Builds the shareable deep-link URL for a given match, e.g. `/match/1234`.
+ * Exported for reuse/testing outside of the component's click handler.
+ */
+export function buildMatchLink(matchId: number, origin: string = window.location.origin): string {
+  return `${origin}/match/${matchId}`;
+}
 
-  if (loading) {
-    return <MatchDetailSkeleton />;
-  }
+export function MatchDetail({
+  matchId,
+  player1,
+  player2,
+  stakeAmount,
+  token,
+  status,
+  platform,
+  tokenDecimals,
+}: MatchDetailProps) {
+  const [copied, setCopied] = useState(false);
+  const displayStake =
+    tokenDecimals !== undefined ? formatTokenAmount(stakeAmount, tokenDecimals) : stakeAmount;
 
-  if (error) {
-    return <p role="alert">{error}</p>;
-  }
-
-  if (!match) {
-    return <p>No match selected.</p>;
-  }
+  const handleCopyLink = async () => {
+    const link = buildMatchLink(matchId);
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard API unavailable (e.g. insecure context) - fail silently,
+      // the button remains usable for a retry.
+    }
+  };
 
   return (
-    <div className="match-detail">
-      <h2>Match #{match.match_id}</h2>
-      <div className="match-detail-players">
-        <span>{match.player1}</span>
-        <span> vs </span>
-        <span>{match.player2}</span>
-      </div>
-      <MatchStatusBadge status={match.status as 'pending' | 'active' | 'completed' | 'cancelled'} />
-      {match.stake_amount && <p>Stake: {match.stake_amount} {match.token}</p>}
-      {match.winner && <p>Winner: {match.winner}</p>}
-    </div>
+    <section aria-label={`Match ${matchId} details`}>
+      <header>
+        <h2>Match #{matchId}</h2>
+        <MatchStatusBadge status={status} />
+      </header>
+      <dl>
+        <dt>Player 1</dt><dd>{player1}</dd>
+        <dt>Player 2</dt><dd>{player2}</dd>
+        <dt>Stake</dt><dd>{displayStake} {token}</dd>
+        <dt>Platform</dt><dd>{platform === 'lichess' ? 'Lichess' : 'Chess.com'}</dd>
+      </dl>
+      <button type="button" onClick={handleCopyLink}>
+        {copied ? 'Link copied!' : 'Copy Link'}
+      </button>
+    </section>
   );
 }

@@ -24,7 +24,9 @@ scrape_configs:
     metrics_path: /metrics
     scrape_interval: 15s
 
-  # Event indexer instances
+  # Event indexer instances — exposes indexer_matches_total,
+  # indexer_rpc_lag_seconds and indexer_cache_hit_ratio, plus standard
+  # process metrics, on /metrics.
   - job_name: "checkmate-event-indexer"
     static_configs:
       - targets:

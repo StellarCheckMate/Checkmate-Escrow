@@ -246,6 +246,44 @@ describe('useMatchWebSocket', () => {
         expect(allInstances.length).toBeGreaterThan(initialCount);
       });
     });
+
+    it('exposes reconnectAttempts and uses increasing delays across three attempts', async () => {
+      const { result } = renderHook(() => useMatchWebSocket({ url: 'ws://localhost:8090' }));
+      expect(result.current.reconnectAttempts).toBe(0);
+
+      const getInstances = () =>
+        (MockWebSocket as unknown as { instances: MockWebSocket[] }).instances;
+
+      // Attempt 1: close without ever connecting -> backoff = 1s (2^0 * 1000)
+      let ws = MockWebSocket.lastInstance();
+      act(() => ws.simulateClose());
+      await waitFor(() => expect(result.current.reconnectAttempts).toBe(1));
+
+      act(() => vi.advanceTimersByTime(999));
+      expect(getInstances().length).toBe(1); // not yet reconnected
+      act(() => vi.advanceTimersByTime(600)); // + jitter headroom
+      await waitFor(() => expect(getInstances().length).toBe(2));
+
+      // Attempt 2: backoff = 2s (2^1 * 1000)
+      ws = MockWebSocket.lastInstance();
+      act(() => ws.simulateClose());
+      await waitFor(() => expect(result.current.reconnectAttempts).toBe(2));
+
+      act(() => vi.advanceTimersByTime(1999));
+      expect(getInstances().length).toBe(2); // still waiting - longer delay than attempt 1
+      act(() => vi.advanceTimersByTime(600));
+      await waitFor(() => expect(getInstances().length).toBe(3));
+
+      // Attempt 3: backoff = 4s (2^2 * 1000)
+      ws = MockWebSocket.lastInstance();
+      act(() => ws.simulateClose());
+      await waitFor(() => expect(result.current.reconnectAttempts).toBe(3));
+
+      act(() => vi.advanceTimersByTime(3999));
+      expect(getInstances().length).toBe(3); // still waiting - longer delay than attempt 2
+      act(() => vi.advanceTimersByTime(600));
+      await waitFor(() => expect(getInstances().length).toBe(4));
+    });
   });
 
   describe('enabled flag', () => {
