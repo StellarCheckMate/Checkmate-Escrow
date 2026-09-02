@@ -129,6 +129,30 @@ pub enum DataKey {
     /// Ordered list of submission entries for a specific oracle address.
     /// Stores `Vec<OracleSubmissionEntry>` indexed by the oracle's address.
     OracleSubmissionList(Address),
+    /// Number of ledgers a slash must be staged for before it can be
+    /// finalized. Defaults to 0 (immediate finalization) if unset, which
+    /// preserves the pre-grace-period behavior.
+    SlashingGracePeriodLedgers,
+    /// A staged slash awaiting the grace period before it can be finalized,
+    /// keyed by (oracle_address, match_id).
+    PendingSlash(Address, u64),
+}
+
+/// A slash that has been staged but not yet finalized, pending
+/// `slashing_grace_period_ledgers` ledgers for governance to intervene via
+/// `admin_cancel_slash`.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PendingSlash {
+    pub oracle_address: Address,
+    pub match_id: u64,
+    pub slash_amount: i128,
+    pub token: Address,
+    /// Ledger sequence number at which the slash was staged.
+    pub staged_ledger: u32,
+    /// Ledger sequence number at which the slash becomes eligible for
+    /// finalization (`staged_ledger + slashing_grace_period_ledgers`).
+    pub eligible_ledger: u32,
 }
 
 /// A single entry in an oracle's per-address submission history.

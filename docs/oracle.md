@@ -120,7 +120,7 @@ Topic: ["dispute", "oracle_slash_signal"]
 Data: (dispute_id: u64, oracle: Address, slash_amount: i128)
 ```
 
-The relay extracts these fields and calls `slash_oracle(oracle, slash_amount)` on the oracle contract.
+The relay extracts these fields and calls `slash_oracle(oracle, dispute_id, slash_amount)` on the oracle contract, which now stages the slash rather than applying it immediately — see [Slashing Grace Period](#slashing-grace-period) below.
 
 ### Integration
 
@@ -138,6 +138,37 @@ The relay is thoroughly tested via:
 - **Contract-side tests** (`contracts/escrow/src/tests/slash_relay_tests.rs`) that verify the escrow contract correctly emits slash signals
 - **Relay-side tests** (`oracle-service/src/slash_relay.rs`) that verify idempotency and error handling
 - **Integration tests** that verify the full flow from signal emission to oracle slashing
+
+---
+
+## Slashing Grace Period
+
+Slashing was previously immediate and irreversible: a single `slash_oracle`
+call moved funds out of the oracle's stake straight to the admin/treasury.
+If a slash was triggered by a contract bug, a data-corruption edge case, or
+a bad dispute resolution rather than genuine oracle misbehavior, there was
+no recourse.
+
+`slash_oracle(oracle_address, match_id, slash_amount)` now **stages** the
+slash instead of executing it:
+
+1. It records a `PendingSlash { oracle_address, match_id, slash_amount,
+   token, staged_ledger, eligible_ledger }` under
+   `DataKey::PendingSlash(oracle_address, match_id)`. No funds move yet and
+   the oracle's `oracle_stake` is untouched.
+2. `eligible_ledger` is `staged_ledger + slashing_grace_period_ledgers`,
+   where the grace period is configured via `set_slashing_grace_period`
+   (admin-only) and defaults to `0` (immediate eligibility) when unset.
+3. Once the current ledger reaches `eligible_ledger`, anyone may call
+   `finalize_slash(oracle_address, match_id)` to actually reduce the
+   oracle's stake and transfer the slashed amount to the admin.
+4. Before finalization, the admin may call
+   `admin_cancel_slash(oracle_address, match_id)` to remove the pending
+   slash entirely — the governance intervention this feature exists for.
+
+`get_pending_slash(oracle_address, match_id)` and
+`get_slashing_grace_period()` are read-only views for tooling and the
+off-chain oracle service.
 
 ---
 

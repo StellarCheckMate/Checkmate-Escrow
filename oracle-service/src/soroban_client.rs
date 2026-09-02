@@ -67,8 +67,24 @@ impl SorobanClient {
         network_passphrase: String,
         contract_escrow_strkey: &str,
     ) -> Result<Self, OracleServiceError> {
+        // Fail fast if we're in production and someone has misconfigured
+        // `STELLAR_RPC_URL` to a plain HTTP endpoint — submitting oracle
+        // results over HTTP would allow an on-path attacker to MITM
+        // submissions.
+        let production_mode = std::env::var("ORACLE_ENV")
+            .map(|v| v.eq_ignore_ascii_case("production"))
+            .unwrap_or(false);
+        if production_mode && !rpc_url.starts_with("https://") {
+            return Err(OracleServiceError::Config(format!(
+                "STELLAR_RPC_URL must use HTTPS in production mode, got: {rpc_url}"
+            )));
+        }
+
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
+            // Belt-and-suspenders: refuse to send any request over plain
+            // HTTP at the transport layer too, regardless of mode.
+            .https_only(true)
             .build()
             .map_err(|e| OracleServiceError::Transport(e.to_string()))?;
 
@@ -780,6 +796,36 @@ mod tests {
             },
         ];
         ScVal::Map(Some(ScMap(entries.try_into().unwrap())))
+    }
+
+    #[test]
+    fn http_rpc_url_rejected_in_production_mode() {
+        std::env::set_var("ORACLE_ENV", "production");
+        let result = SorobanClient::new(
+            "http://soroban-testnet.stellar.org".to_string(),
+            "Test SDF Network ; September 2015".to_string(),
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        );
+        std::env::remove_var("ORACLE_ENV");
+        assert!(
+            result.is_err(),
+            "expected HTTP rpc_url to be rejected in production mode"
+        );
+    }
+
+    #[test]
+    fn https_rpc_url_accepted_in_production_mode() {
+        std::env::set_var("ORACLE_ENV", "production");
+        let result = SorobanClient::new(
+            "https://soroban-testnet.stellar.org".to_string(),
+            "Test SDF Network ; September 2015".to_string(),
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        );
+        std::env::remove_var("ORACLE_ENV");
+        assert!(
+            result.is_ok() || matches!(result, Err(OracleServiceError::XdrError(_))),
+            "https rpc_url should not be rejected for TLS reasons"
+        );
     }
 
     #[test]
