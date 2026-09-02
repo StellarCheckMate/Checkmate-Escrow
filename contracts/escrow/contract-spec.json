@@ -53,6 +53,8 @@
     { "name": "claim_vested_payout" },
     { "name": "register_oracle_with_stake" },
     { "name": "schedule_upgrade" },
-    { "name": "execute_upgrade" }
+    { "name": "execute_upgrade" },
+    { "name": "get_platform_stats" },
+    { "name": "get_player_stats" }
   ]
 }
