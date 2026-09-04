@@ -85,6 +85,15 @@ Example `operation` label values: `create_match`, `deposit`, `submit_result`, `c
 | `checkmate_oracle_api_duration_seconds` | Histogram | Latency of Lichess/Chess.com API calls |
 | `checkmate_stellar_rpc_health` | Gauge | `1` if Stellar RPC is reachable, `0` otherwise |
 
+### Event Indexer
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `indexer_matches_total` | Counter | Total contract events indexed since process start |
+| `indexer_rpc_lag_seconds` | Gauge | Estimated seconds between latest network ledger and last polled ledger |
+| `indexer_rpc_lag_ledgers` | Gauge | Ledger count between latest network ledger and last polled ledger; drives `IndexerLaggingAlert` when > 100 |
+| `indexer_cache_hit_ratio` | Gauge | API response cache hit rate (0.0–1.0) |
+
 ### Exporting Metrics from Contract Events
 
 The event indexer watches Soroban contract events and increments the counters above whenever it ingests an event. The mapping is:
@@ -229,6 +238,25 @@ All alerts are defined in [`monitoring/prometheus/alerts.yml`](../monitoring/pro
 | `OracleSubmissionErrorSpike` | Submission errors > 0.1/sec | Check oracle + Stellar RPC |
 | `LargeTVLDrop` | TVL drops > 50% in 5 min | Verify large batch of completions |
 | `StellarRPCDegraded` | RPC health != 1 for 3 min | Check RPC node; may delay payouts |
+| `IndexerLaggingAlert` | `indexer_rpc_lag_ledgers > 100` for 2 min | See [IndexerLaggingAlert](#indexerlaggingalert) |
+
+### IndexerLaggingAlert
+
+**Condition:** `indexer_rpc_lag_ledgers > 100` sustained for 2 minutes.
+
+**What it means:** The event-indexer is more than ~100 ledgers (≈ 8 minutes at 5 s/ledger) behind the chain tip. Players may see stale match states in the UI — a match that has been completed on-chain may still appear as `Active` until the indexer catches up.
+
+**Response steps:**
+
+1. Check the indexer process is running: `docker compose ps event-indexer` (or your orchestrator equivalent).
+2. Tail the indexer logs for errors: `docker compose logs --tail=100 event-indexer`.
+3. Verify the Soroban RPC endpoint is reachable from the indexer container:
+   ```bash
+   curl -s -o /dev/null -w "%{http_code}" $STELLAR_RPC_URL/health
+   ```
+4. Check disk I/O — a heavily loaded database can slow indexer throughput enough to cause lag.
+5. If the indexer recently restarted it will normally catch up automatically; monitor `indexer_rpc_lag_ledgers` in Grafana to confirm the value is decreasing.
+6. If lag persists or grows, consider scaling indexer replicas (see [event-indexer-scaling.md](event-indexer-scaling.md)).
 
 ### Connecting Alertmanager
 

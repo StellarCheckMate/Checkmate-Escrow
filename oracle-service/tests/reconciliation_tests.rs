@@ -511,3 +511,129 @@ async fn cursor_cleared_after_complete_cycle() {
         "cursor file should be removed after a successful reconciliation cycle"
     );
 }
+
+/// When `has_result` returns an RPC error for one match, that match is skipped
+/// for the current reconciliation cycle rather than panicking or aborting the
+/// entire pass. Other matches on the same page are still processed normally.
+///
+/// Regression test for issue #1363: the old `?` propagation turned any RPC
+/// error into a full reconciliation abort; the fix logs a warning and
+/// `continue`s to the next match instead.
+#[tokio::test]
+async fn has_result_rpc_error_skips_match_and_continues_reconciliation() {
+    // ── Mock server that returns an RPC error for has_result on match 40
+    // but a valid (false) answer for match 41. ────────────────────────────
+    let rpc_server = MockServer::start().await;
+
+    let fixtures = vec![
+        FixtureMatch {
+            match_id: 40,
+            game_id: "zzzz0000", // will be skipped — has_result errors
+            platform: "Lichess",
+        },
+        FixtureMatch {
+            match_id: 41,
+            game_id: "abcd1234", // should be enqueued normally
+            platform: "Lichess",
+        },
+    ];
+
+    // We set up two separate mock patterns:
+    // 1. A mock that handles get_active_matches_paginated and has_result for
+    //    match 41 normally.
+    // 2. A second mock that returns a JSON-RPC error response for has_result
+    //    when the match_id arg is 40.
+    Mock::given(method("POST"))
+        .respond_with({
+            let active_xdr = active_matches_xdr(&fixtures);
+            move |req: &Request| {
+                let body: serde_json::Value =
+                    req.body_json().expect("valid JSON-RPC body");
+                let rpc_method = body["method"].as_str().unwrap_or("");
+                match rpc_method {
+                    "getAccount" => ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({
+                            "jsonrpc": "2.0", "id": 1,
+                            "result": { "sequence": "100" }
+                        }),
+                    ),
+                    "simulateTransaction" => {
+                        let tx_b64 = body["params"]["transaction"]
+                            .as_str()
+                            .expect("transaction field");
+                        let (function_name, args) = invoked_function(tx_b64);
+                        match function_name.as_str() {
+                            "get_active_matches_paginated" => {
+                                ResponseTemplate::new(200).set_body_json(
+                                    simulate_result_json(&active_xdr),
+                                )
+                            }
+                            "has_result" => {
+                                // Return an RPC error for match 40 only.
+                                let ScVal::U64(match_id) =
+                                    args.first().expect("match_id arg")
+                                else {
+                                    panic!("expected U64 match_id");
+                                };
+                                if *match_id == 40 {
+                                    // Simulate an RPC-level error (e.g. timeout
+                                    // or internal server error).
+                                    ResponseTemplate::new(500).set_body_json(
+                                        serde_json::json!({
+                                            "jsonrpc": "2.0", "id": 1,
+                                            "error": {
+                                                "code": -32000,
+                                                "message": "simulated RPC timeout"
+                                            }
+                                        }),
+                                    )
+                                } else {
+                                    // match 41 → not yet resolved
+                                    ResponseTemplate::new(200).set_body_json(
+                                        simulate_result_json(&bool_xdr(false)),
+                                    )
+                                }
+                            }
+                            other => {
+                                panic!("unexpected simulateTransaction target: {other}")
+                            }
+                        }
+                    }
+                    _ => ResponseTemplate::new(200).set_body_json(
+                        serde_json::json!({
+                            "jsonrpc": "2.0", "id": 1,
+                            "result": { "status": "SUCCESS" }
+                        }),
+                    ),
+                }
+            }
+        })
+        .mount(&rpc_server)
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let dir_str = dir.path().to_str().unwrap();
+    let cfg = make_config(&rpc_server.uri(), dir_str);
+    let queue = PendingQueue::new(dir_str);
+
+    let poller = Poller::new(&cfg).unwrap();
+
+    // reconcile() must succeed (not return an error) even though has_result
+    // for match 40 failed with an RPC error.
+    poller.reconcile().await.expect("reconcile must not propagate has_result RPC errors");
+
+    let entries = queue.load().await.unwrap();
+
+    // Match 41 — for which has_result returned false — should be queued.
+    assert!(
+        entries.iter().any(|e| e.match_id == 41),
+        "match 41 should be enqueued after reconciliation"
+    );
+    // Match 40 — for which has_result errored — should have been skipped; it
+    // must NOT be in the queue (we don't know its state, so we treat it
+    // conservatively: skip and retry on the next cycle).
+    assert!(
+        !entries.iter().any(|e| e.match_id == 40),
+        "match 40 should be skipped when has_result returns an RPC error"
+    );
+}

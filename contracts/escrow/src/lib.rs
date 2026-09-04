@@ -46,8 +46,8 @@ use soroban_sdk::{
 use types::{
     BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeBondTier, DisputeState, FeeTier,
     Match, MatchState, OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform,
-    PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey, PlayerTier, ProtocolConfig,
-    SnapshotReason, TempOracleRotation, Winner,
+    PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey, PlayerRating, PlayerRatingKey,
+    PlayerTier, ProtocolConfig, SnapshotReason, TempOracleRotation, Winner,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -6502,5 +6502,88 @@ impl EscrowContract {
             fee
         };
         Ok(fee)
+    }
+
+    // ── FIDE / Platform ELO Rating Registry (issue #1434) ────────────────────
+
+    /// Register or update the oracle-verified ELO rating for a player on a
+    /// given chess platform.
+    ///
+    /// Requires oracle authorization — ratings cannot be self-reported, which
+    /// is the property that makes them safe to use for ELO-based matchmaking
+    /// (v4.0 roadmap).
+    ///
+    /// # Arguments
+    ///
+    /// * `player`   — Stellar address of the player whose rating is being recorded.
+    /// * `platform` — [`Platform::Lichess`] or [`Platform::ChessDotCom`].
+    /// * `username` — Platform username (e.g. `"Magnus"` on Lichess).
+    /// * `rating`   — Verified ELO / platform rating as a `u32`.
+    ///
+    /// # Events
+    ///
+    /// Emits `("rating", "registered")` with payload `(player, platform, rating)`.
+    pub fn register_player_rating(
+        env: Env,
+        caller: Address,
+        player: Address,
+        platform: Platform,
+        username: soroban_sdk::String,
+        rating: u32,
+    ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
+        // Only the configured oracle may submit ratings.
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        caller.require_auth();
+        if caller != oracle {
+            return Err(Error::Unauthorized);
+        }
+
+        let record = PlayerRating {
+            username,
+            rating,
+            recorded_ledger: env.ledger().sequence(),
+        };
+
+        let key = PlayerRatingKey::Rating(player.clone(), platform.clone());
+        env.storage().persistent().set(&key, &record);
+        env.storage().persistent().extend_ttl(
+            &key,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "rating"), symbol_short!("registered")),
+            (player, platform, rating),
+        );
+
+        Ok(())
+    }
+
+    /// Return the oracle-verified rating for `player` on `platform`, or
+    /// `None` if no rating has been registered yet.
+    ///
+    /// This is a view function — no authentication required.
+    pub fn get_player_rating(
+        env: Env,
+        player: Address,
+        platform: Platform,
+    ) -> Option<PlayerRating> {
+        let key = PlayerRatingKey::Rating(player, platform);
+        let record: Option<PlayerRating> = env.storage().persistent().get(&key);
+        if record.is_some() {
+            env.storage().persistent().extend_ttl(
+                &key,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+        }
+        record
     }
 }

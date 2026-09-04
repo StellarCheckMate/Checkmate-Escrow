@@ -366,8 +366,27 @@ impl Poller {
                     .inner
                     .soroban
                     .has_result(&self.inner.contract_oracle, m.match_id, &self.inner.pubkey)
-                    .await?;
-                if has_result {
+                    .await;
+
+                // If the oracle contract or RPC returns an error (e.g. timeout,
+                // network partition), skip this match for the current cycle and
+                // log a warning.  Using `?` here would abort the whole
+                // reconciliation pass, which is worse — we'd lose all matches
+                // later in the page.  The match will be retried on the next
+                // reconciliation cycle.
+                let already_resolved = match has_result {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!(
+                            match_id = m.match_id,
+                            "has_result RPC error during reconciliation (skipping match this cycle): {}",
+                            e
+                        );
+                        continue;
+                    }
+                };
+
+                if already_resolved {
                     continue;
                 }
 

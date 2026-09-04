@@ -226,3 +226,28 @@ groups:
           description: >
             The oracle service reports Stellar RPC health is degraded.
             Result submissions and fund transfers may be delayed.
+
+  # ── Event-Indexer Health ──────────────────────────────────────────────────
+  - name: checkmate_event_indexer
+    interval: 30s
+    rules:
+
+      # Indexer has fallen more than 100 ledgers behind the chain tip.
+      # At ~5 s/ledger this means the UI could be showing match state that is
+      # over 8 minutes stale — players may see an incorrect Pending/Active
+      # status after a result has already been submitted on-chain.
+      - alert: IndexerLaggingAlert
+        expr: indexer_rpc_lag_ledgers > 100
+        for: 2m
+        labels:
+          severity: warning
+          component: event_indexer
+        annotations:
+          summary: "Event-indexer is lagging more than 100 ledgers behind chain tip"
+          description: >
+            The event-indexer instance is {{ printf "%.0f" $value }} ledgers
+            behind the latest network ledger (threshold: 100, ~8 minutes at
+            5 s/ledger). Players may see stale match state in the UI until the
+            indexer catches up. Check RPC connectivity, disk I/O, and whether
+            the indexer process is healthy.
+          runbook_url: "https://github.com/StellarCheckMate/Checkmate-Escrow/blob/main/docs/monitoring-setup.md#indexerlaggingalert"
