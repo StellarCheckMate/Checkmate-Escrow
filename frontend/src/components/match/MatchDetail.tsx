@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { MatchStatusBadge } from './MatchStatusBadge';
 import { formatTokenAmount } from '../../utils/tokenFormat';
+import type { MatchReceiptProps } from './MatchReceiptPDF';
 
 export interface MatchDetailProps {
   matchId: number;
@@ -12,6 +13,11 @@ export interface MatchDetailProps {
   platform: 'lichess' | 'chessdotcom';
   /** Decimal places for `token`; when set, stakeAmount is formatted from raw units. */
   tokenDecimals?: number;
+  /**
+   * Receipt data required to generate a PDF payout receipt.
+   * Only relevant (and shown) when `status === 'completed'`.
+   */
+  receipt?: Omit<MatchReceiptProps, 'matchId'>;
 }
 
 /**
@@ -31,8 +37,10 @@ export function MatchDetail({
   status,
   platform,
   tokenDecimals,
+  receipt,
 }: MatchDetailProps) {
   const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const displayStake =
     tokenDecimals !== undefined ? formatTokenAmount(stakeAmount, tokenDecimals) : stakeAmount;
 
@@ -45,6 +53,18 @@ export function MatchDetail({
     } catch {
       // Clipboard API unavailable (e.g. insecure context) - fail silently,
       // the button remains usable for a retry.
+    }
+  };
+
+  const handleDownloadReceipt = async () => {
+    if (!receipt) return;
+    setDownloading(true);
+    try {
+      // Lazy-load the PDF module so it does not inflate the initial bundle.
+      const { downloadMatchReceipt } = await import('./MatchReceiptPDF');
+      await downloadMatchReceipt({ matchId, ...receipt });
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -63,6 +83,16 @@ export function MatchDetail({
       <button type="button" onClick={handleCopyLink}>
         {copied ? 'Link copied!' : 'Copy Link'}
       </button>
+      {status === 'completed' && receipt && (
+        <button
+          type="button"
+          onClick={handleDownloadReceipt}
+          disabled={downloading}
+          aria-label="Download payout receipt as PDF"
+        >
+          {downloading ? 'Generating…' : 'Download Receipt'}
+        </button>
+      )}
     </section>
   );
 }

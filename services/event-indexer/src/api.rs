@@ -155,6 +155,9 @@ pub struct EventQuery {
 pub struct MatchQuery {
     #[serde(default, deserialize_with = "empty_status_as_none")]
     pub status: Option<MatchStatus>,
+    /// Filter by Lichess or Chess.com game ID.  When set, only matches
+    /// associated with this `game_id` are returned (status filter is ignored).
+    pub game_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -528,16 +531,52 @@ async fn get_match_events(
     }
 }
 
-/// `GET /matches` – list matches, optionally filtered by status.
+/// `GET /matches` – list matches, optionally filtered by status or game_id.
 ///
-/// Cached for 10 seconds (`get_pending_matches` is the hot caller). Building the
-/// list fans out one `build_match_info` query per match, so this is the most
-/// expensive read the service serves and the one that benefits most from
-/// memoisation.
+/// - `?game_id=<id>` — returns the match(es) tied to the given Lichess or
+///   Chess.com game ID.  The `status` filter is ignored when `game_id` is set.
+/// - `?status=<status>` — returns all matches with the given status.
+/// - No params — returns all matches.
+///
+/// The match list is cached for 10 seconds when filtered by status.
+/// `game_id` lookups bypass the cache because they are precise and uncommon.
 async fn get_matches(
     State(state): State<AppState>,
     TypedQuery(query): TypedQuery<MatchQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
+    // ── game_id path ──────────────────────────────────────────────────────
+    if let Some(ref gid) = query.game_id {
+        if gid.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some("game_id must not be empty".to_string()),
+                }),
+            );
+        }
+        return match state.db.get_matches_by_game_id(gid).await {
+            Ok(matches) => (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(matches),
+                    error: None,
+                }),
+            ),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Database error: {}", e)),
+                }),
+            ),
+        };
+    }
+
+    // ── status path (existing behaviour, cached) ──────────────────────────
     let status = query.status;
     let cache_key = api_cache::matches_key(status.as_ref());
 

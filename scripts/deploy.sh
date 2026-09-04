@@ -11,6 +11,7 @@ usage() {
     echo "Options:"
     echo "  --skip-build  Skip contract compilation"
     echo "  --upgrade     Upgrade existing contracts (requires CONTRACT_ESCROW/CONTRACT_ORACLE)"
+    echo "  --canary      Canary deployment: deploy contract, run smoke tests, then proceed or abort"
     echo ""
     echo "Required env vars:"
     echo "  DEPLOYER_KEYPAIR   Stellar keypair name (default: deployer)"
@@ -29,10 +30,12 @@ NETWORK="${1:-}"
 
 SKIP_BUILD=false
 UPGRADE=false
+CANARY=false
 for arg in "${@:2}"; do
     case "$arg" in
         --skip-build) SKIP_BUILD=true ;;
         --upgrade)    UPGRADE=true ;;
+        --canary)     CANARY=true ;;
         *) echo "Unknown option: $arg"; usage ;;
     esac
 done
@@ -174,6 +177,31 @@ else
         --deployer "$DEPLOYER_ADDRESS"
 fi
 
+# ── Canary smoke tests ─────────────────────────────────────────────────────────
+if [[ "$CANARY" == true ]]; then
+    echo ""
+    echo "🐤 Canary mode: running smoke tests before proceeding..."
+    SMOKE_TEST_SCRIPT="scripts/smoke_test.sh"
+    if [[ ! -f "$SMOKE_TEST_SCRIPT" ]]; then
+        echo "❌ Smoke test script not found: $SMOKE_TEST_SCRIPT"; exit 1
+    fi
+
+    export CONTRACT_ESCROW="$ESCROW_CONTRACT_ID"
+    export CONTRACT_ORACLE="$ORACLE_CONTRACT_ID"
+
+    if bash "$SMOKE_TEST_SCRIPT" "$NETWORK"; then
+        echo "   ✅ Canary smoke tests passed — proceeding with full deployment"
+    else
+        echo ""
+        echo "❌ Canary smoke tests FAILED."
+        echo "   Contracts were deployed but smoke tests did not pass."
+        echo "   Oracle:  $ORACLE_CONTRACT_ID"
+        echo "   Escrow:  $ESCROW_CONTRACT_ID"
+        echo "   Fix the issue and re-run, or roll back by not pointing traffic at these contract IDs."
+        exit 1
+    fi
+fi
+
 # ── Post-deployment verification ───────────────────────────────────────────────
 echo ""
 echo "🔍 Verifying deployment..."
@@ -190,7 +218,7 @@ Checkmate-Escrow Deployment Report
 ===================================
 Timestamp:        $TIMESTAMP
 Network:          $NETWORK
-Mode:             $([ "$UPGRADE" == true ] && echo "upgrade" || echo "fresh")
+Mode:             $([ "$UPGRADE" == true ] && echo "upgrade" || echo "fresh")$([ "$CANARY" == true ] && echo " (canary-validated)" || echo "")
 Deployer address: $DEPLOYER_ADDRESS
 
 Contract Addresses
