@@ -155,9 +155,33 @@ pub struct EventQuery {
 pub struct MatchQuery {
     #[serde(default, deserialize_with = "empty_status_as_none")]
     pub status: Option<MatchStatus>,
-    /// Filter by Lichess or Chess.com game ID.  When set, only matches
-    /// associated with this `game_id` are returned (status filter is ignored).
-    pub game_id: Option<String>,
+    /// Offset-based pagination, kept for backwards compatibility. Ignored
+    /// when `after` or `before` is present.
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
+    pub offset: Option<i64>,
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
+    pub limit: Option<i64>,
+    /// Cursor pagination: return matches with `match_id` greater than this
+    /// value (i.e. the page *after* this cursor), ordered ascending.
+    #[serde(default, deserialize_with = "empty_u64_as_none")]
+    pub after: Option<u64>,
+    /// Cursor pagination: return matches with `match_id` less than this
+    /// value (i.e. the page *before* this cursor), ordered ascending.
+    #[serde(default, deserialize_with = "empty_u64_as_none")]
+    pub before: Option<u64>,
+}
+
+/// Same empty-value-means-absent rule as [`empty_i64_as_none`], for `u64`
+/// cursor fields (`after`/`before`).
+fn empty_u64_as_none<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Option<String> = Option::deserialize(deserializer)?;
+    match raw.as_deref() {
+        None | Some("") => Ok(None),
+        Some(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
+    }
 }
 
 #[derive(Deserialize)]
@@ -533,13 +557,21 @@ async fn get_match_events(
 
 /// `GET /matches` – list matches, optionally filtered by status or game_id.
 ///
-/// - `?game_id=<id>` — returns the match(es) tied to the given Lichess or
-///   Chess.com game ID.  The `status` filter is ignored when `game_id` is set.
-/// - `?status=<status>` — returns all matches with the given status.
-/// - No params — returns all matches.
+/// Supports two pagination modes:
+/// - Cursor-based (preferred): `after`/`before` take a `match_id` and return
+///   the page of results strictly greater-than/less-than that id, ordered
+///   ascending by `match_id`. This is stable under concurrent inserts,
+///   unlike offset pagination, since new rows can't shift the position of a
+///   cursor the way they shift a numeric offset.
+/// - Offset-based (legacy, kept for backwards compatibility): `offset`/
+///   `limit` slice into the ascending-by-`match_id` result set. Ignored if
+///   `after` or `before` is supplied.
 ///
-/// The match list is cached for 10 seconds when filtered by status.
-/// `game_id` lookups bypass the cache because they are precise and uncommon.
+/// Cached for 10 seconds (`get_pending_matches` is the hot caller). Building the
+/// list fans out one `build_match_info` query per match, so this is the most
+/// expensive read the service serves and the one that benefits most from
+/// memoisation. The cache key incorporates the pagination parameters so
+/// distinct pages don't collide.
 async fn get_matches(
     State(state): State<AppState>,
     TypedQuery(query): TypedQuery<MatchQuery>,
@@ -578,7 +610,14 @@ async fn get_matches(
 
     // ── status path (existing behaviour, cached) ──────────────────────────
     let status = query.status;
-    let cache_key = api_cache::matches_key(status.as_ref());
+    let cache_key = format!(
+        "{}:after={:?}:before={:?}:offset={:?}:limit={:?}",
+        api_cache::matches_key(status.as_ref()),
+        query.after,
+        query.before,
+        query.offset,
+        query.limit
+    );
 
     if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
         return (
@@ -592,16 +631,41 @@ async fn get_matches(
     }
 
     match state.db.get_matches_by_status(status.as_ref()).await {
-        Ok(matches) => {
+        Ok(mut matches) => {
+            matches.sort_by_key(|m| m.match_id);
+
+            let limit = query.limit.filter(|l| *l > 0).map(|l| l as usize);
+
+            let paged: Vec<MatchInfo> = if query.after.is_some() || query.before.is_some() {
+                let mut iter: Box<dyn Iterator<Item = MatchInfo>> =
+                    Box::new(matches.into_iter());
+                if let Some(after) = query.after {
+                    iter = Box::new(iter.filter(move |m| m.match_id > after));
+                }
+                if let Some(before) = query.before {
+                    iter = Box::new(iter.filter(move |m| m.match_id < before));
+                }
+                match limit {
+                    Some(l) => iter.take(l).collect(),
+                    None => iter.collect(),
+                }
+            } else {
+                let offset = query.offset.filter(|o| *o >= 0).map(|o| o as usize).unwrap_or(0);
+                match limit {
+                    Some(l) => matches.into_iter().skip(offset).take(l).collect(),
+                    None => matches.into_iter().skip(offset).collect(),
+                }
+            };
+
             state
                 .api_cache
-                .set_json(&cache_key, &matches, api_cache::pending_matches_ttl())
+                .set_json(&cache_key, &paged, api_cache::pending_matches_ttl())
                 .await;
             (
                 StatusCode::OK,
                 Json(ApiResponse {
                     success: true,
-                    data: Some(matches),
+                    data: Some(paged),
                     error: None,
                 }),
             )

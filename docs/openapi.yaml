@@ -2567,9 +2567,25 @@ paths:
       description: |
         Returns match summaries. Defaults to all statuses if no filter given.
 
-        **curl example:**
+        Supports two pagination modes:
+
+        - **Cursor-based (recommended)**: pass `after` (or `before`) with a
+          `match_id` value. Results are ordered ascending by `match_id` and
+          filtered to ids strictly greater than `after` / less than `before`.
+          Cursor pagination is consistent even when new matches are indexed
+          between page requests, since the cursor is a stable id rather than
+          a position that shifts as rows are inserted.
+        - **Offset-based (legacy)**: pass `offset`/`limit` to slice into the
+          ascending-by-`match_id` result set. Kept for backwards
+          compatibility; prefer cursor pagination for new integrations since
+          offsets can skip or duplicate rows when the underlying set changes
+          between requests. Ignored when `after` or `before` is present.
+
+        **curl examples:**
         ```bash
         curl "http://localhost:8080/matches?status=active"
+        curl "http://localhost:8080/matches?after=100&limit=20"
+        curl "http://localhost:8080/matches?offset=0&limit=20"
         ```
       operationId: getMatches
       servers:
@@ -2581,6 +2597,34 @@ paths:
           required: false
           schema:
             $ref: '#/components/schemas/MatchStatusIndexer'
+        - name: after
+          in: query
+          required: false
+          description: Cursor pagination - return matches with `match_id` greater than this value.
+          schema:
+            type: integer
+            format: int64
+        - name: before
+          in: query
+          required: false
+          description: Cursor pagination - return matches with `match_id` less than this value.
+          schema:
+            type: integer
+            format: int64
+        - name: limit
+          in: query
+          required: false
+          description: Max number of results to return (applies to both pagination modes).
+          schema:
+            type: integer
+            format: int64
+        - name: offset
+          in: query
+          required: false
+          description: Legacy offset pagination. Ignored if `after`/`before` is set.
+          schema:
+            type: integer
+            format: int64
       responses:
         '200':
           description: List of matches.
