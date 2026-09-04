@@ -1,0 +1,29 @@
+name: Check Docs Links
+
+# Only run this workflow when documentation files change so it does not block
+# unrelated pull requests or incur CI minutes on pure code changes.
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'demo/**/*.md'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'demo/**/*.md'
+
+jobs:
+  check-links:
+    name: Check Markdown Links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate local Markdown links
+        # scripts/check_links.sh scans docs/, demo/, and README.md for local
+        # Markdown links and exits non-zero if any target path is missing.
+        run: bash scripts/check_links.sh

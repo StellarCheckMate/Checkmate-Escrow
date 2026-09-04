@@ -242,6 +242,53 @@ stellar contract invoke --id $ORACLE_CONTRACT_ID --network <network> \
 
 ---
 
+## Canary Deployment
+
+The `--canary` flag enables a validation gate between contract deployment and
+full production traffic cut-over. In canary mode the script:
+
+1. Deploys and initialises the contracts as normal.
+2. Runs `scripts/smoke_test.sh` against the freshly deployed contracts.
+3. If the smoke tests **pass**, deployment is considered successful and the
+   script prints the contract addresses for traffic promotion.
+4. If the smoke tests **fail**, the script exits non-zero and prints the
+   contract IDs so you can inspect or roll back before any traffic is routed to
+   the new deployment.
+
+### Usage
+
+```bash
+# Deploy to testnet with canary validation
+./scripts/deploy.sh testnet --canary
+
+# Upgrade existing contracts on mainnet with canary validation
+./scripts/deploy.sh mainnet --upgrade --canary
+```
+
+### What the smoke test covers
+
+`scripts/smoke_test.sh` exercises the full match lifecycle end-to-end: it
+creates a match, deposits funds for both players, submits a result, and verifies
+the payout was issued. If any step fails the test exits non-zero, triggering the
+canary abort path.
+
+### When to use canary mode
+
+| Scenario | Recommended? |
+|---|---|
+| First mainnet deployment | ✅ Yes — catch misconfigurations before routing users |
+| Mainnet contract upgrade | ✅ Yes — verify new WASM behaves identically under live conditions |
+| Testnet development iteration | Optional — slower but safer |
+| Hotfix to a non-contract service | Not needed |
+
+### Environment variables
+
+No extra variables are required. The canary step re-uses the `CONTRACT_ESCROW`
+and `CONTRACT_ORACLE` values the deploy step just produced, so both are always
+set correctly.
+
+---
+
 ## Smoke Testing: End-to-End Verification
 
 After deployment, use the smoke test script to verify the entire match lifecycle works correctly on testnet before moving to production.

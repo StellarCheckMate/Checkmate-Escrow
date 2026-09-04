@@ -555,7 +555,7 @@ async fn get_match_events(
     }
 }
 
-/// `GET /matches` – list matches, optionally filtered by status.
+/// `GET /matches` – list matches, optionally filtered by status or game_id.
 ///
 /// Supports two pagination modes:
 /// - Cursor-based (preferred): `after`/`before` take a `match_id` and return
@@ -576,6 +576,39 @@ async fn get_matches(
     State(state): State<AppState>,
     TypedQuery(query): TypedQuery<MatchQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
+    // ── game_id path ──────────────────────────────────────────────────────
+    if let Some(ref gid) = query.game_id {
+        if gid.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some("game_id must not be empty".to_string()),
+                }),
+            );
+        }
+        return match state.db.get_matches_by_game_id(gid).await {
+            Ok(matches) => (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(matches),
+                    error: None,
+                }),
+            ),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Database error: {}", e)),
+                }),
+            ),
+        };
+    }
+
+    // ── status path (existing behaviour, cached) ──────────────────────────
     let status = query.status;
     let cache_key = format!(
         "{}:after={:?}:before={:?}:offset={:?}:limit={:?}",

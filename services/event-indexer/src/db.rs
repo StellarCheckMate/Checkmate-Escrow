@@ -112,6 +112,7 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_events_timestamp     ON events(timestamp);
             CREATE INDEX IF NOT EXISTS idx_events_ledger        ON events(ledger_sequence);
             CREATE INDEX IF NOT EXISTS idx_events_status        ON events(status);
+            CREATE INDEX IF NOT EXISTS idx_events_game_id       ON events(game_id);
             CREATE INDEX IF NOT EXISTS idx_events_not_invalidated
                 ON events(ledger_sequence DESC)
                 WHERE reorg_invalidated_at IS NULL;
@@ -459,6 +460,41 @@ impl Database {
                 .map(|r| r.get::<_, i64>(0))
                 .collect()
         };
+
+        let mut matches = Vec::new();
+        for id in match_ids {
+            if let Some(info) = self.build_match_info(id as u64).await? {
+                matches.push(info);
+            }
+        }
+        Ok(matches)
+    }
+
+    /// Get matches associated with a specific `game_id`.
+    ///
+    /// A `game_id` uniquely identifies a Lichess or Chess.com game.  The index
+    /// `idx_events_game_id` makes this lookup efficient even on large tables.
+    /// In practice there should be at most one match per `game_id`, but the
+    /// method returns a `Vec` to be safe and future-proof.
+    pub async fn get_matches_by_game_id(&self, game_id: &str) -> Result<Vec<MatchInfo>> {
+        let conn = self
+            .read_pool
+            .get()
+            .await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
+
+        let match_ids: Vec<i64> = conn
+            .query(
+                "SELECT DISTINCT match_id FROM events \
+                 WHERE game_id = $1 \
+                 ORDER BY match_id ASC",
+                &[&game_id],
+            )
+            .await
+            .map_err(|e| anyhow!("get_matches_by_game_id failed: {}", e))?
+            .iter()
+            .map(|r| r.get::<_, i64>(0))
+            .collect();
 
         let mut matches = Vec::new();
         for id in match_ids {
