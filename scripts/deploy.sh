@@ -11,6 +11,8 @@ usage() {
     echo "Options:"
     echo "  --skip-build  Skip contract compilation"
     echo "  --upgrade     Upgrade existing contracts (requires CONTRACT_ESCROW/CONTRACT_ORACLE)"
+    echo "  --rollback    Cancel an in-progress upgrade on the escrow contract"
+    echo "                (invokes cancel_upgrade; requires CONTRACT_ESCROW)"
     echo ""
     echo "Required env vars:"
     echo "  DEPLOYER_KEYPAIR   Stellar keypair name (default: deployer)"
@@ -29,13 +31,19 @@ NETWORK="${1:-}"
 
 SKIP_BUILD=false
 UPGRADE=false
+ROLLBACK=false
 for arg in "${@:2}"; do
     case "$arg" in
         --skip-build) SKIP_BUILD=true ;;
         --upgrade)    UPGRADE=true ;;
+        --rollback)   ROLLBACK=true ;;
         *) echo "Unknown option: $arg"; usage ;;
     esac
 done
+
+[[ "$UPGRADE" == true && "$ROLLBACK" == true ]] && {
+    echo "❌ --upgrade and --rollback are mutually exclusive"; exit 1
+}
 
 [[ "$NETWORK" != "testnet" && "$NETWORK" != "mainnet" ]] && {
     echo "❌ Network must be 'testnet' or 'mainnet'"; exit 1
@@ -94,10 +102,45 @@ if [[ "$NETWORK" == "mainnet" ]]; then
     }
 fi
 
-if [[ "$NETWORK" == "testnet" ]]; then
+if [[ "$NETWORK" == "testnet" && "$ROLLBACK" == false ]]; then
     echo ""
     read -r -p "Deploy to TESTNET? [y/N] " CONFIRM
     [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]] && { echo "Aborted."; exit 1; }
+fi
+
+# ── Rollback ───────────────────────────────────────────────────────────────────
+# If an upgrade fails partway through (e.g. the contract's state migration
+# panics after the new Wasm has been uploaded but before the upgrade is
+# finalized), the contract can be left pointing at a half-migrated state.
+# `cancel_upgrade` reverts the pending upgrade on-chain so the contract keeps
+# serving the previous, known-good code/state instead of staying stuck.
+# See docs/deployment.md for prerequisites and when this is safe to run.
+if [[ "$ROLLBACK" == true ]]; then
+    [[ -z "${CONTRACT_ESCROW:-}" ]] && { echo "❌ CONTRACT_ESCROW required for --rollback"; exit 1; }
+
+    echo ""
+    echo "⏪ ROLLBACK: cancelling pending upgrade on escrow contract"
+    echo "   Network:  $NETWORK"
+    echo "   Escrow:   $CONTRACT_ESCROW"
+    echo "   Deployer: $DEPLOYER_KEYPAIR"
+    echo ""
+    read -r -p "Type 'rollback' to confirm cancelling the pending upgrade: " CONFIRM
+    [[ "$CONFIRM" != "rollback" ]] && { echo "Aborted."; exit 1; }
+
+    stellar keys address "$DEPLOYER_KEYPAIR" &>/dev/null || {
+        echo "❌ Cannot access deployer keypair '$DEPLOYER_KEYPAIR'"; exit 1
+    }
+
+    stellar contract invoke \
+        --id "$CONTRACT_ESCROW" \
+        --source "$DEPLOYER_KEYPAIR" \
+        --network "$NETWORK" \
+        -- cancel_upgrade
+
+    echo ""
+    echo "✅ Rollback complete: pending upgrade cancelled on $CONTRACT_ESCROW"
+    echo "   Verify the contract is serving the previous version before retrying the upgrade."
+    exit 0
 fi
 
 # ── Build ──────────────────────────────────────────────────────────────────────

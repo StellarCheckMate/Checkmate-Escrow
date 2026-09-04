@@ -127,6 +127,45 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match_timeout
 
 ---
 
+## Upgrade Rollback
+
+If `scripts/deploy.sh --upgrade` fails partway through — for example the new
+Wasm uploads successfully but the contract's state migration panics before
+the upgrade is finalized — the escrow contract can be left pointing at a
+partially migrated state. `scripts/deploy.sh --rollback` cancels the pending
+upgrade so the contract keeps serving its previous, known-good code and
+state instead of staying stuck mid-migration.
+
+### Prerequisites
+
+- The escrow contract must expose `cancel_upgrade` (all contracts deployed
+  from this repo's `contracts/escrow` do). Rollback is not possible against
+  a contract build that predates this entry point.
+- `CONTRACT_ESCROW` must be set to the contract ID of the escrow instance
+  the failed upgrade targeted.
+- The deployer keypair used for `--rollback` must be authorized to call
+  `cancel_upgrade` on that contract (the same admin/deployer credentials
+  used for the original deploy/upgrade).
+- Rollback only cancels the *pending* upgrade recorded on-chain. It does not
+  undo any off-chain state (e.g. an already-updated `.env` with a new
+  contract ID) — update your own records back to the pre-upgrade values
+  separately.
+
+### Usage
+
+```bash
+CONTRACT_ESCROW=<escrow-contract-id> \
+DEPLOYER_KEYPAIR=deployer \
+ORACLE_ADMIN=<oracle-admin-address> \
+ESCROW_ADMIN=<escrow-admin-address> \
+./scripts/deploy.sh testnet --rollback
+```
+
+You'll be asked to type `rollback` to confirm before `cancel_upgrade` is
+invoked. `--upgrade` and `--rollback` cannot be combined in a single
+invocation. See `scripts/tests/test_deploy_rollback.sh` for a stubbed
+smoke test of this path that doesn't require network access.
+
 ## Mainnet Deployment Checklist
 
 Before launching on mainnet, verify each item below. These checks are intended to reduce operational risk and confirm that the deployment is configured for production use.

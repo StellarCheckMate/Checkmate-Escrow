@@ -1,4 +1,9 @@
 [advisories]
+# Pull advisories from the official RustSec database. cargo-deny and
+# cargo-audit both read from this source by default; listing it explicitly
+# documents the coverage and makes it easy to add mirrors/additional
+# databases later without hunting for the implicit default.
+db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
     # Transitive dependency of soroban-sdk's wasmi_core; the advisory itself
     # states no safe upgrade is available, and we don't control this path.

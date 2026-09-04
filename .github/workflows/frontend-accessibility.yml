@@ -51,14 +51,34 @@ jobs:
 
       # ── 6. Run Lighthouse CI ──────────────────────────────────────────────
       # Uses frontend/lighthouserc.cjs which asserts categories:accessibility >= 0.90.
-      # The step fails (exit code 1) if the score drops below the threshold,
-      # blocking the PR from merging.
+      # --failOnError makes lhci autorun exit non-zero not just on failed
+      # assertions but also on collection/upload errors, so a broken audit
+      # run can't silently be reported as a pass. The step fails (non-zero
+      # exit) if the score drops below the threshold, blocking the PR.
       - name: Run Lighthouse CI
-        run: lhci autorun --config=./lighthouserc.cjs
+        run: lhci autorun --config=./lighthouserc.cjs --failOnError
         env:
           LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
 
-      # ── 7. Upload Lighthouse report as artifact ───────────────────────────
+      # ── 7. Verify the threshold gate actually blocks regressions ──────────
+      # Regression test for this workflow itself: run lhci against a copy of
+      # the config with an unattainable threshold (1.01) and assert the
+      # command exits non-zero. If lhci's assertion step ever stops failing
+      # the build on a bad score, this step fails loudly instead of letting
+      # the regression land silently.
+      - name: Verify lhci fails when a threshold is lowered
+        run: |
+          cp lighthouserc.cjs lighthouserc.regression-test.cjs
+          sed -i "s/minScore: 0.9/minScore: 1.01/" lighthouserc.regression-test.cjs
+          if lhci autorun --config=./lighthouserc.regression-test.cjs --failOnError; then
+            echo "::error::lhci autorun exited 0 with an impossible threshold (1.01) - the CI gate is not blocking regressions."
+            exit 1
+          else
+            echo "lhci correctly failed the build when the accessibility threshold could not be met."
+          fi
+          rm -f lighthouserc.regression-test.cjs
+
+      # ── 8. Upload Lighthouse results ───────────────────────────
       - name: Upload Lighthouse results
         if: always()
         uses: actions/upload-artifact@v4
