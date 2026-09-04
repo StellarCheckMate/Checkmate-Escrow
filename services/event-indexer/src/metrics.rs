@@ -2,11 +2,12 @@
 //!
 //! ## Exposed metrics
 //!
-//! | Metric name                  | Type    | Description                                                |
-//! |-------------------------------|---------|--------------------------------------------------------------|
-//! | `indexer_matches_total`      | Counter | Total number of contract events indexed since process start. |
-//! | `indexer_rpc_lag_seconds`    | Gauge   | Estimated seconds between the latest network ledger and the last ledger this instance has polled. |
-//! | `indexer_cache_hit_ratio`    | Gauge   | Hit rate (0.0-1.0) of the API response cache ([`crate::api_cache`]). |
+//! | Metric name                    | Type    | Description                                                |
+//! |--------------------------------|---------|--------------------------------------------------------------|
+//! | `indexer_matches_total`        | Counter | Total number of contract events indexed since process start. |
+//! | `indexer_rpc_lag_seconds`      | Gauge   | Estimated seconds between the latest network ledger and the last ledger this instance has polled. |
+//! | `indexer_rpc_lag_ledgers`      | Gauge   | Ledger count between the latest network ledger and the last ledger this instance has polled. Fires `IndexerLaggingAlert` when > 100. |
+//! | `indexer_cache_hit_ratio`      | Gauge   | Hit rate (0.0-1.0) of the API response cache ([`crate::api_cache`]). |
 //!
 //! All metrics are registered on the default Prometheus registry and served at
 //! `GET /metrics` in the text/plain exposition format understood by Prometheus
@@ -15,10 +16,12 @@
 //! ## Usage
 //!
 //! Call [`inc_matches_indexed`] once per event successfully written by the
-//! poller ([`crate::rpc::poll_events`]), [`set_rpc_lag_seconds`] once per poll
-//! iteration, and [`set_cache_hit_ratio`] whenever `/metrics` is scraped (it
-//! reads the live counters off [`crate::api_cache::ApiCache::stats`], so there
-//! is no need for a background updater).
+//! poller ([`crate::rpc::poll_events`]), [`set_rpc_lag_from_ledger_gap`] once
+//! per poll iteration (it updates both `indexer_rpc_lag_seconds` and
+//! `indexer_rpc_lag_ledgers`), and [`set_cache_hit_ratio`] whenever `/metrics`
+//! is scraped (it reads the live counters off
+//! [`crate::api_cache::ApiCache::stats`], so there is no need for a background
+//! updater).
 
 use once_cell::sync::Lazy;
 use prometheus::{register_gauge, register_int_counter, Gauge, IntCounter, TextEncoder};
@@ -45,6 +48,20 @@ pub static INDEXER_RPC_LAG_SECONDS: Lazy<Gauge> = Lazy::new(|| {
     .expect("failed to register indexer_rpc_lag_seconds gauge")
 });
 
+/// Gauge: raw ledger count between the latest network ledger and the last
+/// ledger this instance has finished polling.
+///
+/// Alerting rule `IndexerLaggingAlert` fires when this value exceeds 100,
+/// indicating that the indexer has fallen more than ~8 minutes behind the
+/// chain tip and the UI may be showing stale match state.
+pub static INDEXER_RPC_LAG_LEDGERS: Lazy<Gauge> = Lazy::new(|| {
+    register_gauge!(
+        "indexer_rpc_lag_ledgers",
+        "Ledger count between the latest network ledger and the last polled ledger"
+    )
+    .expect("failed to register indexer_rpc_lag_ledgers gauge")
+});
+
 /// Gauge: hit rate (0.0-1.0) of the shared API response cache.
 pub static INDEXER_CACHE_HIT_RATIO: Lazy<Gauge> = Lazy::new(|| {
     register_gauge!(
@@ -67,12 +84,14 @@ pub fn inc_matches_indexed() {
     INDEXER_MATCHES_TOTAL.inc();
 }
 
-/// Set [`INDEXER_RPC_LAG_SECONDS`] from the gap (in ledgers) between the
-/// latest network ledger and the last ledger this instance polled.
+/// Set [`INDEXER_RPC_LAG_SECONDS`] and [`INDEXER_RPC_LAG_LEDGERS`] from the
+/// gap (in ledgers) between the latest network ledger and the last ledger this
+/// instance polled.
 #[inline]
 pub fn set_rpc_lag_from_ledger_gap(latest_ledger: u32, last_polled_ledger: u32) {
     let ledger_gap = latest_ledger.saturating_sub(last_polled_ledger) as f64;
     INDEXER_RPC_LAG_SECONDS.set(ledger_gap * STELLAR_LEDGER_CLOSE_SECS);
+    INDEXER_RPC_LAG_LEDGERS.set(ledger_gap);
 }
 
 /// Set [`INDEXER_CACHE_HIT_RATIO`] directly (already computed as hits / total).
@@ -106,12 +125,14 @@ mod tests {
     fn rpc_lag_reflects_the_ledger_gap() {
         set_rpc_lag_from_ledger_gap(1000, 995);
         assert_eq!(INDEXER_RPC_LAG_SECONDS.get(), 5.0 * STELLAR_LEDGER_CLOSE_SECS);
+        assert_eq!(INDEXER_RPC_LAG_LEDGERS.get(), 5.0);
     }
 
     #[test]
     fn rpc_lag_is_zero_when_caught_up() {
         set_rpc_lag_from_ledger_gap(1000, 1000);
         assert_eq!(INDEXER_RPC_LAG_SECONDS.get(), 0.0);
+        assert_eq!(INDEXER_RPC_LAG_LEDGERS.get(), 0.0);
     }
 
     #[test]
@@ -120,6 +141,15 @@ mod tests {
         // must not produce a negative lag.
         set_rpc_lag_from_ledger_gap(500, 600);
         assert_eq!(INDEXER_RPC_LAG_SECONDS.get(), 0.0);
+        assert_eq!(INDEXER_RPC_LAG_LEDGERS.get(), 0.0);
+    }
+
+    #[test]
+    fn rpc_lag_ledgers_exceeds_alert_threshold() {
+        // Verify that a gap > 100 ledgers is faithfully reported (the
+        // Prometheus alert rule `IndexerLaggingAlert` fires at > 100).
+        set_rpc_lag_from_ledger_gap(1200, 1000);
+        assert!(INDEXER_RPC_LAG_LEDGERS.get() > 100.0);
     }
 
     #[test]
@@ -136,6 +166,7 @@ mod tests {
         let output = render();
         assert!(output.contains("indexer_matches_total"));
         assert!(output.contains("indexer_rpc_lag_seconds"));
+        assert!(output.contains("indexer_rpc_lag_ledgers"));
         assert!(output.contains("indexer_cache_hit_ratio"));
     }
 }

@@ -352,6 +352,35 @@ pub enum PlayerFreezeKey {
     FrozenPlayers,
 }
 
+/// Storage keys for oracle-verified FIDE / platform ELO ratings registered
+/// via `register_player_rating`.
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// for the same reason as [`PlayerFreezeKey`]: `DataKey` is at its 50-variant
+/// XDR cap.
+#[contracttype]
+pub enum PlayerRatingKey {
+    /// Rating record keyed by (player address, platform).
+    /// Value: [`PlayerRating`].
+    Rating(Address, Platform),
+}
+
+/// An oracle-verified ELO / platform rating for a player.
+///
+/// Registered on-chain by the oracle via `register_player_rating` so that
+/// ELO-based matchmaking (v4.0 roadmap) can read it without trusting
+/// self-reported values.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlayerRating {
+    /// The player's username on the given platform (e.g. `"Magnus"` on Lichess).
+    pub username: String,
+    /// The player's ELO / platform rating at the time of oracle verification.
+    pub rating: u32,
+    /// Ledger sequence number when this rating was last recorded by the oracle.
+    pub recorded_ledger: u32,
+}
+
 /// The lifecycle event that triggered a balance snapshot.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

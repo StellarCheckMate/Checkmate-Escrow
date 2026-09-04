@@ -32,13 +32,19 @@ The act of a player transferring their `stake_amount` into the escrow contract (
 
 A match outcome (the `Draw` variant of the `Winner` enum) where neither player wins. Instead of paying the whole [pot](#pot) to one player, each player's [stake](#stake) is returned to them, and the match moves to [Completed](#completed).
 
-## Epoch
+## DisputeBond
+
+A collateral amount that a player must deposit when opening a dispute against a [PendingResult](#pendingresult). The bond is expressed as basis points of the match [stake](#stake) (default: 100 bp = 1 %). It is held in escrow while the dispute is under review and either refunded to the disputer (if the dispute is overturned, i.e. the oracle's result is overruled) or forfeited to the treasury (if the dispute is upheld, i.e. the oracle's result is confirmed). The bond mechanism deters frivolous disputes without blocking legitimate challenges. The global default is set via `DisputeBondBasisPoints` in contract storage; per-tier overrides are configured via `ProtocolConfig::dispute_bond_tier_schedule`. See `DisputeBondTier` in `contracts/escrow/src/types.rs` and `contracts/escrow/src/tests/dispute.rs`.
 
 A general blockchain term for a defined period or checkpoint used to group activity or coordinate state changes. Stellar itself does not expose a Checkmate-specific "epoch"; the network measures the passage of time in [ledgers](#ledger), and Checkmate-Escrow's time-based rules (such as match expiry and storage TTL) are expressed in ledger sequence numbers rather than epochs.
 
 ## Escrow
 
 The Soroban smart contract (and the funds it custodies) that holds both players' [stakes](#stake) from [deposit](#deposit) until the match reaches a terminal state. The escrow enforces the rules for creating matches, depositing, cancelling, expiring, and paying out, so that no party can withhold or redirect funds. This is the core contract of the project (`contracts/escrow`).
+
+## FeeTier
+
+A single entry in the admin-configured dynamic fee schedule. Each `FeeTier` specifies a `max_stake` (the upper bound of match stake this tier applies to) and `fee_basis_points` (the protocol fee charged as a fraction of the pot, where 100 basis points = 1 %). Tiers are stored in ascending `max_stake` order; the last tier acts as the open-ended catch-all for stakes that exceed all explicit thresholds. When no tier schedule is configured, the flat `protocol_fee_bps` from `ProtocolConfig` applies instead. Set the schedule via `set_fee_tiers`; inspect it via `get_protocol_config`. See the `FeeTier` struct in `contracts/escrow/src/types.rs` and `contracts/escrow/src/tests/fee_tiers.rs`.
 
 ## Freighter
 
@@ -76,11 +82,17 @@ The settlement transfer that happens when a match completes: the full [pot](#pot
 
 The initial [match](#match) state after `create_match`, while the contract awaits [deposits](#deposit). Zero, one, or both deposits may be present; the match stays Pending until both arrive (then [Active](#active)) or it is [Cancelled](#cancelled) via `cancel_match` or `expire_match`.
 
+## PendingResult
+
+A [match](#match) state introduced in v0.1.0 that sits between the oracle's result submission and the final [payout](#payout). When `submit_result` is called and the oracle's confidence in the result is below `DEFAULT_CONFIDENCE_THRESHOLD` (50 out of 100), the match transitions to `PendingResult` rather than immediately to [Completed](#completed). This opens a dispute window (`DisputePeriod` ledgers) during which a player may call `dispute_and_rollback_match` to contest the outcome. Once the dispute window elapses without a dispute (or a dispute is resolved), the match is finalized and payout executes. See `MatchState::PendingResult` in `contracts/escrow/src/types.rs` and the dispute flow in `contracts/escrow/src/tests/dispute.rs`.
+
 ## Pot
 
 The total amount held in escrow for an [Active](#active) match: `2 × stake`, i.e. both players' [stakes](#stake) combined. On a decisive result the entire pot is paid to the winner; on a [draw](#draw) it is split back to each player as their original stake.
 
-## Soroban
+## PlayerTier
+
+A progression tier assigned to a player based on their number of completed matches. There are four tiers — `Bronze`, `Silver`, `Gold`, and `Platinum` — each of which unlocks a higher allowed [stake](#stake) range. A new player starts at `Bronze` (1–100 token units) and advances to `Silver` after 3 completed matches, `Gold` after 6, and `Platinum` after 10, with `Platinum` having no upper stake bound. The tier system prevents new accounts from immediately wagering large amounts, reducing economic risk while the player's track record is established. Tier enforcement is applied in `create_match` and the tier thresholds are defined as constants in `contracts/escrow/src/lib.rs`. See `PlayerTier` in `contracts/escrow/src/types.rs` and `contracts/escrow/src/tests/tier.rs`.
 
 Stellar's smart contract platform. Contracts are written in Rust, compiled to WebAssembly (WASM), and deployed to the Stellar network. Checkmate-Escrow's escrow and oracle contracts are Soroban contracts (see `contracts/`).
 
