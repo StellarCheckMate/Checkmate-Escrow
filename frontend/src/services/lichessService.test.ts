@@ -31,7 +31,7 @@ describe('lichessService', () => {
   });
 
   test('fetches and normalizes recent games for a username', async () => {
-    global.fetch = vi.fn().mockResolvedValue({
+    globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       statusText: 'OK',
       text: () => Promise.resolve(NDJSON_RESPONSE),
@@ -45,14 +45,14 @@ describe('lichessService', () => {
   });
 
   test('returns an empty array for a blank username', async () => {
-    global.fetch = vi.fn();
+    globalThis.fetch = vi.fn();
     const games = await fetchRecentLichessGames('   ');
     expect(games).toEqual([]);
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   test('throws when the Lichess API responds with an error', async () => {
-    global.fetch = vi.fn().mockResolvedValue({
+    globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       statusText: 'Not Found',
     }) as unknown as typeof fetch;

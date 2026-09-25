@@ -60,15 +60,12 @@ export const StakeAmountInput: React.FC<StakeAmountInputProps> = ({
     if (!isValidNumber) {
       hasError = true;
       errorMessage = 'Amount must be a number';
-    } else if (minimum_stake !== undefined && numericValue < minimum_stake) {
+    } else if (numericValue < effectiveMin) {
       hasError = true;
-      errorMessage = `Amount must be at least ${minimum_stake}`;
+      errorMessage = `Amount must be at least ${effectiveMin}`;
     } else if (effectiveMax !== undefined && numericValue > effectiveMax) {
       hasError = true;
       errorMessage = `Amount cannot exceed ${effectiveMax}`;
-    } else if (minimum_stake === undefined && numericValue <= min) {
-      hasError = true;
-      errorMessage = `Amount must be greater than ${min}`;
     }
   }
 

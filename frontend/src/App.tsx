@@ -1,5 +1,6 @@
 import { useWallet } from './hooks/useWallet'
 import { WalletConnector } from './components/wallet/WalletConnector'
+import { ThemeToggle } from './components/ThemeToggle'
 import { AdminPanel } from './pages/AdminPanel'
 import { MatchDetailPage } from './pages/MatchDetailPage'
 import './App.css'
