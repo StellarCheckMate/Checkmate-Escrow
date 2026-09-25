@@ -406,6 +406,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `admin_unfreeze_player` | `(player: Address)` | Admin-only. Reverses `admin_freeze_player`, restoring the player's ability to create matches and deposit. |
 | `is_player_frozen` | `(player: Address) -> bool` | Returns whether `player` is currently frozen. |
 | `get_frozen_players` | `() -> Vec<Address>` | Returns all currently frozen player addresses. |
+| `admin_list_frozen_players` | `(caller: Address) -> Result<Vec<Address>, Error>` | Admin-only. Returns the list of all currently frozen player addresses. Requires admin auth; returns `Error::Unauthorized` if the caller is not the admin. Equivalent to `get_frozen_players` but enforces authorization, suitable for admin tooling that must prove caller identity on-chain. |
 
 #### Token Allowlist
 
@@ -416,6 +417,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `is_token_allowed` | `(token: Address) -> bool` | Returns whether `token` is accepted (always `true` if enforcement is not yet enabled). |
 | `is_allowlist_enforced` | `() -> bool` | Returns whether allowlist enforcement has been turned on. |
 | `get_allowed_tokens` | `() -> Vec<Address>` | Returns all currently allowlisted tokens. |
+| `get_allowed_tokens_paginated` | `(offset: u32, limit: u32) -> Vec<Address>` | Paginated version of `get_allowed_tokens`. Returns up to `limit` allowlisted token addresses starting at `offset`. Use for contracts with large allowlists to avoid unbounded storage reads. |
 
 #### Match Management
 
@@ -427,9 +429,11 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_match` | `(match_id: u64) -> Match` | Returns the current state of a match. |
 | `cancel_match` | `(match_id: u64, caller: Address)` | Cancels a `Pending` match and refunds any deposits (minus the configured cancellation fee, if any). |
 | `expire_match` | `(match_id: u64)` | Anyone may call once a `Pending` match's timeout has elapsed since `created_ledger`; cancels and refunds like `cancel_match`. |
+| `bulk_expire_matches` | `(match_ids: Vec<u64>) -> Vec<u64>` | Admin-only. Expires multiple pending matches in a single call. Each match is attempted independently; matches that cannot be expired (wrong state, not yet timed out) are silently skipped. Returns the `Vec` of match IDs that were successfully expired. |
 | `pause_match` | `(match_id: u64, caller: Address)` | Either player may pause an `Active` or `PendingResult` match. |
 | `resume_match` | `(match_id: u64, caller: Address)` | Either player may resume a `Paused` match, restoring its prior state and accumulating `total_pause_duration`. |
 | `heartbeat_match` | `(match_id: u64, player: Address) -> Result<(), Error>` | Either player refreshes `Match.last_heartbeat` to the current ledger timestamp on an `Active` match. Pure timestamp update — no token movement — used to keep `dispute_and_rollback_match`'s 24-hour window alive during long games. |
+| `update_heartbeat` | `(match_id: u64, caller: Address) -> Result<(), Error>` | Alias for `heartbeat_match`. Either player may call on an `Active` match to refresh `Match.last_heartbeat` to the current ledger timestamp without moving any tokens. Requires `caller` auth; returns `Error::Unauthorized` if the caller is not `player1` or `player2`. |
 | `dispute_and_rollback_match` | `(match_id: u64, disputer: Address, reason: String) -> Result<(), Error>` | Either player may roll back an `Active` match to `Cancelled` with a full refund (no cancellation fee) if called within `ROLLBACK_WINDOW_SECONDS` (24h) of `Match.last_heartbeat`. A player-friendly escape hatch for a stalled/disconnected opponent, distinct from the oracle-result dispute flow. |
 
 #### Escrow
@@ -437,6 +441,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `deposit` | `(match_id: u64, player: Address)` | Deposits the caller's stake into escrow. |
+| `deposit_batch` | `(entries: Vec<(u64, Address)>) -> Result<Vec<Option<Error>>, Error>` | Deposits stakes for multiple (match, player) pairs in a single call. Returns `Error::ContractPaused` immediately if the contract is paused. Otherwise each entry is processed independently — a failure on one does not stop the rest. The returned `Vec` has one entry per input, in order: `None` on success, `Some(Error)` on failure for that entry. |
 | `get_escrow_balance` | `(match_id: u64) -> i128` | Returns the total escrowed balance for a match. |
 | `is_funded` | `(match_id: u64) -> bool` | Returns `true` when both players have deposited. |
 | `get_depositor_count` | `(match_id: u64) -> u32` | Returns how many of the two players (0, 1, or 2) have deposited. |
@@ -458,6 +463,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_dispute_period` | `(&Env) -> u32` | Returns the currently configured dispute period. |
 | `get_dispute` | `(dispute_id: u64) -> Dispute` | Returns the stored dispute record. |
 | `get_match_dispute_id` | `(match_id: u64) -> u64` | Returns the dispute ID associated with a match, if one has been raised. |
+| `get_dispute_details` | `(match_id: u64) -> Result<Dispute, Error>` | Returns the full `Dispute` record for the dispute associated with `match_id`. Returns `Error::DisputeNotFound` if no dispute has been raised for that match. Convenience wrapper around `get_dispute` that looks up the dispute ID from the match. |
 | `mark_dispute_for_oracle_slash` | `(dispute_id: u64, slash_amount: i128) -> Result<(), Error>` | Admin-only. For a `ResolvedOverturned` dispute, emits an `oracle_slash_signal` event containing the oracle address and slash amount. An off-chain relay service automatically listens for this event and invokes the oracle contract's `slash_oracle` to execute the penalty. See [Oracle Slash Relay](oracle.md#oracle-slash-relay) for details. |
 | `set_dispute_bond_basis_points` | `(basis_points: u32) -> Result<(), Error>` | Admin-only. Sets the dispute bond requirement as basis points of match stake (1–10,000). |
 | `get_dispute_bond_basis_points` | `() -> u32` | Returns the current dispute bond basis points (default `DEFAULT_DISPUTE_BOND_BASIS_POINTS`). |
