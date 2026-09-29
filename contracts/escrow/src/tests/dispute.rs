@@ -1508,3 +1508,102 @@ fn test_dispute_bond_tier_schedule_falls_back_to_global_when_empty() {
     // Global 100 bps → 100 * 100 / 10_000 = 1
     assert_eq!(client.get_dispute(&dispute_id).dispute_bond, 1);
 }
+
+// ── Issue #1619: Zero-vote dispute resolution (quorum-not-met path) ───────────
+
+/// Raise a dispute, cast **no votes at all**, advance past the voting deadline,
+/// and assert that `resolve_dispute_by_vote` returns `Error::QuorumNotMet`.
+///
+/// This is the canonical regression test for the locked-funds bug: without a
+/// resolution path for the zero-vote case the escrow funds in a `PendingResult`
+/// match would be permanently locked once the voting window closes.
+#[test]
+fn test_resolve_dispute_zero_votes_returns_quorum_not_met() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id =
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "zrvot001");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+
+    // Player2 raises a dispute. No one casts a single vote.
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "abc12345"));
+
+    // Confirm dispute is active and both vote tallies are zero.
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.state, DisputeState::Active);
+    assert_eq!(dispute.yes_votes, 0);
+    assert_eq!(dispute.no_votes, 0);
+
+    // Advance past the voting deadline without any votes being cast.
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+
+    // With zero total votes the quorum threshold (even if 0) should be
+    // evaluated; the contract must NOT let the match remain forever locked.
+    // The expected outcome is Error::QuorumNotMet so that off-chain tooling
+    // can detect the stall and escalate to admin resolution.
+    let result = client.try_resolve_dispute_by_vote(&dispute_id);
+    assert_eq!(
+        result,
+        Err(Ok(Error::QuorumNotMet)),
+        "zero-vote dispute must return QuorumNotMet, not silently lock funds"
+    );
+
+    // The match must remain in PendingResult (not silently completed) so that
+    // an admin or expiry path can still act on it — funds are not lost.
+    let m = client.get_match(&match_id);
+    assert_eq!(
+        m.state,
+        MatchState::PendingResult,
+        "match must stay in PendingResult when quorum is not met"
+    );
+
+    // Escrow balance must still be non-zero: the locked-funds bug being
+    // tested manifests as funds permanently stuck in the contract.
+    assert!(
+        client.get_escrow_balance(&match_id) > 0,
+        "escrow balance must be non-zero while match is in PendingResult"
+    );
+}
+
+/// Zero-vote path with an explicit non-zero quorum threshold: verifies that
+/// the quorum check fires even when the admin has set a threshold above zero.
+#[test]
+fn test_resolve_dispute_zero_votes_with_explicit_quorum_threshold() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // 50 % quorum — any positive threshold should block a zero-vote resolution.
+    client.set_quorum_basis_points(&5000);
+
+    let match_id =
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "zrvot002");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+
+    // Dispute raised; no votes cast.
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "def67890"));
+
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+
+    let result = client.try_resolve_dispute_by_vote(&dispute_id);
+    assert_eq!(
+        result,
+        Err(Ok(Error::QuorumNotMet)),
+        "zero votes must fail quorum even with an explicit threshold"
+    );
+
+    // Match must still be in PendingResult — no funds disbursed.
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::PendingResult);
+    assert!(client.get_escrow_balance(&match_id) > 0);
+}
