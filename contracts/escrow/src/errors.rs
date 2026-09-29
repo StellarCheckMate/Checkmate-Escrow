@@ -11,11 +11,9 @@ use soroban_sdk::contracterror;
 /// This document is kept in lockstep with this enum — if you add or remove a variant,
 /// update `docs/error-codes.md` in the same PR.
 ///
-/// This enum is at the XDR-enforced cap of 50 variants
-/// (`ScSpecUdtErrorEnumV0::cases` is a `VecM<_, 50>`), so no further variants can be
-/// added. Adding a new error requires either freeing a slot by repurposing an existing,
-/// semantically-close variant, or removing one that's been superseded — which is why
-/// the player-freeze feature reuses `ContractPaused` (see `admin_freeze_player`).
+/// There is no XDR-enforced 50-variant cap on `#[contracterror]` enums in Soroban.
+/// New variants can be added at any time. Previously occupied reserved slots (11, 12, 38,
+/// 44, 53) may be reclaimed for dedicated errors rather than reusing unrelated codes.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -29,6 +27,11 @@ pub enum Error {
     Overflow = 8,
     ContractPaused = 9,
     InvalidAmount = 10,
+    /// The player account has been frozen by the admin and cannot create or join
+    /// new matches or deposit into escrow until the admin calls `admin_unfreeze_player`.
+    /// A freeze never blocks fund recovery — `cancel_match`, `expire_match`, and
+    /// `claim_vested_payout` remain accessible to frozen players.
+    PlayerFrozen = 11,
     DuplicateGameId = 13,
     MatchNotExpired = 14,
     InvalidGameId = 15,
