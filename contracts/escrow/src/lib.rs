@@ -47,7 +47,8 @@ use types::{
     BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeBondTier, DisputeState, FeeTier,
     Match, MatchState, OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform,
     PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey, PlayerRating, PlayerRatingKey,
-    PlayerStats, PlayerTier, ProtocolConfig, SnapshotReason, TempOracleRotation, Winner,
+    PlayerStats, PlayerTier, ProtocolConfig, SnapshotReason, TempOracleRotation,
+    TokenSymbolCacheKey, Winner,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -4882,15 +4883,42 @@ impl EscrowContract {
     /// break that contract, so this uses `try_invoke_contract` and falls
     /// back to an empty string if the address isn't a callable token (or
     /// isn't a contract at all) rather than panicking.
+    ///
+    /// The resolved symbol is persisted under [`TokenSymbolCacheKey::TokenSymbol`]
+    /// after the first successful lookup, so subsequent snapshots for the same
+    /// token skip the cross-contract call entirely.
     fn fetch_token_symbol(env: &Env, token: &Address) -> String {
-        match env.try_invoke_contract::<String, Error>(
+        let cache_key = TokenSymbolCacheKey::TokenSymbol(token.clone());
+
+        // Return the cached value if present — no cross-contract call needed.
+        if let Some(cached) = env
+            .storage()
+            .persistent()
+            .get::<TokenSymbolCacheKey, String>(&cache_key)
+        {
+            return cached;
+        }
+
+        // Cache miss: call the token contract and store the result.
+        let symbol = match env.try_invoke_contract::<String, Error>(
             token,
             &Symbol::new(env, "symbol"),
             soroban_sdk::vec![env],
         ) {
-            Ok(Ok(symbol)) => symbol,
+            Ok(Ok(s)) => s,
             _ => String::from_str(env, ""),
+        };
+
+        // Only cache non-empty symbols — an empty result means the token
+        // contract wasn't callable, and we should retry on the next snapshot
+        // rather than permanently caching a blank entry.
+        if symbol.len() > 0 {
+            env.storage()
+                .persistent()
+                .set(&cache_key, &symbol);
         }
+
+        symbol
     }
 
     /// Record a balance snapshot for `m` at a lifecycle transition.
