@@ -583,6 +583,17 @@ impl EscrowContract {
         env.storage().instance().get(&key).unwrap_or(false)
     }
 
+<<<<<<< HEAD
+=======
+    /// Check if the allowlist enforcement is currently active.
+    pub fn is_allowlist_enforced(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::AllowlistEnforced)
+            .unwrap_or(false)
+    }
+
+>>>>>>> 95c7a2e (Optimize player-filtered match history lookup)
     /// Register a stablecoin issuer — admin only.
     ///
     /// Any Stellar token whose issuer account matches a registered issuer is
@@ -2040,7 +2051,7 @@ impl EscrowContract {
             .get::<DataKey, bool>(&DataKey::DepositInProgress(match_id))
             .unwrap_or(false)
         {
-            return Err(Error::DepositInProgress);
+            return Err(Error::InvalidState);
         }
         env.storage()
             .temporary()
@@ -5571,6 +5582,44 @@ impl EscrowContract {
             return Ok(matches);
         }
 
+        if let Some(ref p) = player {
+            let player_matches: soroban_sdk::Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PlayerMatches(p.clone()))
+                .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+            let mut skipped = 0u32;
+            let mut added = 0u32;
+
+            for i in (0..player_matches.len()).rev() {
+                let match_id = player_matches.get(i).unwrap();
+                let Some(m) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, Match>(&DataKey::Match(match_id))
+                else {
+                    continue;
+                };
+
+                if m.state != MatchState::Completed && m.state != MatchState::Cancelled {
+                    continue;
+                }
+
+                if skipped < offset {
+                    skipped = skipped.saturating_add(1);
+                    continue;
+                }
+                matches.push_back(m);
+                added = added.saturating_add(1);
+                if added >= limit {
+                    break;
+                }
+            }
+
+            return Ok(matches);
+        }
+
         let count: u64 = env
             .storage()
             .instance()
@@ -5591,11 +5640,6 @@ impl EscrowContract {
 
             if m.state != MatchState::Completed && m.state != MatchState::Cancelled {
                 continue;
-            }
-            if let Some(ref p) = player {
-                if &m.player1 != p && &m.player2 != p {
-                    continue;
-                }
             }
 
             if skipped < offset {

@@ -516,3 +516,58 @@ fn test_get_live_matches_aliases_active_matches() {
     assert_eq!(live_paginated, active_paginated);
     assert_eq!(live_paginated.len(), 1);
 }
+
+#[test]
+fn test_get_match_history_filters_by_player_with_many_unrelated_matches() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let player3 = Address::generate(&env);
+    let player4 = Address::generate(&env);
+    token_client(&env, &token).transfer(&player2, &player3, &500);
+    token_client(&env, &token).transfer(&player2, &player4, &500);
+
+    let mut player1_ids = Vec::new();
+    let mut unrelated_ids = Vec::new();
+
+    for i in 0..12 {
+        let unrelated_id = client.create_match(
+            &player3,
+            &player4,
+            &100,
+            &token,
+            &String::from_str(&env, &format!("unrelated_{}", i)),
+            &Platform::Lichess,
+        );
+        client.cancel_match(&unrelated_id, &player3);
+        unrelated_ids.push(unrelated_id);
+    }
+
+    for i in 0..3 {
+        let id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, &format!("player_history_{}", i)),
+            &Platform::Lichess,
+        );
+        client.cancel_match(&id, &player1);
+        player1_ids.push(id);
+    }
+
+    let history = client.get_match_history(&Some(player1.clone()), &10, &0);
+    assert_eq!(history.len(), 3);
+    assert_eq!(history.get(0).unwrap().id, player1_ids[2]);
+    assert_eq!(history.get(1).unwrap().id, player1_ids[1]);
+    assert_eq!(history.get(2).unwrap().id, player1_ids[0]);
+
+    for match_obj in history.iter() {
+        assert!(match_obj.player1 == player1 || match_obj.player2 == player1);
+    }
+
+    assert!(
+        unrelated_ids
+            .iter()
+            .all(|id| !history.iter().any(|match_obj| match_obj.id == *id))
+    );
+}
