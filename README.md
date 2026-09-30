@@ -441,3 +441,6 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 <!-- handsoff-issue-1530 -->
 - #1530: Fix: `settle_result` updates stats and payout counters before the dispute period ends
+
+<!-- handsoff-issue-1562 -->
+- #1562: Performance: `get_bracket_matches` scans every match ever created
