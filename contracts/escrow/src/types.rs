@@ -383,6 +383,22 @@ pub enum PlayerRatingKey {
     Rating(Address, Platform),
 }
 
+/// Storage key for the per-token symbol cache.
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// for the same reason as [`PlayerRatingKey`]: `DataKey` is at its 50-variant
+/// XDR cap.
+///
+/// The first call to `fetch_token_symbol` for a given token performs the
+/// cross-contract `symbol()` call and writes the result under this key in
+/// persistent storage. Subsequent calls read from the cache, eliminating the
+/// extra cross-contract invocation cost on every snapshot.
+#[contracttype]
+pub enum TokenSymbolCacheKey {
+    /// Cached symbol string for a token contract address.
+    TokenSymbol(Address),
+}
+
 /// An oracle-verified ELO / platform rating for a player.
 ///
 /// Registered on-chain by the oracle via `register_player_rating` so that
