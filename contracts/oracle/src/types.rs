@@ -152,6 +152,10 @@ pub enum DataKey {
     /// A pending two-step admin transfer proposal, set by `propose_admin`
     /// and consumed (or left to expire) by `accept_admin`.
     PendingAdmin,
+    /// Configurable treasury address to which slashed stake is transferred.
+    /// Set by `set_treasury` (admin-only). Falls back to the admin address
+    /// when unset.
+    Treasury,
 }
 
 /// A slash that has been staged but not yet finalized, pending

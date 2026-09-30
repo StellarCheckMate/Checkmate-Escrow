@@ -411,3 +411,61 @@ fn test_get_balance_snapshots_empty_for_match_with_no_recorded_history() {
     let result = client.try_get_latest_snapshot(&admin, &id);
     assert_eq!(result, Err(Ok(Error::SnapshotNotFound)));
 }
+
+/// The first `record_snapshot` for a token populates the persistent cache;
+/// subsequent snapshots for the **same** token read from that cache rather
+/// than making a fresh cross-contract `symbol()` call.
+///
+/// We verify:
+/// 1. The first snapshot's `token_symbol` matches the token's real symbol.
+/// 2. After the first snapshot the symbol is present in persistent storage
+///    under `TokenSymbolCacheKey::TokenSymbol`.
+/// 3. A second snapshot for the same match returns the identical symbol.
+#[test]
+fn test_token_symbol_is_cached_after_first_snapshot() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "a1b2c3d4"),
+        &Platform::Lichess,
+    );
+
+    // First snapshot was recorded by create_match; check it has the symbol.
+    let snap1 = client.get_latest_snapshot(&admin, &id);
+    let token_client = TokenClient::new(&env, &token);
+    let expected_symbol = token_client.symbol();
+    assert_eq!(
+        snap1.token_symbol, expected_symbol,
+        "first snapshot must carry the real token symbol"
+    );
+
+    // After the first snapshot the cache key must be present in persistent storage.
+    env.as_contract(&contract_id, || {
+        let cached: Option<String> = env
+            .storage()
+            .persistent()
+            .get(&TokenSymbolCacheKey::TokenSymbol(token.clone()));
+        assert!(
+            cached.is_some(),
+            "symbol must be persisted in TokenSymbolCacheKey after first snapshot"
+        );
+        assert_eq!(
+            cached.unwrap(),
+            expected_symbol,
+            "cached symbol must equal the real token symbol"
+        );
+    });
+
+    // Trigger a second snapshot (deposit) and confirm it carries the same symbol.
+    client.deposit(&id, &player1);
+    let snap2 = client.get_latest_snapshot(&admin, &id);
+    assert_eq!(
+        snap2.token_symbol, expected_symbol,
+        "second snapshot must return the same cached symbol"
+    );
+}

@@ -75,4 +75,11 @@ pub enum Error {
     /// values are economically meaningless). Replaces the misleading
     /// `InvalidRateLimit` previously returned by `set_rate`.
     InvalidRate = 26,
+    /// `slash_oracle` was called for an `(oracle_address, match_id)` pair
+    /// that already has a staged (pending) slash. Cancel or finalize the
+    /// existing slash before staging a new one.
+    SlashAlreadyPending = 27,
+    /// `confidence` supplied to `submit_result` or `submit_batch_results`
+    /// exceeds 100. Confidence is a percentage in the range 0–100.
+    InvalidConfidence = 28,
 }

@@ -243,36 +243,42 @@ fn test_admin_list_frozen_players_returns_current_ordered_list() {
 
 #[test]
 fn test_create_match_tournament_rejects_frozen_player1() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
+    client.register_bracket(&admin, &1, &admin);
     client.admin_freeze_player(&player1, &reason(&env, "cheating"));
 
     let result = client.try_create_match_tournament(
+        &1,
+        &1,
         &player1,
         &player2,
         &100,
         &token,
-        &1,
         &String::from_str(&env, "tournament"),
+        &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
 
 #[test]
 fn test_create_match_tournament_rejects_frozen_player2() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
+    client.register_bracket(&admin, &1, &admin);
     client.admin_freeze_player(&player2, &reason(&env, "cheating"));
 
     let result = client.try_create_match_tournament(
+        &1,
+        &1,
         &player1,
         &player2,
         &100,
         &token,
-        &1,
         &String::from_str(&env, "tournament"),
+        &Platform::Lichess,
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
