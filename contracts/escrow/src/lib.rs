@@ -4177,8 +4177,10 @@ impl EscrowContract {
             .persistent()
             .get::<_, u64>(&snapshot_count_key)
         {
-            // Find the most recent snapshot at or before dispute.snapshot_ledger
-            for i in 0..core::cmp::min(count, 5u64) {
+            // Walk the full retained buffer (up to MAX_PLAYER_SNAPSHOTS) so
+            // that a qualifying snapshot older than the most-recent 5 is still
+            // found; otherwise an active voter is wrongly rejected.
+            for i in 0..core::cmp::min(count, MAX_PLAYER_SNAPSHOTS as u64) {
                 let idx = count.saturating_sub(i + 1);
                 let slot = idx % MAX_PLAYER_SNAPSHOTS as u64;
                 let key = DataKey::PlayerBalanceSnapshot(voter.clone(), slot);
