@@ -597,8 +597,7 @@ fn build_invoke_op_with_auth(
 ) -> Result<Operation, OracleServiceError> {
     let contract_address = ScAddress::Contract(ContractId(Hash(*contract_id)));
 
-    // submit_result(match_id: u64, winner: Winner, caller: Address)
-    // caller is implicit via auth; pass match_id and winner as args.
+    // submit_result(match_id: u64, winner: Winner, caller: Address, confidence: Option<u8>)
     let match_id_val = ScVal::U64(match_id);
     let winner_val = winner_to_sc_val(winner);
 
@@ -607,7 +606,10 @@ fn build_invoke_op_with_auth(
         PublicKey::PublicKeyTypeEd25519(Uint256(*caller_pubkey)),
     )));
 
-    let args: VecM<ScVal> = vec![match_id_val, winner_val, caller_address]
+    // confidence: Option<u8> = None encoded as ScVal::Void
+    let confidence_val = ScVal::Void;
+
+    let args: VecM<ScVal> = vec![match_id_val, winner_val, caller_address, confidence_val]
         .try_into()
         .map_err(|e| OracleServiceError::XdrError(format!("args vec: {:?}", e)))?;
 
@@ -903,5 +905,60 @@ mod tests {
         let val = match_scval(1, "abcd1234", "Xbox");
         let err = decode_match_summary(&val).unwrap_err();
         assert!(matches!(err, OracleServiceError::XdrError(_)));
+    }
+
+    /// #1586 — build_invoke_op_with_auth must pass exactly 4 arguments to
+    /// submit_result: (match_id, winner, caller, confidence). The escrow
+    /// contract's current ABI is:
+    ///   submit_result(match_id: u64, winner: Winner, caller: Address, confidence: Option<u8>)
+    /// Passing only 3 args causes simulation to fail for every match.
+    #[test]
+    fn build_invoke_op_with_auth_encodes_four_args() {
+        use stellar_xdr::HostFunction;
+
+        let contract_id = [0u8; 32];
+        let caller_pubkey = [1u8; 32];
+        let winner = crate::oracle::Winner::Player1;
+
+        let op = build_invoke_op_with_auth(&contract_id, 42, &winner, &caller_pubkey, vec![])
+            .expect("build_invoke_op_with_auth should succeed");
+
+        let OperationBody::InvokeHostFunction(ihf) = op.body else {
+            panic!("expected InvokeHostFunction");
+        };
+        let HostFunction::InvokeContract(invoke_args) = ihf.host_function else {
+            panic!("expected InvokeContract");
+        };
+
+        // Must have exactly 4 args: match_id, winner, caller, confidence
+        assert_eq!(
+            invoke_args.args.len(),
+            4,
+            "submit_result must be called with 4 arguments (match_id, winner, caller, confidence)"
+        );
+
+        // Arg 0: match_id as U64(42)
+        assert!(
+            matches!(invoke_args.args.get(0), Some(ScVal::U64(42))),
+            "arg[0] must be match_id U64(42)"
+        );
+
+        // Arg 1: winner as Symbol
+        assert!(
+            matches!(invoke_args.args.get(1), Some(ScVal::Symbol(_))),
+            "arg[1] must be winner Symbol"
+        );
+
+        // Arg 2: caller as Address
+        assert!(
+            matches!(invoke_args.args.get(2), Some(ScVal::Address(_))),
+            "arg[2] must be caller Address"
+        );
+
+        // Arg 3: confidence = None encoded as ScVal::Void
+        assert!(
+            matches!(invoke_args.args.get(3), Some(ScVal::Void)),
+            "arg[3] must be confidence ScVal::Void (None)"
+        );
     }
 }

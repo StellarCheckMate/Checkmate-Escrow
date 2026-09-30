@@ -251,3 +251,25 @@ fn test_submit_result_rejects_non_oracle() {
         "submit_result must be rejected for non-oracle caller"
     );
 }
+
+#[test]
+fn test_delete_result_clears_oracle_votes_allowing_revote() {
+    let (env, contract_id, oracle, _player1, _player2, _token, _admin, match_id) =
+        setup_with_funded_match();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Oracle submits an initial (wrong) result.
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+
+    // Admin deletes the wrong result. This must clear the oracle's prior vote
+    // so that re-submitting a corrected result is not treated as equivocation.
+    client.delete_result(&match_id);
+
+    // Oracle re-submits the corrected result. This must succeed and must not
+    // slash the oracle for equivocation.
+    let result = client.try_submit_result(&match_id, &Winner::Player2, &oracle);
+    assert!(
+        result.is_ok(),
+        "oracle must be able to re-vote after delete_result without equivocation slashing"
+    );
+}

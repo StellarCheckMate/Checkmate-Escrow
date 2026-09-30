@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "contracts/common",
     "contracts/escrow",
     "contracts/oracle",
     "oracle-service",

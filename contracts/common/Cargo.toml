@@ -1,0 +1,9 @@
+[package]
+name = "common"
+version = "0.1.0"
+edition = "2021"
+description = "Shared validation helpers for the Checkmate-Escrow contracts"
+repository = "https://github.com/StellarCheckMate/Checkmate-Escrow"
+license = "MIT"
+
+[dependencies]

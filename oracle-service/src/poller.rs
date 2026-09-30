@@ -28,6 +28,7 @@
 //!    records the failure and advances the retry schedule.
 //! 5. On exhaustion: moves the entry to the dead-letter store.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -318,6 +319,18 @@ impl Poller {
     pub async fn reconcile(&self) -> Result<(), OracleServiceError> {
         const PAGE_SIZE: u32 = 50;
 
+        // Load dead-lettered match IDs so we can skip them during
+        // reconciliation.  Dead-lettered entries have exhausted all
+        // retries and must not be re-enqueued.
+        let dead_lettered_ids: HashSet<u64> = self
+            .inner
+            .dead_letter
+            .load()
+            .await?
+            .into_iter()
+            .map(|e| e.entry.match_id)
+            .collect();
+
         // Resume from a previously persisted offset (0 if starting fresh).
         let mut offset = self.inner.cursor.load().await;
         if offset > 0 {
@@ -366,6 +379,13 @@ impl Poller {
                 };
 
                 if already_resolved {
+                    continue;
+                }
+
+                // Skip matches already moved to the dead-letter store after
+                // exhausting retries — re-enqueueing them would waste API
+                // quota and fill the dead-letter store with duplicate entries.
+                if dead_lettered_ids.contains(&m.match_id) {
                     continue;
                 }
 

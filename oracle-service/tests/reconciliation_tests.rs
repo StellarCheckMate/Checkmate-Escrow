@@ -637,3 +637,76 @@ async fn has_result_rpc_error_skips_match_and_continues_reconciliation() {
         "match 40 should be skipped when has_result returns an RPC error"
     );
 }
+
+/// After a match is dead-lettered (moved to the dead-letter store after
+/// exhausting retries), subsequent reconciliation cycles must not re-enqueue
+/// it. Running `reconcile()` twice should leave the queue empty both times.
+#[tokio::test]
+async fn dead_lettered_match_not_re_enqueued_by_reconcile() {
+    let chess_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("server error"))
+        .mount(&chess_server)
+        .await;
+
+    let rpc_server = MockServer::start().await;
+    mount_reconciliation_rpc(
+        &rpc_server,
+        vec![FixtureMatch {
+            match_id: 500,
+            game_id: "deadletter1",
+            platform: "Lichess",
+        }],
+        HashMap::new(),
+    )
+    .await;
+
+    let dir = TempDir::new().unwrap();
+    let dir_str = dir.path().to_str().unwrap();
+
+    // Use max_retries=1 so the match is dead-lettered after a single tick.
+    let mut cfg = make_config(&rpc_server.uri(), dir_str);
+    cfg.max_retries = 1;
+    cfg.dead_letter_max_entries = 100;
+
+    let queue = PendingQueue::new(dir_str);
+    let dead_letter = DeadLetterStore::new(dir_str, 100);
+
+    let poller = Poller::new_with_lichess_base(&cfg, chess_server.uri()).unwrap();
+
+    // First reconciliation discovers the match and enqueues it.
+    poller.reconcile().await.unwrap();
+    let after_reconcile = queue.load().await.unwrap();
+    assert_eq!(after_reconcile.len(), 1);
+    assert_eq!(after_reconcile[0].match_id, 500);
+
+    // Tick exhausts retries (chess API always returns 500).
+    poller.tick().await.unwrap();
+    assert!(
+        queue.load().await.unwrap().is_empty(),
+        "exhausted entry should be removed from queue"
+    );
+    let dead_letters = dead_letter.load().await.unwrap();
+    assert_eq!(dead_letters.len(), 1);
+    assert_eq!(dead_letters[0].entry.match_id, 500);
+
+    // Second reconciliation: match still Active on contract but must not
+    // be re-enqueued because it's dead-lettered.
+    poller.reconcile().await.unwrap();
+    assert!(
+        queue.load().await.unwrap().is_empty(),
+        "queue must stay empty after first reconcile following dead-letter"
+    );
+
+    // Third reconciliation (run twice as the issue requests): queue still empty.
+    poller.reconcile().await.unwrap();
+    assert!(
+        queue.load().await.unwrap().is_empty(),
+        "queue must stay empty after second reconcile following dead-letter"
+    );
+
+    // Dead-letter store should still have just the one entry.
+    let dead_letters_after = dead_letter.load().await.unwrap();
+    assert_eq!(dead_letters_after.len(), 1);
+    assert_eq!(dead_letters_after[0].entry.match_id, 500);
+}

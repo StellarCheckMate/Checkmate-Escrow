@@ -253,7 +253,10 @@ The connection is **not** closed.  The client should back off for at least
 
 ## 5. Event types
 
-These mirror the Soroban contract events defined in the [README](../README.md#events-reference).
+The full list of Soroban contract events (with payload shapes) is maintained in the
+[README Events Reference](../README.md#events-reference).  The table below covers the
+subset of events that the WebSocket server surfaces to clients; for the complete
+on-chain event catalogue see the link above.
 
 | `event_type` | Emitted when | Key payload fields |
 |---|---|---|
