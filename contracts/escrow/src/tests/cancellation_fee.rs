@@ -105,3 +105,87 @@ fn test_cancellation_fee_with_custom_config() {
     assert_eq!(token_client.balance(&new_treasury), 5);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
+
+#[test]
+fn test_cancellation_fee_charged_only_to_caller_when_player1_cancels() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = token_client(&env, &token);
+
+    // Set up 1% cancellation fee
+    env.mock_all_auths();
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 100, // 1%
+        treasury: admin.clone(),
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
+        max_protocol_fee: None,
+        dispute_bond_tier_schedule: soroban_sdk::vec![&env],
+    });
+
+    let match_id =
+        helpers::create_default_match(&client, &env, &player1, &player2, &token, "tcaller1");
+
+    // Both players deposit 100 each
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 900);
+    assert_eq!(token_client.balance(&contract_id), 200);
+
+    // Player 1 (the caller) cancels. Only the caller should bear the 1% fee (1 token).
+    client.cancel_match(&match_id, &player1);
+
+    // Caller refunded 99 (100 - 1 fee); non-cancelling player refunded the full 100.
+    assert_eq!(token_client.balance(&player1), 999);
+    assert_eq!(token_client.balance(&player2), 1000);
+    assert_eq!(token_client.balance(&admin), 1);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_cancellation_fee_charged_only_to_caller_when_player2_cancels() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let token_client = token_client(&env, &token);
+
+    // Set up 1% cancellation fee
+    env.mock_all_auths();
+    client.set_protocol_config(&ProtocolConfig {
+        vesting_duration_seconds: 0,
+        cancellation_fee_basis_points: 100, // 1%
+        treasury: admin.clone(),
+        stablecoin_only_mode: false,
+        maximum_stake: None,
+        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+        protocol_fee_bps: 0,
+        fee_recipient: admin.clone(),
+        minimum_stake: DEFAULT_MINIMUM_STAKE,
+        max_protocol_fee: None,
+        dispute_bond_tier_schedule: soroban_sdk::vec![&env],
+    });
+
+    let match_id =
+        helpers::create_default_match(&client, &env, &player1, &player2, &token, "tcaller2");
+
+    // Both players deposit 100 each
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+    assert_eq!(token_client.balance(&player1), 900);
+    assert_eq!(token_client.balance(&player2), 900);
+    assert_eq!(token_client.balance(&contract_id), 200);
+
+    // Player 2 (the caller) cancels. Only the caller should bear the 1% fee (1 token).
+    client.cancel_match(&match_id, &player2);
+
+    // Caller refunded 99 (100 - 1 fee); non-cancelling player refunded the full 100.
+    assert_eq!(token_client.balance(&player2), 999);
+    assert_eq!(token_client.balance(&player1), 1000);
+    assert_eq!(token_client.balance(&admin), 1);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
