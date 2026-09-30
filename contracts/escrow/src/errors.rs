@@ -82,4 +82,8 @@ pub enum Error {
     /// The dispute's voting deadline plus grace period has not yet elapsed, so the
     /// no-quorum fallback resolution cannot be applied yet.
     DisputeFallbackNotElapsed = 56,
+    /// A configuration value exceeds its allowed upper bound. Returned by
+    /// `set_dispute_period`, `set_minimum_hold_duration`, and `set_fee_tiers`
+    /// when the supplied value is above the configured maximum.
+    ConfigValueTooHigh = 57,
 }
