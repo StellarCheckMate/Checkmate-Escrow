@@ -150,8 +150,9 @@ impl DeadLetterStore {
         {
             return Ok(());
         }
-        // Update gauge after any push (even if idempotent, this is a no-op on count).
-        metrics::set_dead_letter_count(self.load().await?.len());
+        entries.push(dl);
+        self.save(&entries).await?;
+        metrics::set_dead_letter_count(entries.len());
         Ok(())
     }
 

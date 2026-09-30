@@ -5,7 +5,7 @@
  * event-indexer contains more than 100 events (the default page size).
  *
  * Tests:
- * - EventPoller pages through results using after_ledger cursor
+ * - EventPoller pages through results using limit/offset query params
  * - All events are eventually fetched despite pagination
  * - No events are missed or duplicated when >100 events exist
  */
@@ -15,12 +15,12 @@ import http from 'http';
 import { EventPoller } from '../eventPoller.js';
 import type { IndexedEvent, ServerConfig } from '../types.js';
 
-// ─── Port registry ────────────────────────────────────────────────────────
+// ─── Port registry ────────────────────────────────────────────────
 
 let nextPort = 9300;
 function allocPort(): number { return nextPort++; }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────
 
 function buildConfig(indexerPort: number): Pick<ServerConfig, 'eventIndexerUrl' | 'pollIntervalMs'> {
   return {
@@ -51,12 +51,13 @@ function makeEvent(overrides: Partial<IndexedEvent> = {}): IndexedEvent {
 }
 
 /**
- * Creates a mock indexer that supports pagination via after_ledger query param.
+ * Creates a mock indexer that supports offset-based pagination via
+ * `limit` and `after_index` query params.
  *
  * The mock tracks state:
  * - `allEvents`: the complete list of events to paginate through
  * - `pageSize`: events per page (default 100)
- * - Implements GET /events with optional ?after_ledger=<n> query param
+ * - Implements GET /events with optional ?limit=<n>&offset=<n> query params
  */
 function createPaginatedMockIndexer(
   port: number,
@@ -68,8 +69,8 @@ function createPaginatedMockIndexer(
   let allEvents: IndexedEvent[] = [];
   const server = http.createServer((req, res) => {
     const url = new URL(req.url || '/', `http://localhost:${port}`);
-    const afterLedger = url.searchParams.get('after_ledger');
-    const afterIndex = url.searchParams.get('after_index');
+    const limit = parseInt(url.searchParams.get('limit') ?? String(pageSize), 10);
+    const offset = parseInt(url.searchParams.get('offset') ?? '0', 10);
 
     // Sort events by ledger, then index
     const sorted = [...allEvents].sort((a, b) => {
@@ -79,20 +80,8 @@ function createPaginatedMockIndexer(
       return (a.event_index_in_txn || 0) - (b.event_index_in_txn || 0);
     });
 
-    // Filter to events after the cursor
-    let page = sorted;
-    if (afterLedger !== null) {
-      const ledgerNum = parseInt(afterLedger, 10);
-      const indexNum = afterIndex ? parseInt(afterIndex, 10) : 0;
-      page = sorted.filter(
-        (e) =>
-          e.ledger_sequence > ledgerNum ||
-          (e.ledger_sequence === ledgerNum && (e.event_index_in_txn || 0) > indexNum),
-      );
-    }
-
-    // Paginate
-    page = page.slice(0, pageSize);
+    // Paginate using limit/offset
+    const page = sorted.slice(offset, offset + limit);
 
     if (page.length === 0) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -232,7 +221,7 @@ describe('EventPoller pagination (>100 events)', () => {
     expect(collectedEvents.length).toBe(allEvents.length);
   }, { timeout: 10000 });
 
-  it('handles multiple pages correctly with cursor pagination', async () => {
+  it('handles multiple pages correctly with offset pagination', async () => {
     const indexerPort = allocPort();
     const indexer = createPaginatedMockIndexer(indexerPort, 30); // Very small page size
     const config = buildConfig(indexerPort);

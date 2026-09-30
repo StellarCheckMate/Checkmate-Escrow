@@ -5,6 +5,9 @@
  * callback for each one.  Tracks the highest seen ledger sequence so every
  * event is emitted exactly once.
  *
+ * Uses offset pagination (limit/offset query params) to fetch all pages in a
+ * single poll cycle, then deduplicates via the watermark.
+ *
  * Retry strategy: exponential back-off (1 s → 2 s → 4 s … capped at 30 s)
  * with jitter so multiple instances don't thundering-herd the indexer.
  */
@@ -19,6 +22,9 @@ interface ApiResponse<T> {
   data: T | null;
   error: string | null;
 }
+
+/** Page size sent to the event-indexer /events endpoint. */
+const PAGE_SIZE = 100;
 
 export class EventPoller {
   private running = false;
@@ -48,7 +54,7 @@ export class EventPoller {
     }
   }
 
-  // ─── Internal ──────────────────────────────────────────────────────────
+  // ─── Internal ──────────────────────────────────────────
 
   private async initializeWatermark(): Promise<void> {
     try {
@@ -121,17 +127,31 @@ export class EventPoller {
     }
   }
 
+  /**
+   * Fetch all new events from the indexer, paginating through results
+   * using limit/offset query params until every page is retrieved.
+   */
   private async fetchNewEvents(): Promise<IndexedEvent[]> {
-    const url = `${this.config.eventIndexerUrl}/events`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`Event-indexer responded ${res.status} ${res.statusText}`);
+    const allEvents: IndexedEvent[] = [];
+    let offset = 0;
+
+    while (true) {
+      const url = `${this.config.eventIndexerUrl}/events?limit=${PAGE_SIZE}&offset=${offset}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`Event-indexer responded ${res.status} ${res.statusText}`);
+      }
+      const body = (await res.json()) as ApiResponse<IndexedEvent[]>;
+      if (!body.success || !body.data || body.data.length === 0) {
+        break;
+      }
+      allEvents.push(...body.data);
+      if (body.data.length < PAGE_SIZE) {
+        break;
+      }
+      offset += PAGE_SIZE;
     }
-    const body = (await res.json()) as ApiResponse<IndexedEvent[]>;
-    if (!body.success || !body.data) {
-      // The indexer returns 404 with success=false when no events exist yet
-      return [];
-    }
-    return body.data;
+
+    return allEvents;
   }
 }

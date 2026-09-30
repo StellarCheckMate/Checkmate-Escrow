@@ -154,6 +154,8 @@ pub struct Match {
     /// executes (#1517 fix: mutual-consent rollback).
     pub rollback_vote_player1: bool,
     pub rollback_vote_player2: bool,
+    /// Tournament round for bracket matches.
+    pub round: Option<u32>,
 }
 
 #[contracttype]
@@ -333,6 +335,12 @@ pub enum DataKey {
     OracleRotation,
 }
 
+/// Storage keys for tournament bracket registration.
+#[contracttype]
+pub enum BracketKey {
+    Organizer(u64),
+}
+
 /// Storage keys for multi-oracle consensus deadlock tracking.
 ///
 /// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
@@ -375,6 +383,22 @@ pub enum PlayerRatingKey {
     Rating(Address, Platform),
 }
 
+/// Storage key for the per-token symbol cache.
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// for the same reason as [`PlayerRatingKey`]: `DataKey` is at its 50-variant
+/// XDR cap.
+///
+/// The first call to `fetch_token_symbol` for a given token performs the
+/// cross-contract `symbol()` call and writes the result under this key in
+/// persistent storage. Subsequent calls read from the cache, eliminating the
+/// extra cross-contract invocation cost on every snapshot.
+#[contracttype]
+pub enum TokenSymbolCacheKey {
+    /// Cached symbol string for a token contract address.
+    TokenSymbol(Address),
+}
+
 /// An oracle-verified ELO / platform rating for a player.
 ///
 /// Registered on-chain by the oracle via `register_player_rating` so that
@@ -389,6 +413,25 @@ pub struct PlayerRating {
     pub rating: u32,
     /// Ledger sequence number when this rating was last recorded by the oracle.
     pub recorded_ledger: u32,
+}
+
+/// Storage keys for player escrow balance tracking.
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// for the same reason as other overflow keys: `DataKey` is at its 50-variant
+/// XDR cap.
+///
+/// Instead of computing the player's escrow balance by iterating through all
+/// matches in `PlayerMatches(player)` (which causes read limits), we maintain
+/// a running counter that is updated atomically on every deposit/payout/refund
+/// event.
+#[contracttype]
+pub enum PlayerEscrowKey {
+    /// Current aggregate escrow balance for a player: sum of all non-terminal
+    /// stakes where the player has deposited. Updated incrementally on deposit,
+    /// payout (winner/draw), and refund (cancel/expire) rather than recomputed
+    /// by iterating all matches.
+    Balance(Address),
 }
 
 /// The lifecycle event that triggered a balance snapshot.

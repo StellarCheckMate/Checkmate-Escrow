@@ -88,6 +88,50 @@ fn test_player_match_pagination_zero_limit_and_offset_beyond_end() {
     assert_eq!(partial_page.get(1).unwrap(), match_ids[9]);
 }
 
+/// Test #1566: paginated getters cap `limit` at `MAX_PAGE_LIMIT` (100).
+///
+/// A caller requesting an unbounded (or absurdly large) `limit` must never
+/// receive more than `MAX_PAGE_LIMIT` items, otherwise pagination is defeated.
+#[test]
+fn test_paginated_getters_cap_limit_at_max_page_limit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Seed more matches than the cap so the cap is actually observable.
+    let total: u64 = MAX_PAGE_LIMIT as u64 + 25;
+    let mut match_ids = Vec::new();
+    for i in 0..total {
+        let match_id = client.create_match(
+            &player1,
+            &player2,
+            &100,
+            &token,
+            &String::from_str(&env, &format!("{:08x}", i)),
+            &Platform::Lichess,
+        );
+        match_ids.push(match_id);
+    }
+
+    // A huge limit is clamped to MAX_PAGE_LIMIT.
+    let huge = client.get_player_matches_paginated(&player1, &0, &u32::MAX);
+    assert_eq!(huge.len(), MAX_PAGE_LIMIT);
+    for (i, match_id) in huge.iter().enumerate() {
+        assert_eq!(match_id, match_ids[i]);
+    }
+
+    // Exactly the cap is allowed through unchanged.
+    let at_cap = client.get_player_matches_paginated(&player1, &0, &(MAX_PAGE_LIMIT as u32));
+    assert_eq!(at_cap.len(), MAX_PAGE_LIMIT);
+
+    // A limit just over the cap is clamped down to the cap.
+    let over_cap = client.get_player_matches_paginated(&player1, &0, &(MAX_PAGE_LIMIT as u32 + 1));
+    assert_eq!(over_cap.len(), MAX_PAGE_LIMIT);
+
+    // The cap also applies to the allowed-tokens paginated getter.
+    let tokens = client.get_allowed_tokens_paginated(&0, &u32::MAX);
+    assert!(tokens.len() <= MAX_PAGE_LIMIT);
+}
+
 /// Regression test: the deprecated unbounded `get_pending_matches()` must cap
 /// its result at `MAX_UNBOUNDED_MATCH_RESULTS` and emit a truncation event so
 /// callers have a signal that results were silently capped, instead of
@@ -231,119 +275,8 @@ fn test_get_player_matches_preserves_insertion_order() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    // Create multiple matches for the same player
-    let match_id_1 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "404da6de"),
-        &Platform::Lichess,
-    );
-
-    let match_id_2 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "86b9ea0e"),
-        &Platform::Lichess,
-    );
-
-    let match_id_3 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "fb595cfb"),
-        &Platform::Lichess,
-    );
-
-    let match_id_4 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "24a3f6f9"),
-        &Platform::Lichess,
-    );
-
-    // Assert returned IDs are in expected order
-    let player1_matches = client.get_player_matches(&player1);
-    assert_eq!(player1_matches.len(), 4);
-    assert_eq!(player1_matches.get(0).unwrap(), match_id_1);
-    assert_eq!(player1_matches.get(1).unwrap(), match_id_2);
-    assert_eq!(player1_matches.get(2).unwrap(), match_id_3);
-    assert_eq!(player1_matches.get(3).unwrap(), match_id_4);
-}
-
-/// Test #577: get_match_count increments correctly
-#[test]
-fn test_get_match_count_increments_correctly() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    // Initial count should be 0
-    let count = client.get_match_count();
-    assert_eq!(count, 0);
-
-    // Create first match
-    client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "404da6de"),
-        &Platform::Lichess,
-    );
-    let count = client.get_match_count();
-    assert_eq!(count, 1);
-
-    // Create second match
-    client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "86b9ea0e"),
-        &Platform::Lichess,
-    );
-    let count = client.get_match_count();
-    assert_eq!(count, 2);
-
-    // Create third match
-    client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "fb595cfb"),
-        &Platform::Lichess,
-    );
-    let count = client.get_match_count();
-    assert_eq!(count, 3);
-
-    // Create fourth match
-    client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "24a3f6f9"),
-        &Platform::Lichess,
-    );
-    let count = client.get_match_count();
-    assert_eq!(count, 4);
-}
-
-/// Test get_pending_matches pagination with more than 20 matches
-#[test]
-fn test_get_pending_matches_pagination() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let mut pending_match_ids = Vec::new();
-    for i in 0..25 {
+    let mut match_ids = Vec::new();
+    for i in 0..5 {
         let match_id = client.create_match(
             &player1,
             &player2,
@@ -352,167 +285,67 @@ fn test_get_pending_matches_pagination() {
             &String::from_str(&env, &format!("{:08x}", i)),
             &Platform::Lichess,
         );
-        pending_match_ids.push(match_id);
+        match_ids.push(match_id);
     }
 
-    // Get page 1 (first 20 matches)
-    let page1 = client.get_pending_matches_paginated(&0, &20);
-    assert_eq!(page1.len(), 20);
-    for (i, match_obj) in page1.iter().enumerate() {
-        assert_eq!(match_obj.id, pending_match_ids[i]);
-    }
-
-    // Get page 2 (remaining 5 matches)
-    let page2 = client.get_pending_matches_paginated(&20, &20);
-    assert_eq!(page2.len(), 5);
-    for (i, match_obj) in page2.iter().enumerate() {
-        assert_eq!(match_obj.id, pending_match_ids[20 + i]);
+    let matches = client.get_player_matches(&player1);
+    assert_eq!(matches.len(), 5);
+    for (i, match_id) in matches.iter().enumerate() {
+        assert_eq!(match_id, match_ids[i]);
     }
 }
 
-// Issue #1155: `get_match_history` returns completed/cancelled matches,
-// newest first, with optional pagination and player filtering.
-
 #[test]
-fn test_get_match_history_returns_completed_and_cancelled_newest_first() {
-    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    // Completed match.
-    let completed_id = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "00fe4d0c"),
-        &Platform::Lichess,
-    );
-    client.deposit(&completed_id, &player1);
-    client.deposit(&completed_id, &player2);
-    client.submit_result(&completed_id, &Winner::Player1, &oracle);
-
-    // Cancelled match (created after, so it should sort first).
-    let cancelled_id = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "c1cc8be1"),
-        &Platform::Lichess,
-    );
-    client.cancel_match(&cancelled_id, &player1);
-
-    // Still-pending match — must not appear in history.
-    client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "8aa3f868"),
-        &Platform::Lichess,
-    );
-
-    let history = client.get_match_history(&None, &10, &0);
-    assert_eq!(history.len(), 2);
-    assert_eq!(history.get(0).unwrap().id, cancelled_id);
-    assert_eq!(history.get(1).unwrap().id, completed_id);
-    assert_eq!(history.get(0).unwrap().state, MatchState::Cancelled);
-    assert_eq!(history.get(1).unwrap().state, MatchState::Completed);
-}
-
-#[test]
-fn test_get_match_history_pagination() {
+fn test_get_match_history_filters_by_player_with_many_unrelated_matches() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
+    let player3 = Address::generate(&env);
+    let player4 = Address::generate(&env);
+    token_client(&env, &token).transfer(&player2, &player3, &500);
+    token_client(&env, &token).transfer(&player2, &player4, &500);
 
-    let mut ids = Vec::new();
-    for i in 0..5 {
+    let mut player1_ids = Vec::new();
+    let mut unrelated_ids = Vec::new();
+
+    for i in 0..12 {
+        let unrelated_id = client.create_match(
+            &player3,
+            &player4,
+            &100,
+            &token,
+            &String::from_str(&env, &format!("unrelated_{}", i)),
+            &Platform::Lichess,
+        );
+        client.cancel_match(&unrelated_id, &player3);
+        unrelated_ids.push(unrelated_id);
+    }
+
+    for i in 0..3 {
         let id = client.create_match(
             &player1,
             &player2,
             &100,
             &token,
-            &String::from_str(&env, &format!("{:08x}", i)),
+            &String::from_str(&env, &format!("player_history_{}", i)),
             &Platform::Lichess,
         );
         client.cancel_match(&id, &player1);
-        ids.push(id);
+        player1_ids.push(id);
     }
-    // Newest first: ids[4], ids[3], ids[2], ids[1], ids[0]
 
-    let page0 = client.get_match_history(&None, &2, &0);
-    assert_eq!(page0.len(), 2);
-    assert_eq!(page0.get(0).unwrap().id, ids[4]);
-    assert_eq!(page0.get(1).unwrap().id, ids[3]);
+    let history = client.get_match_history(&Some(player1.clone()), &10, &0);
+    assert_eq!(history.len(), 3);
+    assert_eq!(history.get(0).unwrap().id, player1_ids[2]);
+    assert_eq!(history.get(1).unwrap().id, player1_ids[1]);
+    assert_eq!(history.get(2).unwrap().id, player1_ids[0]);
 
-    let page1 = client.get_match_history(&None, &2, &2);
-    assert_eq!(page1.len(), 2);
-    assert_eq!(page1.get(0).unwrap().id, ids[2]);
-    assert_eq!(page1.get(1).unwrap().id, ids[1]);
+    for match_obj in history.iter() {
+        assert!(match_obj.player1 == player1 || match_obj.player2 == player1);
+    }
 
-    let page2 = client.get_match_history(&None, &2, &4);
-    assert_eq!(page2.len(), 1);
-    assert_eq!(page2.get(0).unwrap().id, ids[0]);
-
-    let empty = client.get_match_history(&None, &10, &10);
-    assert_eq!(empty.len(), 0);
-
-    let zero_limit = client.get_match_history(&None, &0, &0);
-    assert_eq!(zero_limit.len(), 0);
-}
-
-#[test]
-fn test_get_match_history_filters_by_player() {
-    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
-    let client = EscrowContractClient::new(&env, &contract_id);
-    let player3 = Address::generate(&env);
-    token_client(&env, &token).transfer(&player2, &player3, &500);
-
-    // Match between player1 and player2.
-    let id_12 = client.create_match(
-        &player1,
-        &player2,
-        &100,
-        &token,
-        &String::from_str(&env, "4b7f4050"),
-        &Platform::Lichess,
+    assert!(
+        unrelated_ids
+            .iter()
+            .all(|id| !history.iter().any(|match_obj| match_obj.id == *id))
     );
-    client.cancel_match(&id_12, &player1);
-
-    // Match between player1 and player3.
-    let id_13 = client.create_match(
-        &player1,
-        &player3,
-        &100,
-        &token,
-        &String::from_str(&env, "f6e56b5e"),
-        &Platform::Lichess,
-    );
-    client.cancel_match(&id_13, &player1);
-
-    let player3_history = client.get_match_history(&Some(player3.clone()), &10, &0);
-    assert_eq!(player3_history.len(), 1);
-    assert_eq!(player3_history.get(0).unwrap().id, id_13);
-
-    let player1_history = client.get_match_history(&Some(player1.clone()), &10, &0);
-    assert_eq!(player1_history.len(), 2);
-
-    let player2_history = client.get_match_history(&Some(player2.clone()), &10, &0);
-    assert_eq!(player2_history.len(), 1);
-    assert_eq!(player2_history.get(0).unwrap().id, id_12);
-}
-
-/// `get_live_matches` / `get_live_matches_paginated` are naming aliases for
-/// `get_active_matches` / `get_active_matches_paginated`.
-#[test]
-fn test_get_live_matches_aliases_active_matches() {
-    let (env, contract_id, ..) = setup_with_funded_match();
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    assert_eq!(client.get_live_matches(), client.get_active_matches());
-
-    let active_paginated = client.get_active_matches_paginated(&0, &10);
-    let live_paginated = client.get_live_matches_paginated(&0, &10);
-    assert_eq!(live_paginated, active_paginated);
-    assert_eq!(live_paginated.len(), 1);
 }

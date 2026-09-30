@@ -81,11 +81,74 @@ const EQUIVOCATION_SLASH_BPS: i128 = 10_000;
 /// honest disagreement (e.g. a stale platform API read) rather than malice.
 const MINORITY_SLASH_BPS: i128 = 1_000;
 
+/// Maximum allowed byte length for a game_id string.
+/// - Lichess:      8 or 12 alphanumeric characters
+/// - Chess.com:    7–12 numeric digits
+const MAX_GAME_ID_LEN: u32 = 64;
+
+/// Standard game ID length for Lichess (8 alphanumeric characters).
+const LICHESS_GAME_ID_LEN: u32 = 8;
+
+/// Extended game ID length for Lichess tournament formats (12 alphanumeric characters).
+const LICHESS_GAME_ID_LEN_EXTENDED: u32 = 12;
+
+/// Minimum game ID length for Chess.com (numeric digits).
+const CHESS_COM_GAME_ID_MIN_LEN: u32 = 7;
+
+/// Maximum game ID length for Chess.com (numeric digits).
+const CHESS_COM_GAME_ID_MAX_LEN: u32 = 12;
+
+/// TTL for oracle registration and slash data: same as match TTL (~30 days).
+const ORACLE_REG_TTL_LEDGERS: u32 = MATCH_TTL_LEDGERS;
+
 /// Extend instance storage TTL on every invocation so Admin and Paused never expire.
 fn extend_instance_ttl(env: &Env) {
     env.storage()
         .instance()
         .extend_ttl(MATCH_TTL_LEDGERS / 2, MATCH_TTL_LEDGERS);
+}
+
+/// Validate that `game_id` matches the platform-specific format.
+///
+/// - Lichess: exactly 8 or 12 ASCII alphanumeric characters.
+/// - Chess.com: 7–12 ASCII digits.
+fn validate_game_id_format(game_id: &String, platform: &Platform) -> Result<(), Error> {
+    let len = game_id.len();
+    if len == 0 || len > MAX_GAME_ID_LEN {
+        return Err(Error::InvalidGameId);
+    }
+
+    let mut buf = [0u8; MAX_GAME_ID_LEN as usize];
+    let slice = &mut buf[..len as usize];
+    game_id.copy_into_slice(slice);
+
+    match platform {
+        Platform::Lichess => {
+            if (len != LICHESS_GAME_ID_LEN && len != LICHESS_GAME_ID_LEN_EXTENDED)
+                || !slice.iter().all(|b| b.is_ascii_alphanumeric())
+            {
+                return Err(Error::InvalidGameId);
+            }
+        }
+        Platform::ChessDotCom => {
+            if !(CHESS_COM_GAME_ID_MIN_LEN..=CHESS_COM_GAME_ID_MAX_LEN).contains(&len)
+                || !slice.iter().all(|b| b.is_ascii_digit())
+            {
+                return Err(Error::InvalidGameId);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Return the configured treasury address, falling back to the admin
+/// address when no treasury has been set via `set_treasury`.
+fn get_treasury_address(env: &Env, admin: &Address) -> Address {
+    env.storage()
+        .instance()
+        .get(&DataKey::Treasury)
+        .unwrap_or_else(|| admin.clone())
 }
 
 #[contract]
@@ -220,6 +283,48 @@ impl OracleContract {
             .instance()
             .get(&DataKey::SlashingGracePeriodLedgers)
             .unwrap_or(0)
+    }
+
+    /// Set the treasury address to which slashed oracle stake is transferred.
+    /// Admin-only. When unset, slashes fall back to the admin address.
+    ///
+    /// Emits an `admin / treasury` event with the new treasury address.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
+    pub fn set_treasury(env: Env, treasury: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Treasury, &treasury);
+
+        env.events().publish(
+            (Symbol::new(&env, "admin"), symbol_short!("treasury")),
+            treasury,
+        );
+        Ok(())
+    }
+
+    /// Return the configured treasury address. Falls back to the admin
+    /// address when no treasury has been explicitly set via `set_treasury`.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized.
+    pub fn get_treasury(env: Env) -> Result<Address, Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        Ok(get_treasury_address(&env, &admin))
     }
 
     /// Stage a slash of a registered oracle's stake. Admin-only.
@@ -1463,12 +1568,26 @@ impl OracleContract {
         }
     }
 
-    /// Invalidate/remove a cached result for a specific game and platform.
-    pub fn invalidate_cache(env: Env, game_id: String, platform: Platform) {
+    /// Invalidate/remove a cached result for a specific game and platform. Admin-only.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized.
+    pub fn invalidate_cache(
+        env: Env,
+        game_id: String,
+        platform: Platform,
+    ) -> Result<(), Error> {
         extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
         env.storage()
             .persistent()
             .remove(&DataKey::OracleCache(game_id, platform));
+        Ok(())
     }
 
     /// Return the admin address stored in the contract.

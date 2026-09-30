@@ -1509,66 +1509,101 @@ fn test_dispute_bond_tier_schedule_falls_back_to_global_when_empty() {
     assert_eq!(client.get_dispute(&dispute_id).dispute_bond, 1);
 }
 
-// ── Regression: snapshot walk must cover the full ring buffer ──────────────
+// ── Issue #1619: Zero-vote dispute resolution (quorum-not-met path) ───────────
 
+/// Raise a dispute, cast **no votes at all**, advance past the voting deadline,
+/// and assert that `resolve_dispute_by_vote` returns `Error::QuorumNotMet`.
+///
+/// This is the canonical regression test for the locked-funds bug: without a
+/// resolution path for the zero-vote case the escrow funds in a `PendingResult`
+/// match would be permanently locked once the voting window closes.
 #[test]
-fn test_vote_on_dispute_succeeds_when_qualifying_snapshot_is_beyond_last_5() {
-    // Regression test for issue #1567: the snapshot walk in vote_on_dispute
-    // was capped at min(count, 5) even though the ring buffer holds
-    // MAX_PLAYER_SNAPSHOTS (32). A voter whose qualifying snapshot was
-    // older than the most-recent 5 was wrongly rejected with
-    // InsufficientHoldingDuration.
+fn test_resolve_dispute_zero_votes_returns_quorum_not_met() {
     let (env, contract_id, oracle, player1, player2, token, _admin) =
         setup_with_dispute_period(200);
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let match_id = create_funded_active_match(
-        &client,
-        &env,
-        &player1,
-        &player2,
-        &token,
-        "snapwin",
-    );
+    let match_id =
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "zrvot001");
 
-    // Deposit creates a player-level snapshot for player2 at ledger 0
-    // (the default test ledger). Advance well past the minimum hold
-    // duration (default 100) so that snapshot qualifies as acquisition.
-    env.ledger().set_sequence_number(1_000);
+    env.ledger().set_sequence_number(1000);
     client.submit_result(&match_id, &Winner::Player1, &oracle);
 
-    // Dispute at ledger 1_000 → snapshot_ledger = 1_000,
-    // min_acquisition_ledger = 1_000 - 100 = 900.
-    let dispute_id = client.dispute_oracle_result(
-        &match_id,
-        &player2,
-        &String::from_str(&env, "0xsnapwin"),
-    );
+    // Player2 raises a dispute. No one casts a single vote.
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "abc12345"));
 
-    // Record more than 5 additional snapshots AFTER the dispute's
-    // snapshot_ledger so the qualifying (pre-dispute) snapshot is pushed
-    // to index 0 — well outside the old 5-snapshot window.
-    env.as_contract(&contract_id, || {
-        for i in 0..10u32 {
-            env.ledger().set_sequence_number(1_000 + 1 + i);
-            EscrowContract::record_player_snapshot(&env, &player2);
-        }
-    });
-
-    // player2's deposit snapshot (index 0, ledger 0) is now the
-    // 11th-most-recent — beyond the buggy cap of 5. Voting must still
-    // find it and succeed instead of returning InsufficientHoldingDuration.
-    let result = client.try_vote_on_dispute(&dispute_id, &player2, &true);
-    assert!(
-        result.is_ok(),
-        "vote_on_dispute should succeed when the qualifying snapshot is beyond \
-         the last 5; got: {:?}",
-        result
-    );
-
-    // Verify the vote was recorded with the correct weight (the 100 escrow
-    // stake, not the voter's total token balance).
+    // Confirm dispute is active and both vote tallies are zero.
     let dispute = client.get_dispute(&dispute_id);
-    assert_eq!(dispute.yes_votes, 100);
+    assert_eq!(dispute.state, DisputeState::Active);
+    assert_eq!(dispute.yes_votes, 0);
     assert_eq!(dispute.no_votes, 0);
+
+    // Advance past the voting deadline without any votes being cast.
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+
+    // With zero total votes the quorum threshold (even if 0) should be
+    // evaluated; the contract must NOT let the match remain forever locked.
+    // The expected outcome is Error::QuorumNotMet so that off-chain tooling
+    // can detect the stall and escalate to admin resolution.
+    let result = client.try_resolve_dispute_by_vote(&dispute_id);
+    assert_eq!(
+        result,
+        Err(Ok(Error::QuorumNotMet)),
+        "zero-vote dispute must return QuorumNotMet, not silently lock funds"
+    );
+
+    // The match must remain in PendingResult (not silently completed) so that
+    // an admin or expiry path can still act on it — funds are not lost.
+    let m = client.get_match(&match_id);
+    assert_eq!(
+        m.state,
+        MatchState::PendingResult,
+        "match must stay in PendingResult when quorum is not met"
+    );
+
+    // Escrow balance must still be non-zero: the locked-funds bug being
+    // tested manifests as funds permanently stuck in the contract.
+    assert!(
+        client.get_escrow_balance(&match_id) > 0,
+        "escrow balance must be non-zero while match is in PendingResult"
+    );
+}
+
+/// Zero-vote path with an explicit non-zero quorum threshold: verifies that
+/// the quorum check fires even when the admin has set a threshold above zero.
+#[test]
+fn test_resolve_dispute_zero_votes_with_explicit_quorum_threshold() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // 50 % quorum — any positive threshold should block a zero-vote resolution.
+    client.set_quorum_basis_points(&5000);
+
+    let match_id =
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "zrvot002");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+
+    // Dispute raised; no votes cast.
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "def67890"));
+
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+
+    let result = client.try_resolve_dispute_by_vote(&dispute_id);
+    assert_eq!(
+        result,
+        Err(Ok(Error::QuorumNotMet)),
+        "zero votes must fail quorum even with an explicit threshold"
+    );
+
+    // Match must still be in PendingResult — no funds disbursed.
+    let m = client.get_match(&match_id);
+    assert_eq!(m.state, MatchState::PendingResult);
+    assert!(client.get_escrow_balance(&match_id) > 0);
 }

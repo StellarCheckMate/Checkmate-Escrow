@@ -55,18 +55,98 @@ Pending ──► Active ──► Completed
 
 ### Events Reference
 
-| Topic (namespace / name)  | Emitted by          | Payload                                      |
-|---------------------------|---------------------|----------------------------------------------|
-| `escrow` / `init`         | `initialize`        | `(oracle_address, admin_address)`            |
-| `admin` / `paused`        | `pause`             | `()`                                         |
-| `admin` / `unpaused`      | `unpause`           | `()`                                         |
-| `admin` / `oracle_up`     | `update_oracle`     | `(old_oracle, new_oracle)`                   |
-| `admin` / `xfer`          | `transfer_admin`    | `(old_admin, new_admin)`                     |
-| `admin` / `fee_tiers_set` | `set_fee_tiers`     | `tiers.len()` (u32)                          |
-| `match` / `created`       | `create_match`      | `(match_id, player1, player2, stake_amount)` |
-| `match` / `completed`     | `submit_result`     | `(match_id, winner, payout_amount)`          |
-| `match` / `cancelled`     | `cancel_match`      | `match_id`                                   |
-| `match` / `expired`       | `expire_match`      | `match_id`                                   |
+The table below is generated from all `env.events().publish` calls in the
+contract source.  For a machine-readable listing, see the
+[Soroban contract spec](contracts/escrow/contract-spec.json).
+
+| Topic (namespace / name) | Emitted by | Payload |
+|---|---|---|
+| `escrow` / `init` | `initialize` | `(oracle_address, admin_address)` |
+| `admin` / `paused` | `pause` | `()` |
+| `admin` / `unpaused` | `unpause` | `()` |
+| `escrow` / `stablecoin_mode` | `set_protocol_config` | `(new_mode, admin)` |
+| `admin` / `protocol_config_set` | `set_protocol_config` | `admin` |
+| `admin` / `ref_share` | `set_referral_share_bps` | `(basis_points, admin)` |
+| `admin` / `min_stake` | `set_minimum_stake` | `amount` |
+| `admin` / `token_add` | `add_allowed_token` | `(token, admin)` |
+| `admin` / `tok_rm` | `remove_allowed_token` | `(token, admin)` |
+| `admin` / `tok_blacklist` | `add_token_to_blacklist` | `(token, reason, admin)` |
+| `admin` / `tok_unblacklist` | `remove_token_from_blacklist` | `token` |
+| `admin` / `freeze` | `admin_freeze_player` | `player` |
+| `admin` / `unfreeze` | `admin_unfreeze_player` | `player` |
+| `admin` / `fee_tiers_set` | `set_fee_tiers` | `(tiers.len(), admin)` |
+| `admin` / `sc_issuer_add` | `add_stablecoin_issuer` | `issuer` |
+| `admin` / `sc_issuer_rm` | `remove_stablecoin_issuer` | `issuer` |
+| `match` / `created` | `create_match` | `(match_id, player1, player2, stake_amount, referrer)` |
+| `match` / `bracket_created` | `create_match_tournament` | `(match_id, bracket_id, round, player1, player2, stake_amount)` |
+| `match` / `deposit` | `deposit` | `(match_id, player, previous_state)` |
+| `match` / `activated` | `deposit` | `match_id` |
+| `escrow` / `deposit` | `deposit` | `(match_id, player, stake_amount)` |
+| `match` / `completed` | `settle_result` | `(match_id, winner, payout_amount)` |
+| `match` / `pending_result` | `settle_result` | `(match_id, winner, deadline)` |
+| `match` / `cancelled` | `cancel_match` | `match_id` |
+| `match` / `paused` | `pause_match` | `match_id` |
+| `match` / `resumed` | `resume_match` | `match_id` |
+| `match` / `expired` | `expire_match` | `match_id` |
+| `match` / `rb_vote` | `dispute_and_rollback_match` | `(match_id, disputer)` |
+| `match` / `rollback` | `dispute_and_rollback_match` | `(match_id, disputer, reason)` |
+| `match` / `heartbeat` | `heartbeat_match` | `(match_id, player, timestamp)` |
+| `match` / `snapshot` | `record_snapshot` | `(match_id, index, commitment)` |
+| `match` / `adm_stall` | `admin_resolve_stalled_match` | `(match_id, resolution)` |
+| `match` / `truncated` | `collect_matches_by_state` | `(state, max_results)` |
+| `player` / `snapshot` | `record_player_snapshot` | `(player, index, balance)` |
+| `dispute` / `created` | `dispute_oracle_result` | `(dispute_id, match_id, disputer, evidence_hash, bond)` |
+| `dispute` / `voted` | `vote_on_dispute` | `(dispute_id, voter, vote, snapshot_weight)` |
+| `dispute` / `resolved` | `resolve_dispute_by_vote` | `(dispute_id, match_id, state, winner, total_votes, quorum)` |
+| `dispute` / `oracle_slash_signal` | `mark_dispute_for_oracle_slash` | `(dispute_id, oracle, slash_amount)` |
+| `admin` / `match_recovered` | `admin_recover_match` | `(match_id, admin)` |
+| `admin` / `propose` | `propose_admin` | `new_admin` |
+| `admin` / `xfer` | `accept_admin` | `pending_admin` |
+| `admin` / `prop_cxl` | `cancel_admin_proposal` | `admin` |
+| `admin` / `timeout` | `set_match_timeout` | `(old_timeout, seconds)` |
+| `admin` / `max_stake` | `set_maximum_stake` | `amount` |
+| `admin` / `dispute_period` | `set_dispute_period` | `period` |
+| `admin` / `dispute_bond` | `set_dispute_bond_basis_points` | `basis_points` |
+| `admin` / `min_hold_duration` | `set_minimum_hold_duration` | `duration` |
+| `admin` / `quorum_basis_points` | `set_quorum_basis_points` | `basis_points` |
+| `admin` / `oracle_up` | `update_oracle` | `(old_oracle, new_oracle)` |
+| `match` / `ora_dead` | `check_oracle_deadlock` | `(match_id, current_confirmations, required)` |
+| `admin` / `rot_temp` | `rotate_oracle_temporary` | `(old_oracle, new_oracle, duration_seconds)` |
+| `admin` / `rot_prop` | `propose_oracle_rotation` | `(old_oracle, new_oracle)` |
+| `admin` / `ora_add` | `add_approved_oracle` | `oracle` |
+| `admin` / `ora_rm` | `remove_approved_oracle` | `oracle` |
+| `admin` / `req_conf` | `set_required_confirmations` | `count` |
+| `match` / `claim` | `claim_vested_payout` | `(match_id, player, amount_claimed, payout_token)` |
+| `upgrade` / `sched` | `schedule_upgrade` | `(new_wasm_hash, scheduled_at)` |
+| `upgrade` / `cancel` | `cancel_upgrade` | `()` |
+| `upgrade` / `exec` | `execute_upgrade` | `new_wasm_hash` |
+| `upgrade` / `migrated` | `migrate_state` | `(current, target_version)` |
+
+#### Oracle contract events
+
+| Topic (namespace / name) | Emitted by | Payload |
+|---|---|---|
+| `oracle` / `init` | `initialize` | `admin` |
+| `oracle` / `stake` | `register_oracle_with_stake` | `(oracle_address, stake_amount, token)` |
+| `oracle` / `result` | `submit_result` / `submit_batch_results` / `submit_oracle_result` | `(match_id, result)` |
+| `oracle` / `batch` | `submit_batch_results` | `len` |
+| `oracle` / `vote` | `submit_oracle_result` | `(match_id, oracle, result)` |
+| `oracle` / `finalzd` | `submit_oracle_result` | `(match_id, submitters_len, threshold)` |
+| `oracle` / `disputed` | `submit_oracle_result` | `match_id` |
+| `oracle` / `minority` | `submit_oracle_result` / `resolve_disputed_match` | `(match_id, oracle)` |
+| `oracle` / `equivoc` | `submit_oracle_result` | `(match_id, oracle)` |
+| `oracle` / `resolved` | `resolve_disputed_match` | `(match_id, result)` |
+| `oracle` / `slashstg` | `slash_oracle` | `(oracle_address, match_id, slash_amount, admin)` |
+| `oracle` / `slash` | `finalize_slash` | `(oracle_address, match_id, slash_amount)` |
+| `admin` / `slashcxl` | `admin_cancel_slash` | `(oracle_address, match_id, admin)` |
+| `oracle` / `deact` | `deactivate_slow_oracle` | `oracle_address` |
+| `oracle` / `thresh` | `set_consensus_threshold` | `threshold` |
+| `oracle` / `ratelim` | `set_oracle_rate_limits` | `(oracle, hourly_limit, daily_limit)` |
+| `admin` / `admin_rot` | `update_admin` | `(old_admin, new_admin)` |
+| `admin` / `paused` | `pause` | `()` |
+| `admin` / `unpaused` | `unpause` | `()` |
+| `admin` / `slash_gp` | `set_slashing_grace_period` | `(grace_period_ledgers, admin)` |
+| `oracle` / `deleted` | `delete_result` | `match_id` |
 
 ## 🛠️ Quick Start
 

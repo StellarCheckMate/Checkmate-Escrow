@@ -1289,6 +1289,26 @@ fn test_delete_result_requires_admin_auth() {
 }
 
 #[test]
+#[should_panic]
+fn test_invalidate_cache_requires_admin_auth() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let attacker = Address::generate(&env);
+    let game_id = String::from_str(&env, "unauthorized_cache_game");
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "invalidate_cache",
+            args: (game_id.clone(), Platform::Lichess).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.invalidate_cache(&game_id, &Platform::Lichess);
+}
+
+#[test]
 fn test_instance_ttl_extended_on_submit_result() {
     let (env, contract_id, ..) = setup();
     let client = OracleContractClient::new(&env, &contract_id);

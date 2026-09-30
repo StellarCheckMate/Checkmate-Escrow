@@ -67,8 +67,8 @@ The off-chain oracle service today is the trusted operator that:
    enqueues any `Active` match for which `OracleContract::has_result` is
    still `false`,
 2. verifies the platform result for `game_id` using an external chess API,
-3. calls `EscrowContract::submit_result(match_id, winner)` from the escrow-side
-   oracle address,
+3. calls `EscrowContract::submit_result(match_id, winner, oracle, confidence)`
+   from the escrow-side oracle address,
 4. records the same result in `OracleContract` for auditing and optional
    verification.
 
@@ -92,6 +92,88 @@ The complete pipeline — deploying the release WASM artifacts, creating a
 match, depositing both stakes, recording the result, settling, and claiming
 the payout — is exercised end to end by the sandboxed lifecycle suite in
 `e2e-tests/`; see [docs/e2e-testing.md](e2e-testing.md).
+
+### Which key signs which call
+
+`OracleContract` is almost entirely gated on its own **admin** address, while
+`EscrowContract` is gated on a separately configured **oracle** address. These
+are independent settings, and the distinction is easy to get wrong.
+
+| Call | Authorised by | How it is checked |
+|---|---|---|
+| `OracleContract::submit_result(match_id, game_id, platform, result, response_time_ms, confidence)` | oracle contract **admin** | reads `DataKey::Admin`, then `admin.require_auth()` |
+| `OracleContract::submit_batch_results(...)` | oracle contract **admin** | same |
+| `OracleContract::submit_oracle_result(...)` | the **registered oracle** | `oracle.require_auth()`, then that address's `OracleRegistration` must have `oracle_stake > 0`. This is the m-of-n consensus path. |
+| `OracleContract::register_oracle_with_stake(...)` | the address being **registered** | `oracle_address.require_auth()` — an oracle signs its own registration |
+| `OracleContract::slash_oracle`, `resolve_disputed_match`, `delete_result`, `set_consensus_threshold`, `deactivate_slow_oracle`, `pause`, `unpause` | oracle contract **admin** | `admin.require_auth()` |
+| `EscrowContract::submit_result(match_id, winner, oracle, confidence)` | escrow's configured **oracle** | `oracle.require_auth()`, then `oracle` must equal the address returned by `EscrowContract::get_oracle()` or the call reverts `Error::Unauthorized` |
+| `EscrowContract::submit_draw(match_id, oracle, confidence)` | escrow's configured **oracle** | same |
+
+`get_oracle()` returns the address held in `DataKey::Oracle`, except while
+a rotation is in effect: if a temporary rotation recorded by
+`rotate_oracle_temporary(old_oracle, new_oracle, duration_seconds)` has not yet
+expired **and** its `old_oracle` still matches the configured base, the
+temporary address is returned instead. During that window a submission signed by
+the base oracle is rejected, and after it expires the base oracle is accepted
+again (the stale rotation is cleared on read). `rotate_oracle_permanent`
+replaces the base address outright.
+
+**Consequence for the relayer.** Because the oracle contract's admin and the
+escrow's configured oracle are separate settings, no single key can both write
+the audit record and trigger the payout unless they are deliberately the same
+address. An operator running both steps needs both keys.
+
+### The `confidence` parameter
+
+`OracleContract::submit_result`, `EscrowContract::submit_result` and
+`EscrowContract::submit_draw` all take a trailing `confidence: Option<u8>`. It
+is part of the published ABI, so a client must supply a value or `None` even
+though it does not affect settlement.
+
+**Range.** The type is `Option<u8>`, so `0..=255` is representable. The
+`OracleContract::ResultEntry` field is commented "Optional confidence score
+(0-100)", but **no code enforces that range** in either contract, and a value
+above 100 is stored verbatim.
+
+**Effect in the oracle contract.** `submit_result` stores the value in
+`ResultEntry.confidence`, and the bulk replay path preserves it when existing
+results are re-stored. It is recorded data and nothing more — it does not gate
+writes or reads.
+
+**Effect in the escrow contract: none.** `submit_result` and `submit_draw`
+forward `confidence` to the internal `settle_result`, which **never reads it**.
+Settlement depends only on `winner` and on the match's funding and state.
+
+`contracts/escrow/src/lib.rs` also declares:
+
+```rust
+/// Default confidence threshold for oracle results (0-100).
+/// Results below this threshold trigger PendingResult state for dispute.
+const DEFAULT_CONFIDENCE_THRESHOLD: u8 = 50;
+```
+
+This constant is **never referenced** anywhere in the crate.
+
+The `PendingResult` state it refers to does exist, but it is **not** selected by
+`confidence`. `settle_result` branches on the configured dispute period instead:
+
+- `dispute_period == 0` (the default — `get_dispute_period()` returns `0` when
+  `DataKey::DisputePeriod` is unset): the match moves straight to `Completed` and
+  stamps `completed_ledger` in the same call.
+- `dispute_period > 0`: the match moves to `PendingResult` with a dispute
+  deadline, and the transition to `Completed` is deferred to `finalize_match` or
+  `resolve_dispute_by_vote`, both of which stamp `completed_ledger`
+  themselves.
+
+So the doc comment on the constant misattributes the trigger: the delay is
+configured by the dispute period, and a submitted `confidence` does not
+influence it either way. A result submitted with `confidence: Some(10)` settles
+exactly like one submitted with `None`.
+
+Callers must not rely on a low-confidence result being held for dispute. To get
+a dispute window, configure a non-zero dispute period. Making `confidence`
+actually gate settlement is a change to settlement behaviour and needs its own
+issue and review.
 
 ---
 
