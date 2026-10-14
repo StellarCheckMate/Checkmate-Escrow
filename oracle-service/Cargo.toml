@@ -37,7 +37,7 @@ hex = "0.4"
 # Stellar XDR for transaction construction
 stellar-xdr = { version = "27.0.0", features = ["std", "base64"] }
 # Stellar strkey for G-address / C-address encoding
-stellar-strkey = "0.0.18"
+stellar-strkey = "1.0.0"
 # SHA-256 hashing for Stellar transaction signing
 sha2 = "0.10"
 
