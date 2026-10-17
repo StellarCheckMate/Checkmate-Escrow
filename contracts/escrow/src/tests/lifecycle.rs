@@ -1934,6 +1934,84 @@ fn test_get_match_returns_cancelled_after_expire_match() {
     assert_eq!(m.state, MatchState::Cancelled);
 }
 
+// #1735 — heartbeat_match must be rejected on terminal match states.
+#[test]
+fn test_heartbeat_match_succeeds_on_active_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "hb_active_01"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    let result = client.try_heartbeat_match(&id, &player1);
+    assert!(
+        result.is_ok(),
+        "heartbeat_match must succeed on an Active match"
+    );
+}
+
+#[test]
+fn test_heartbeat_match_rejected_on_completed_match() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "hb_complete1"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+    client.submit_result(&id, &Winner::Player1, &oracle);
+    assert_eq!(client.get_match(&id).state, MatchState::Completed);
+
+    let result = client.try_heartbeat_match(&id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "heartbeat_match must return InvalidState on a Completed match"
+    );
+}
+
+#[test]
+fn test_heartbeat_match_rejected_on_cancelled_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "hb_cancel_01"),
+        &Platform::Lichess,
+    );
+
+    client.cancel_match(&id, &player1);
+    assert_eq!(client.get_match(&id).state, MatchState::Cancelled);
+
+    let result = client.try_heartbeat_match(&id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidState)),
+        "heartbeat_match must return InvalidState on a Cancelled match"
+    );
+}
+
 #[test]
 fn test_double_deposit() {
     let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();

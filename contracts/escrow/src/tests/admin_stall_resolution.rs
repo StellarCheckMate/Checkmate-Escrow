@@ -183,6 +183,31 @@ fn test_admin_resolve_stalled_match_rejects_non_admin_caller() {
 }
 
 #[test]
+fn test_admin_resolve_stalled_match_rejects_active_non_stalled_match() {
+    // #1734: an Active match that has not been paused must not be resolvable
+    // by the admin — the normal oracle settlement flow must be used.
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "n0nst4ll"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Match is Active and not paused.
+    assert_eq!(client.get_match(&id).state, MatchState::Active);
+
+    let result = client.try_admin_resolve_stalled_match(&id, &admin, &Winner::Draw);
+    assert_eq!(result, Err(Ok(Error::InvalidState)));
+}
+
+#[test]
 fn test_admin_resolve_stalled_match_rejects_pending_state() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
@@ -202,6 +227,40 @@ fn test_admin_resolve_stalled_match_rejects_pending_state() {
 
     let result = client.try_admin_resolve_stalled_match(&id, &admin, &Winner::Draw);
     assert_eq!(result, Err(Ok(Error::InvalidState)));
+}
+
+#[test]
+fn test_admin_resolve_stalled_match_succeeds_on_paused_match() {
+    // #1734: a Paused match is a stalled match and may be resolved by the admin.
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let tc = soroban_sdk::token::Client::new(&env, &token);
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "p4us3d01"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    // Pause the match (stalled state).
+    client.pause_match(&id, &player1);
+
+    let p1_before = tc.balance(&player1);
+    let p2_before = tc.balance(&player2);
+
+    client.admin_resolve_stalled_match(&id, &admin, &Winner::Draw);
+
+    assert_eq!(tc.balance(&player1), p1_before + 100);
+    assert_eq!(tc.balance(&player2), p2_before + 100);
+
+    let m = client.get_match(&id);
+    assert_eq!(m.state, MatchState::Completed);
+    assert_eq!(m.winner, Winner::Draw);
 }
 
 #[test]
@@ -254,7 +313,7 @@ fn test_admin_resolve_stalled_match_rejects_not_funded() {
     advance_timestamp(&env, ADMIN_STALL_WINDOW_SECONDS + 1);
 
     // This will return InvalidState (Pending), not NotFunded, since we check state first.
-    let result = client.try_admin_resolve_stalled_match(&id2, &admin, &Winner::Draw);
+    let result = client.try_admin_resolve_stalled_match(&id, &admin, &Winner::Draw);
     assert_eq!(result, Err(Ok(Error::InvalidState)));
 }
 

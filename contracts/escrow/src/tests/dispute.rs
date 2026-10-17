@@ -708,6 +708,37 @@ fn test_get_match_dispute_id_returns_id() {
     assert_eq!(stored, dispute_id);
 }
 
+#[test]
+fn test_get_dispute_by_match_returns_dispute() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id =
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "dbymtch1");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "8f9a074c"));
+
+    let by_match = client.get_dispute_by_match(&match_id);
+    assert!(by_match.is_some(), "dispute should be found by match_id");
+    assert_eq!(by_match.unwrap(), client.get_dispute(&dispute_id));
+}
+
+#[test]
+fn test_get_dispute_by_match_returns_none_without_dispute() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id =
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "dbymtch2");
+
+    assert_eq!(client.get_dispute_by_match(&match_id), None);
+}
+
 // ── Full lifecycle ────────────────────────────────────────────────────────
 
 #[test]

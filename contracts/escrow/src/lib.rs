@@ -3019,6 +3019,11 @@ impl EscrowContract {
         // played out. Refusing other states keeps the state-machine honest:
         // a heartbeat on a Paused match would mask an unresolved pause, and
         // a heartbeat on a terminal match would silently rewrite history.
+        // #1735 fix: explicitly reject terminal states (Completed/Cancelled)
+        // so they cannot waste ledger budget or emit misleading events.
+        if m.state == MatchState::Completed || m.state == MatchState::Cancelled {
+            return Err(Error::InvalidState);
+        }
         if m.state != MatchState::Active {
             return Err(Error::InvalidState);
         }
@@ -3101,12 +3106,20 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
 
-        // Only Active or Paused matches may be admin-resolved. Pending matches
-        // should use `expire_match`; Completed/Cancelled are terminal;
-        // PendingResult has the normal dispute path.
-        // #1516 fix: also accept Paused so admin can recover funds from a match
-        // that a losing player has kept paused indefinitely.
-        if m.state != MatchState::Active && m.state != MatchState::Paused {
+        // #1734 fix: only stalled matches may be admin-resolved. A match is
+        // considered stalled when it is currently `Paused`, or when it has been
+        // inactive for longer than the maximum pause duration. Active matches
+        // that are still within the pause budget must go through the normal
+        // oracle settlement flow. Pending matches should use `expire_match`;
+        // Completed/Cancelled are terminal; PendingResult has the normal
+        // dispute path.
+        let now_for_state: u64 = env.ledger().timestamp();
+        let stalled_reference_ts: u64 = m.activated_at.unwrap_or(m.last_heartbeat);
+        let stalled_elapsed: u64 = now_for_state.saturating_sub(stalled_reference_ts);
+        let is_stalled = m.state == MatchState::Paused
+            || (m.state == MatchState::Active
+                && stalled_elapsed > MAX_PAUSE_DURATION_LEDGERS as u64 * SECONDS_PER_LEDGER);
+        if !is_stalled {
             return Err(Error::InvalidState);
         }
 
@@ -6595,6 +6608,21 @@ impl EscrowContract {
         }
 
         Ok(())
+    }
+
+    /// Return the dispute associated with `match_id`, if any.
+    ///
+    /// A match can have at most one active dispute. This view function lets
+    /// front-ends look up the dispute for a match without parsing events.
+    /// Returns `None` when no dispute has been recorded for the match.
+    pub fn get_dispute_by_match(env: Env, match_id: u64) -> Option<Dispute> {
+        let dispute_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MatchDispute(match_id))?;
+        env.storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
     }
 
     /// Return the current confirmation count for a given match.
