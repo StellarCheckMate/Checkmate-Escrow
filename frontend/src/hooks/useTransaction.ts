@@ -3,6 +3,7 @@ import { Networks } from '@stellar/stellar-sdk';
 import { freighterSign } from '../wallets/freighter';
 import { albedoSign } from '../wallets/albedo';
 import type { WalletType } from '../wallets/types';
+import { mapContractError } from '../utils/contractErrors';
 
 const NETWORK = import.meta.env.VITE_STELLAR_NETWORK === 'mainnet'
   ? Networks.PUBLIC
@@ -25,7 +26,7 @@ export function useTransaction(walletType: WalletType | null) {
         : await albedoSign(xdr, 'testnet');
       return signedXdr;
     } catch (err) {
-      setError((err as Error).message);
+      setError(mapContractError(err));
       return null;
     } finally {
       setLoading(false);

@@ -167,6 +167,51 @@ fn test_execute_upgrade_enforces_review_period() {
 }
 
 #[test]
+fn test_execute_upgrade_succeeds_after_review_period() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.schedule_upgrade(&dummy_wasm_hash(&env));
+    client.pause(&admin);
+
+    // Advance past the review period.
+    env.ledger().with_mut(|l| {
+        l.sequence_number += crate::UPGRADE_REVIEW_PERIOD_LEDGERS + 1;
+    });
+
+    // The review-period guard must no longer reject the call. Depending on how
+    // the host `upgrade` fn is mocked, the call may either succeed outright or
+    // fail for a reason other than the review period; in no case may it return
+    // UpgradeReviewPeriodNotElapsed.
+    let result = client.try_execute_upgrade();
+    assert!(
+        !matches!(result, Err(Ok(Error::UpgradeReviewPeriodNotElapsed))),
+        "execute_upgrade after the review period must not return UpgradeReviewPeriodNotElapsed"
+    );
+}
+
+#[test]
+fn test_cancel_upgrade_prevents_execution() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.schedule_upgrade(&dummy_wasm_hash(&env));
+    client.pause(&admin);
+    client.cancel_upgrade();
+
+    // Advance past the review period — cancellation must still block execution.
+    env.ledger().with_mut(|l| {
+        l.sequence_number += crate::UPGRADE_REVIEW_PERIOD_LEDGERS + 1;
+    });
+
+    let result = client.try_execute_upgrade();
+    assert!(
+        matches!(result, Err(Ok(Error::UpgradeNotScheduled))),
+        "execute_upgrade after cancel_upgrade must return UpgradeNotScheduled"
+    );
+}
+
+#[test]
 fn test_execute_upgrade_requires_scheduled() {
     let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);

@@ -1,4 +1,5 @@
 import { MatchCard } from './match/MatchCard';
+import { MatchCardSkeleton } from './match/MatchCardSkeleton';
 import { useMatchWebSocket, type IndexedEvent } from '../hooks/useMatchWebSocket';
 
 interface Match {
@@ -50,7 +51,18 @@ export function MatchList({ matches, loading = false, error = null, onRefresh }:
   });
 
   if (loading) {
-    return <p role="status" aria-live="polite">Loading matches…</p>;
+    return (
+      <div>
+        <p role="status" aria-live="polite">Loading matches…</p>
+        <ul aria-hidden="true">
+          {Array.from({ length: 3 }, (_, i) => (
+            <li key={i}>
+              <MatchCardSkeleton />
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
   }
 
   if (error) {

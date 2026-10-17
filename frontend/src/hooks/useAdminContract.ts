@@ -11,6 +11,7 @@ import {
 import { freighterSign } from '../wallets/freighter';
 import { albedoSign } from '../wallets/albedo';
 import type { WalletType } from '../wallets/types';
+import { mapContractError } from '../utils/contractErrors';
 
 const CONTRACT_ID = import.meta.env.VITE_CONTRACT_ESCROW ?? '';
 const RPC_URL = import.meta.env.VITE_STELLAR_RPC_URL ?? 'https://soroban-testnet.stellar.org';
@@ -243,6 +244,14 @@ export function isContractPausedError(error: unknown): boolean {
   );
 }
 
+/**
+ * Returns the human-readable message for a contract-call failure, falling back
+ * to the raw error message when no known contract error code is present.
+ */
+export function toUserFacingError(error: unknown): string {
+  return mapContractError(error);
+}
+
 export function useAdminContract(walletPublicKey: string | null, walletType: WalletType | null) {
   const [state, setState] = useState<AdminState>({
     admin: null,
@@ -312,7 +321,7 @@ export function useAdminContract(walletPublicKey: string | null, walletType: Wal
         error: null,
       });
     } catch (err) {
-      setState(s => ({ ...s, loading: false, error: (err as Error).message }));
+      setState(s => ({ ...s, loading: false, error: toUserFacingError(err) }));
     }
   }, [walletPublicKey]);
 
@@ -360,7 +369,7 @@ export function useAdminContract(walletPublicKey: string | null, walletType: Wal
         setState(s => ({ ...s, paused: true }));
         setActionError('Contract is currently paused. Actions are disabled until unpaused.');
       } else {
-        setActionError((err as Error).message);
+        setActionError(toUserFacingError(err));
       }
       return false;
     } finally {
