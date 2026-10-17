@@ -20,16 +20,26 @@
 //! On every tick, [`Poller::tick`]:
 //!
 //! 1. Reads all active matches from the queue that are due for a retry.
-//! 2. For each due entry, calls the appropriate chess platform client to
-//!    fetch the game result.
+//! 2. Groups the due entries by platform and fetches their results:
+//!    Lichess games in one batch request per 300 IDs
+//!    (`POST /api/games/export/_ids`, falling back to per-game requests if
+//!    the batch endpoint is unavailable); Chess.com games one by one, since
+//!    its public API has no batch game endpoint.
 //! 3. On success: signs and submits `submit_result` to Soroban, then removes
 //!    the entry from the queue.
 //! 4. On a *transient* failure (network, rate-limit, game not finished yet):
 //!    records the failure and advances the retry schedule.
 //! 5. On exhaustion: moves the entry to the dead-letter store.
+//!
+//! ## Back-pressure
+//!
+//! When a platform answers HTTP 429 the poller stops querying it until the
+//! `Retry-After` delay has passed.  Entries left unqueried are not charged a
+//! retry attempt: being rate limited says nothing about the game.
 
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use ed25519_dalek::SigningKey;
@@ -78,7 +88,13 @@ struct PollerInner {
     /// Persistent audit log of all successfully-submitted oracle results.
     /// Appended to by `submit_and_complete` so `oracle-export-csv` can read it.
     submission_log: SubmissionLog,
+    /// Per-platform instant before which no requests may be sent, set when a
+    /// platform answers HTTP 429.
+    backoff_until: Mutex<HashMap<Platform, Instant>>,
 }
+
+/// Back-off applied when a 429 carries no usable `Retry-After` header.
+const DEFAULT_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(60);
 
 impl Poller {
     /// Construct a poller from the oracle configuration.
@@ -174,6 +190,7 @@ impl Poller {
                 pubkey,
                 result_cache: ResultCache::with_defaults(),
                 submission_log: SubmissionLog::new(&cfg.queue_dir),
+                backoff_until: Mutex::new(HashMap::new()),
             }),
         })
     }
@@ -214,14 +231,18 @@ impl Poller {
         }
         info!(count = due.len(), "poller tick: processing due entries");
 
-        for entry in due {
-            let match_id = entry.match_id;
-            let span = info_span!(
-                "oracle.verify",
-                match_id = match_id,
-                game_id = %entry.game_id,
-                platform = %entry.platform,
-            );
+        let (lichess, others): (Vec<_>, Vec<_>) = due
+            .into_iter()
+            .partition(|e| e.platform == Platform::Lichess);
+
+        if !lichess.is_empty() {
+            self.process_lichess_batch(lichess).await;
+        }
+        for entry in others {
+            if self.skip_if_backing_off(entry.platform) {
+                break;
+            }
+            let span = verify_span(&entry);
             self.process_entry(entry).instrument(span).await;
         }
         Ok(())
@@ -275,9 +296,13 @@ impl Poller {
             .into_iter()
             .filter(|e| e.platform == Platform::ChessDotCom)
             .collect::<Vec<_>>();
-        let count = due.len();
+        let mut count = 0;
         for entry in due {
+            if self.skip_if_backing_off(Platform::ChessDotCom) {
+                break;
+            }
             self.process_entry(entry).await;
+            count += 1;
         }
         Ok(count)
     }
@@ -504,22 +529,154 @@ impl Poller {
         }
 
         // ── Fetch result from chess platform ─────────────────────────────
+        // A rate-limit response pauses the platform and leaves the entry
+        // untouched for a later tick instead of charging it an attempt.
         let winner_result = match entry.platform {
-            Platform::Lichess => self
-                .inner
-                .lichess
-                .fetch_result(&game_id)
-                .await
-                .map(|r| r.winner)
-                .map_err(classify_lichess_error),
-            Platform::ChessDotCom => self
-                .inner
-                .chess_com
-                .fetch_result(&game_id)
-                .await
-                .map(|r| r.winner)
-                .map_err(classify_chess_com_error),
+            Platform::Lichess => match self.inner.lichess.fetch_result(&game_id).await {
+                Err(LichessError::RateLimited { retry_after }) => {
+                    self.back_off(Platform::Lichess, retry_after);
+                    return;
+                }
+                other => other.map(|r| r.winner).map_err(classify_lichess_error),
+            },
+            Platform::ChessDotCom => match self.inner.chess_com.fetch_result(&game_id).await {
+                Err(ChessComError::RateLimited { retry_after }) => {
+                    self.back_off(Platform::ChessDotCom, retry_after);
+                    return;
+                }
+                Err(ChessComError::HttpStatus { status })
+                    if status == reqwest::StatusCode::TOO_MANY_REQUESTS =>
+                {
+                    self.back_off(Platform::ChessDotCom, DEFAULT_RATE_LIMIT_BACKOFF);
+                    return;
+                }
+                other => other.map(|r| r.winner).map_err(classify_chess_com_error),
+            },
         };
+
+        self.handle_fetch_outcome(entry, winner_result).await;
+    }
+
+    /// Resolve due Lichess entries with batched requests
+    /// (`POST /api/games/export/_ids`), one per
+    /// [`crate::oracle::LICHESS_BATCH_MAX_IDS`] games.
+    ///
+    /// Pre-validation and the result cache are applied per entry first, so only
+    /// games that genuinely need an API call are sent.  If the batch endpoint
+    /// is unavailable (404/405) the entries fall back to per-game requests.
+    async fn process_lichess_batch(&self, entries: Vec<PendingEntry>) {
+        if self.skip_if_backing_off(Platform::Lichess) {
+            return;
+        }
+
+        let mut pending = Vec::with_capacity(entries.len());
+        for mut entry in entries {
+            let match_id = entry.match_id;
+            let span = verify_span(&entry);
+
+            if let Err(reason) = validate_game_id(entry.platform, &entry.game_id) {
+                warn!(
+                    match_id,
+                    game_id = %entry.game_id,
+                    %reason,
+                    "game_id failed pre-validation; dead-lettering without API call",
+                );
+                entry.last_error = Some(reason);
+                entry.attempts = self.inner.max_retries;
+                self.exhaust_entry(entry).instrument(span).await;
+                continue;
+            }
+            if let Some(cached) = self.inner.result_cache.get(entry.platform, &entry.game_id).await {
+                info!(match_id, "cache hit — skipping API call, using cached result");
+                self.submit_and_complete(entry, cached).instrument(span).await;
+                continue;
+            }
+            pending.push(entry);
+        }
+        if pending.is_empty() {
+            return;
+        }
+
+        let game_ids: Vec<String> = pending.iter().map(|e| e.game_id.clone()).collect();
+        info!(count = game_ids.len(), "fetching lichess results in batch");
+
+        match self.inner.lichess.fetch_results_batch(&game_ids).await {
+            Ok(results) => {
+                for entry in pending {
+                    let outcome = match results.get(&entry.game_id) {
+                        Some(Ok(r)) => Ok(r.winner.clone()),
+                        Some(Err(e)) => Err(classify_lichess_error_ref(e)),
+                        None => Err(FetchError::Transient("missing from batch result".into())),
+                    };
+                    let span = verify_span(&entry);
+                    self.handle_fetch_outcome(entry, outcome).instrument(span).await;
+                }
+            }
+            Err(LichessError::RateLimited { retry_after }) => {
+                self.back_off(Platform::Lichess, retry_after);
+            }
+            Err(LichessError::HttpStatus { status })
+                if status == reqwest::StatusCode::NOT_FOUND
+                    || status == reqwest::StatusCode::METHOD_NOT_ALLOWED =>
+            {
+                warn!(%status, "lichess batch endpoint unavailable; falling back to per-game requests");
+                for entry in pending {
+                    if self.skip_if_backing_off(Platform::Lichess) {
+                        break;
+                    }
+                    let span = verify_span(&entry);
+                    self.process_entry(entry).instrument(span).await;
+                }
+            }
+            Err(e) => {
+                // The request itself failed, so no game was resolved.
+                let reason = e.to_string();
+                warn!(count = pending.len(), %reason, "lichess batch request failed; scheduling retries");
+                for entry in pending {
+                    let span = verify_span(&entry);
+                    self.handle_transient(entry, reason.clone()).instrument(span).await;
+                }
+            }
+        }
+    }
+
+    /// Pause all requests to `platform` for `retry_after`.
+    fn back_off(&self, platform: Platform, retry_after: Duration) {
+        warn!(%platform, ?retry_after, "rate limited; pausing requests to platform");
+        self.inner
+            .backoff_until
+            .lock()
+            .expect("backoff lock poisoned")
+            .insert(platform, Instant::now() + retry_after);
+    }
+
+    /// Returns `true` (and logs) while `platform` is still backing off.
+    fn skip_if_backing_off(&self, platform: Platform) -> bool {
+        let mut backoff = self.inner.backoff_until.lock().expect("backoff lock poisoned");
+        let Some(until) = backoff.get(&platform).copied() else {
+            return false;
+        };
+        match until.checked_duration_since(Instant::now()) {
+            Some(wait) => {
+                info!(%platform, ?wait, "platform rate limited; deferring due entries");
+                true
+            }
+            None => {
+                backoff.remove(&platform);
+                false
+            }
+        }
+    }
+
+    /// Act on a fetched result: cache and submit it, dead-letter a permanent
+    /// failure, or schedule a retry for a transient one.
+    async fn handle_fetch_outcome(
+        &self,
+        mut entry: PendingEntry,
+        winner_result: Result<Winner, FetchError>,
+    ) {
+        let match_id = entry.match_id;
+        let game_id = entry.game_id.clone();
 
         match winner_result {
             Ok(winner) => {
@@ -652,6 +809,27 @@ fn classify_lichess_error(e: LichessError) -> FetchError {
         | LichessError::ConcurrencyLimitReached
         | LichessError::InvalidResponse => FetchError::Transient(e.to_string()),
     }
+}
+
+/// Like [`classify_lichess_error`] for per-game errors borrowed from a batch
+/// result map.
+fn classify_lichess_error_ref(e: &LichessError) -> FetchError {
+    match e {
+        LichessError::InvalidGameId | LichessError::GameNotFound => {
+            FetchError::Permanent(e.to_string())
+        }
+        _ => FetchError::Transient(e.to_string()),
+    }
+}
+
+/// Tracing span correlating every log line for one entry's verification.
+fn verify_span(entry: &PendingEntry) -> tracing::Span {
+    info_span!(
+        "oracle.verify",
+        match_id = entry.match_id,
+        game_id = %entry.game_id,
+        platform = %entry.platform,
+    )
 }
 
 fn classify_chess_com_error(e: ChessComError) -> FetchError {

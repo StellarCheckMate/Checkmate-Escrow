@@ -39,6 +39,7 @@ mod security;
 mod security_issues_1516_1519;
 mod slash_relay_tests;
 mod snapshots;
+mod stake_bounds;
 mod tier;
 mod token_allowlist;
 mod token_blacklist;

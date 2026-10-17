@@ -10,6 +10,13 @@
 //! ledger ranges (e.g. after a crash or a leader failover) never produces
 //! duplicate rows.
 //!
+//! ## Materialised match state
+//! The `matches` table holds the latest known state of every match and is
+//! updated in the same transaction as each event insert, so `/match/:id` reads
+//! one row instead of replaying the match's event log on every request.  A
+//! reorg rebuilds the affected rows from the surviving events, and
+//! `init_schema` backfills rows for events ingested before the table existed.
+//!
 //! ## Leader state
 //! The `leader_state` table holds a single row that the `leader` module uses as
 //! a distributed mutex.  The table is created here so the schema is fully
@@ -17,7 +24,9 @@
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
-use deadpool_postgres::{Config as PoolConfig, ManagerConfig, Pool, RecyclingMethod, Runtime};
+use deadpool_postgres::{
+    Config as PoolConfig, ManagerConfig, Pool, RecyclingMethod, Runtime, Transaction,
+};
 use tokio_postgres::NoTls;
 
 use crate::models::{
@@ -25,6 +34,51 @@ use crate::models::{
     TokenAnalytics, Winner,
 };
 use crate::transactions::{TransactionHistoryFilters, TransactionRecord, TransactionType};
+
+/// Columns read by [`row_to_event`], in order.
+const EVENT_COLUMNS: &str = "id, ledger_sequence, match_id, event_type, player1, player2,
+     status, winner, stake_amount, token, game_id, platform,
+     timestamp, txn_hash, event_index_in_txn, reorg_invalidated_at";
+
+/// SELECT producing one `matches` row per match from its surviving events:
+/// creation fields from the earliest `*created*` event, status and winner from
+/// the latest event.  `{filter}` narrows the set of matches rebuilt.
+///
+/// Ordering mirrors [`apply_event_to_match`]: events are ranked by
+/// `(ledger_sequence, event_index_in_txn)` with a missing index sorting first.
+const REBUILD_MATCHES_SELECT: &str = "
+    SELECT l.match_id, c.player1, c.player2, c.stake_amount, c.token, c.game_id,
+           c.platform, c.ledger_sequence, l.status, l.winner, l.ledger_sequence,
+           l.event_index_in_txn, NOW()
+    FROM (
+        SELECT DISTINCT ON (match_id) match_id, status, winner, ledger_sequence, event_index_in_txn
+        FROM events
+        WHERE reorg_invalidated_at IS NULL AND {filter}
+        ORDER BY match_id, ledger_sequence DESC, event_index_in_txn DESC NULLS LAST
+    ) l
+    LEFT JOIN (
+        SELECT DISTINCT ON (match_id) match_id, player1, player2, stake_amount, token,
+               game_id, platform, ledger_sequence
+        FROM events
+        WHERE reorg_invalidated_at IS NULL AND event_type LIKE '%created%' AND {filter}
+        ORDER BY match_id, ledger_sequence ASC, event_index_in_txn ASC NULLS FIRST
+    ) c ON c.match_id = l.match_id";
+
+const MATCHES_INSERT_COLUMNS: &str = "INSERT INTO matches (
+        match_id, player1, player2, stake_amount, token, game_id, platform,
+        created_ledger, status, winner, last_ledger, last_event_index, updated_at
+    )";
+
+/// Advisory lock key held while `init_schema` runs (arbitrary, app-unique).
+const SCHEMA_INIT_LOCK_KEY: i64 = 0x6576_656e_7473; // "events"
+
+fn rebuild_matches_sql(filter: &str) -> String {
+    format!(
+        "{}{}",
+        MATCHES_INSERT_COLUMNS,
+        REBUILD_MATCHES_SELECT.replace("{filter}", filter)
+    )
+}
 
 // ── Pool helpers ──────────────────────────────────────────────────────────────
 
@@ -77,13 +131,23 @@ impl Database {
     // ── Schema ────────────────────────────────────────────────────────────
 
     pub async fn init_schema(&self) -> Result<()> {
-        let conn = self
+        let mut conn = self
             .write_pool
             .get()
             .await
             .map_err(|e| anyhow!("Pool error: {}", e))?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|e| anyhow!("Schema init begin failed: {}", e))?;
 
-        conn.batch_execute(
+        // Serialise schema init across instances: concurrent `CREATE TABLE IF
+        // NOT EXISTS` on a fresh database races on the catalog and fails.
+        tx.execute("SELECT pg_advisory_xact_lock($1)", &[&SCHEMA_INIT_LOCK_KEY])
+            .await
+            .map_err(|e| anyhow!("Schema init lock failed: {}", e))?;
+
+        tx.batch_execute(
             r#"
             -- Main events table. PRIMARY KEY provides the idempotency guarantee.
             CREATE TABLE IF NOT EXISTS events (
@@ -115,6 +179,26 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_events_not_invalidated
                 ON events(ledger_sequence DESC)
                 WHERE reorg_invalidated_at IS NULL;
+
+            -- Latest known state per match, maintained by insert_event.
+            -- Creation fields are NULL until the match's created event is seen.
+            CREATE TABLE IF NOT EXISTS matches (
+                match_id          BIGINT      PRIMARY KEY,
+                player1           TEXT,
+                player2           TEXT,
+                stake_amount      TEXT,
+                token             TEXT,
+                game_id           TEXT,
+                platform          TEXT,
+                created_ledger    INTEGER,
+                status            TEXT,
+                winner            TEXT,
+                last_ledger       INTEGER     NOT NULL,
+                last_event_index  SMALLINT,
+                updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
 
             -- Leader-election table.
             -- The single row (instance_id='__leader__') acts as a distributed
@@ -149,20 +233,48 @@ impl Database {
         .await
         .map_err(|e| anyhow!("Schema init failed: {}", e))?;
 
+        // Backfill matches whose events predate the `matches` table.  A no-op
+        // once every match has a row.
+        tx.execute(
+            format!(
+                "{} ON CONFLICT (match_id) DO NOTHING",
+                rebuild_matches_sql(
+                    "NOT EXISTS (SELECT 1 FROM matches mm WHERE mm.match_id = events.match_id)"
+                )
+            )
+            .as_str(),
+            &[],
+        )
+        .await
+        .map_err(|e| anyhow!("matches backfill failed: {}", e))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| anyhow!("Schema init commit failed: {}", e))?;
+
         Ok(())
     }
 
     // ── Write path ────────────────────────────────────────────────────────
 
-    /// Insert an event.  Uses `ON CONFLICT DO NOTHING` so re-ingestion is safe.
+    /// Insert an event and fold it into the match's materialised state.
+    ///
+    /// Uses `ON CONFLICT DO NOTHING` so re-ingestion is safe; a duplicate event
+    /// leaves `matches` untouched.  Both writes share one transaction so the
+    /// materialised state can never drift from the event log.
     pub async fn insert_event(&self, event: &IndexedEvent) -> Result<()> {
-        let conn = self
+        let mut conn = self
             .write_pool
             .get()
             .await
             .map_err(|e| anyhow!("Pool error: {}", e))?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|e| anyhow!("insert_event begin failed: {}", e))?;
 
-        conn.execute(
+        let inserted = tx
+            .execute(
             "INSERT INTO events (
                 id, ledger_sequence, match_id, event_type,
                 player1, player2, status, winner,
@@ -193,8 +305,16 @@ impl Database {
                 &event.reorg_invalidated_at,
             ],
         )
-        .await
-        .map_err(|e| anyhow!("insert_event failed: {}", e))?;
+            .await
+            .map_err(|e| anyhow!("insert_event failed: {}", e))?;
+
+        if inserted == 1 && event.reorg_invalidated_at.is_none() {
+            apply_event_to_match(&tx, event).await?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| anyhow!("insert_event commit failed: {}", e))?;
 
         Ok(())
     }
@@ -255,24 +375,46 @@ impl Database {
         end_ledger: u32,
         reason: &str,
     ) -> Result<i64> {
-        let conn = self
+        let mut conn = self
             .write_pool
             .get()
             .await
             .map_err(|e| anyhow!("Pool error: {}", e))?;
+        let tx = conn
+            .transaction()
+            .await
+            .map_err(|e| anyhow!("mark_events_as_invalid begin failed: {}", e))?;
 
         // Mark events as invalidated
-        let count = conn
-            .execute(
+        let invalidated = tx
+            .query(
                 "UPDATE events SET reorg_invalidated_at = NOW()
-                 WHERE ledger_sequence BETWEEN $1 AND $2 AND reorg_invalidated_at IS NULL",
+                 WHERE ledger_sequence BETWEEN $1 AND $2 AND reorg_invalidated_at IS NULL
+                 RETURNING match_id",
                 &[&(start_ledger as i32), &(end_ledger as i32)],
             )
             .await
             .map_err(|e| anyhow!("mark_events_as_invalid failed: {}", e))?;
+        let count = invalidated.len();
+
+        // Rebuild the materialised state of every match that lost events.
+        let mut match_ids: Vec<i64> = invalidated.iter().map(|r| r.get(0)).collect();
+        match_ids.sort_unstable();
+        match_ids.dedup();
+        if !match_ids.is_empty() {
+            tx.execute("DELETE FROM matches WHERE match_id = ANY($1)", &[&match_ids])
+                .await
+                .map_err(|e| anyhow!("matches reorg delete failed: {}", e))?;
+            tx.execute(
+                rebuild_matches_sql("match_id = ANY($1)").as_str(),
+                &[&match_ids],
+            )
+            .await
+            .map_err(|e| anyhow!("matches reorg rebuild failed: {}", e))?;
+        }
 
         // Log the reorg event
-        conn.execute(
+        tx.execute(
             "INSERT INTO reorg_events (contract_id, reorg_ledger, reason, events_invalidated_count)
              VALUES ($1, $2, $3, $4)",
             &[
@@ -284,6 +426,10 @@ impl Database {
         )
         .await
         .map_err(|e| anyhow!("Failed to log reorg event: {}", e))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| anyhow!("mark_events_as_invalid commit failed: {}", e))?;
 
         Ok(count as i64)
     }
@@ -299,12 +445,13 @@ impl Database {
 
         let rows = conn
             .query(
-                "SELECT id, ledger_sequence, match_id, event_type, player1, player2,
-                        status, winner, stake_amount, token, game_id, platform,
-                        timestamp, txn_hash
-                 FROM events
-                 WHERE match_id = $1
-                 ORDER BY ledger_sequence ASC",
+                format!(
+                    "SELECT {EVENT_COLUMNS}
+                     FROM events
+                     WHERE match_id = $1
+                     ORDER BY ledger_sequence ASC"
+                )
+                .as_str(),
                 &[&(match_id as i64)],
             )
             .await
@@ -327,13 +474,14 @@ impl Database {
 
         let rows = conn
             .query(
-                "SELECT id, ledger_sequence, match_id, event_type, player1, player2,
-                        status, winner, stake_amount, token, game_id, platform,
-                        timestamp, txn_hash
-                 FROM events
-                 WHERE match_id = $1
-                 ORDER BY ledger_sequence ASC
-                 LIMIT $2 OFFSET $3",
+                format!(
+                    "SELECT {EVENT_COLUMNS}
+                     FROM events
+                     WHERE match_id = $1
+                     ORDER BY ledger_sequence ASC
+                     LIMIT $2 OFFSET $3"
+                )
+                .as_str(),
                 &[&(match_id as i64), &limit, &offset],
             )
             .await
@@ -351,12 +499,7 @@ impl Database {
 
         // Build a parameterised query dynamically to avoid SQL injection while
         // still allowing flexible filtering.
-        let mut query = String::from(
-            "SELECT id, ledger_sequence, match_id, event_type, player1, player2,
-                    status, winner, stake_amount, token, game_id, platform,
-                    timestamp, txn_hash
-             FROM events WHERE TRUE",
-        );
+        let mut query = format!("SELECT {EVENT_COLUMNS} FROM events WHERE TRUE");
 
         // Collect parameter values; positions are 1-indexed in Postgres.
         let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> = Vec::new();
@@ -694,52 +837,51 @@ impl Database {
         Ok(val.map(|v| v as u32))
     }
 
+    /// Build a match summary from its materialised state plus its event log.
+    ///
+    /// Status, winner and creation fields come from the `matches` row kept
+    /// current by [`Database::insert_event`]; nothing is replayed here.
     pub async fn build_match_info(&self, match_id: u64) -> Result<Option<MatchInfo>> {
-        let events = self.get_events_by_match(match_id).await?;
+        let conn = self
+            .read_pool
+            .get()
+            .await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
 
-        if events.is_empty() {
+        let Some(row) = conn
+            .query_opt(
+                "SELECT player1, player2, status, winner, stake_amount, token, game_id,
+                        platform, created_ledger, last_ledger
+                 FROM matches
+                 WHERE match_id = $1",
+                &[&(match_id as i64)],
+            )
+            .await
+            .map_err(|e| anyhow!("build_match_info failed: {}", e))?
+        else {
             return Ok(None);
-        }
-
-        let created_event = events
-            .iter()
-            .find(|e| e.event_type == "match:created" || e.event_type.contains("created"))
-            .ok_or_else(|| anyhow!("no created event found for match {}", match_id))?;
-        let latest_event = events.last().unwrap();
-
-        let status = if let Some(ref s) = latest_event.status {
-            match s.as_str() {
-                "pending" => MatchStatus::Pending,
-                "active" => MatchStatus::Active,
-                "completed" => MatchStatus::Completed,
-                "cancelled" => MatchStatus::Cancelled,
-                "expired" => MatchStatus::Expired,
-                _ => MatchStatus::Pending,
-            }
-        } else {
-            MatchStatus::Pending
         };
 
-        let winner = latest_event.winner.as_ref().and_then(|w| match w.as_str() {
-            "player1" => Some(Winner::Player1),
-            "player2" => Some(Winner::Player2),
-            "draw" => Some(Winner::Draw),
-            _ => None,
-        });
+        let created_ledger: i32 = row
+            .get::<_, Option<i32>>(8)
+            .ok_or_else(|| anyhow!("no created event found for match {}", match_id))?;
+        let last_ledger: i32 = row.get(9);
+        let status: Option<String> = row.get(2);
+        let winner: Option<String> = row.get(3);
 
         Ok(Some(MatchInfo {
             match_id,
-            player1: created_event.player1.clone().unwrap_or_default(),
-            player2: created_event.player2.clone().unwrap_or_default(),
-            status,
-            winner,
-            stake_amount: created_event.stake_amount.clone().unwrap_or_default(),
-            token: created_event.token.clone().unwrap_or_default(),
-            game_id: created_event.game_id.clone().unwrap_or_default(),
-            platform: created_event.platform.clone().unwrap_or_default(),
-            created_ledger: created_event.ledger_sequence,
-            completed_ledger: Some(latest_event.ledger_sequence),
-            events,
+            player1: row.get::<_, Option<String>>(0).unwrap_or_default(),
+            player2: row.get::<_, Option<String>>(1).unwrap_or_default(),
+            status: parse_status(status.as_deref()),
+            winner: winner.as_deref().and_then(parse_winner),
+            stake_amount: row.get::<_, Option<String>>(4).unwrap_or_default(),
+            token: row.get::<_, Option<String>>(5).unwrap_or_default(),
+            game_id: row.get::<_, Option<String>>(6).unwrap_or_default(),
+            platform: row.get::<_, Option<String>>(7).unwrap_or_default(),
+            created_ledger: created_ledger as u32,
+            completed_ledger: Some(last_ledger as u32),
+            events: self.get_events_by_match(match_id).await?,
         }))
     }
 
@@ -1088,6 +1230,90 @@ impl Database {
 }
 
 // ── Row mapping ───────────────────────────────────────────────────────────────
+
+// ── Materialised match state ──────────────────────────────────────────────────
+
+/// Fold one newly-inserted event into its match's `matches` row.
+///
+/// - Creation fields are taken from the earliest `*created*` event.
+/// - Status and winner are taken from the latest event by
+///   `(ledger_sequence, event_index_in_txn)`, so events ingested out of order
+///   never roll the state backwards.
+async fn apply_event_to_match(tx: &Transaction<'_>, event: &IndexedEvent) -> Result<()> {
+    let is_created = event.event_type.contains("created");
+    let created = |field: &Option<String>| if is_created { field.clone() } else { None };
+    let created_ledger = is_created.then_some(event.ledger_sequence as i32);
+
+    const IS_EARLIER_CREATED: &str = "EXCLUDED.created_ledger IS NOT NULL
+        AND (m.created_ledger IS NULL OR EXCLUDED.created_ledger < m.created_ledger)";
+    const IS_LATEST: &str = "(EXCLUDED.last_ledger, COALESCE(EXCLUDED.last_event_index, -1))
+        >= (m.last_ledger, COALESCE(m.last_event_index, -1))";
+
+    let sql = format!(
+        "INSERT INTO matches AS m (
+            match_id, player1, player2, stake_amount, token, game_id, platform,
+            created_ledger, status, winner, last_ledger, last_event_index, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+        ON CONFLICT (match_id) DO UPDATE SET
+            player1          = CASE WHEN {c} THEN EXCLUDED.player1        ELSE m.player1        END,
+            player2          = CASE WHEN {c} THEN EXCLUDED.player2        ELSE m.player2        END,
+            stake_amount     = CASE WHEN {c} THEN EXCLUDED.stake_amount   ELSE m.stake_amount   END,
+            token            = CASE WHEN {c} THEN EXCLUDED.token          ELSE m.token          END,
+            game_id          = CASE WHEN {c} THEN EXCLUDED.game_id        ELSE m.game_id        END,
+            platform         = CASE WHEN {c} THEN EXCLUDED.platform       ELSE m.platform       END,
+            created_ledger   = CASE WHEN {c} THEN EXCLUDED.created_ledger ELSE m.created_ledger END,
+            status           = CASE WHEN {l} THEN EXCLUDED.status           ELSE m.status           END,
+            winner           = CASE WHEN {l} THEN EXCLUDED.winner           ELSE m.winner           END,
+            last_ledger      = CASE WHEN {l} THEN EXCLUDED.last_ledger      ELSE m.last_ledger      END,
+            last_event_index = CASE WHEN {l} THEN EXCLUDED.last_event_index ELSE m.last_event_index END,
+            updated_at       = NOW()",
+        c = IS_EARLIER_CREATED,
+        l = IS_LATEST,
+    );
+
+    tx.execute(
+        sql.as_str(),
+        &[
+            &(event.match_id as i64),
+            &created(&event.player1),
+            &created(&event.player2),
+            &created(&event.stake_amount),
+            &created(&event.token),
+            &created(&event.game_id),
+            &created(&event.platform),
+            &created_ledger,
+            &event.status,
+            &event.winner,
+            &(event.ledger_sequence as i32),
+            &event.event_index_in_txn.map(|i| i as i16),
+        ],
+    )
+    .await
+    .map_err(|e| anyhow!("apply_event_to_match failed: {}", e))?;
+
+    Ok(())
+}
+
+/// Unknown or missing statuses read as `Pending`, matching the event log's
+/// historical interpretation.
+fn parse_status(status: Option<&str>) -> MatchStatus {
+    match status {
+        Some("active") => MatchStatus::Active,
+        Some("completed") => MatchStatus::Completed,
+        Some("cancelled") => MatchStatus::Cancelled,
+        Some("expired") => MatchStatus::Expired,
+        _ => MatchStatus::Pending,
+    }
+}
+
+fn parse_winner(winner: &str) -> Option<Winner> {
+    match winner {
+        "player1" => Some(Winner::Player1),
+        "player2" => Some(Winner::Player2),
+        "draw" => Some(Winner::Draw),
+        _ => None,
+    }
+}
 
 /// Map a history row onto a [`TransactionRecord`].
 ///

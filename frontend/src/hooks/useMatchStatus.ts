@@ -125,6 +125,13 @@ export function useMatchStatus(
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isMountedRef = useRef<boolean>(true);
 
+  // Callers commonly pass an inline fetcher, so keep the latest one in a ref
+  // instead of restarting the polling effect on every render.
+  const getMatchFnRef = useRef<GetMatchFunction>(getMatchFn);
+  useEffect(() => {
+    getMatchFnRef.current = getMatchFn;
+  }, [getMatchFn]);
+
   // Reset loading synchronously during render when `enabled` flips to false,
   // instead of from inside an effect (avoids a cascading extra render).
   const [prevEnabled, setPrevEnabled] = useState(enabled);
@@ -150,7 +157,7 @@ export function useMatchStatus(
     if (!enabled) return;
 
     try {
-      const matchData = await getMatchFn(matchId);
+      const matchData = await getMatchFnRef.current(matchId);
 
       // Only update state if component is still mounted
       if (isMountedRef.current) {
@@ -170,7 +177,7 @@ export function useMatchStatus(
         setLoading(false);
       }
     }
-  }, [matchId, getMatchFn, enabled, shouldStopPolling]);
+  }, [matchId, enabled, shouldStopPolling]);
 
   /**
    * Manual refetch function that can be called by consumers
@@ -189,7 +196,6 @@ export function useMatchStatus(
     // Fetch immediately on mount or when matchId changes. fetchMatch is
     // async and only sets state after its `await`, i.e. in a microtask, so
     // this can't actually trigger a synchronous cascading render.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchMatch();
 
     // Set up polling interval if match is not in terminal state

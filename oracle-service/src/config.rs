@@ -34,7 +34,7 @@ use std::fmt;
 use zeroize::Zeroizing;
 
 /// Platform the oracle is watching for a specific match.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Platform {
     Lichess,
     ChessDotCom,

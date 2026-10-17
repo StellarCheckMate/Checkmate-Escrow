@@ -321,6 +321,82 @@ describe('useMatchStatus', () => {
       expect(result.current.loading).toBe(true);
       expect(result.current.match).toBe(null);
     });
+
+    it('should leave no pending timers after unmount', async () => {
+      const getMatchFn = vi.fn().mockResolvedValue(createMockMatch({ state: MatchState.Active }));
+
+      const { unmount } = renderHook(() =>
+        useMatchStatus(1, getMatchFn, { interval: 5000 })
+      );
+
+      await waitFor(() => {
+        expect(getMatchFn).toHaveBeenCalledTimes(1);
+      });
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+      unmount();
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('should not re-render when a poll resolves after unmount', async () => {
+      const activeMatch = createMockMatch({ state: MatchState.Active });
+      let resolvePoll: (value: Match) => void;
+      const getMatchFn = vi
+        .fn()
+        .mockResolvedValueOnce(activeMatch)
+        .mockImplementationOnce(
+          () =>
+            new Promise<Match>((resolve) => {
+              resolvePoll = resolve;
+            })
+        );
+
+      let renders = 0;
+      const { result, unmount } = renderHook(() => {
+        renders += 1;
+        return useMatchStatus(1, getMatchFn, { interval: 5000 });
+      });
+
+      await waitFor(() => {
+        expect(result.current.match).toEqual(activeMatch);
+      });
+
+      // Start a poll, then unmount while it is still in flight.
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(getMatchFn).toHaveBeenCalledTimes(2);
+
+      unmount();
+      const rendersAtUnmount = renders;
+
+      await act(async () => {
+        resolvePoll!(createMockMatch({ state: MatchState.Completed }));
+        await vi.advanceTimersByTimeAsync(20000);
+      });
+
+      expect(renders).toBe(rendersAtUnmount);
+      expect(getMatchFn).toHaveBeenCalledTimes(2);
+    });
+
+    it('should not restart polling when given a new inline fetcher each render', async () => {
+      const mockMatch = createMockMatch({ state: MatchState.Active });
+      const getMatchFn = vi.fn().mockResolvedValue(mockMatch);
+
+      const { result, rerender } = renderHook(() =>
+        useMatchStatus(1, (id) => getMatchFn(id), { interval: 5000 })
+      );
+
+      await waitFor(() => {
+        expect(result.current.match).toEqual(mockMatch);
+      });
+
+      rerender();
+      rerender();
+
+      expect(getMatchFn).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('matchId changes', () => {

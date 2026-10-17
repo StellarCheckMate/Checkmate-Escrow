@@ -114,6 +114,62 @@ describe('useMatch', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:8080/match/2');
   });
 
+  it('clears the polling interval on unmount', async () => {
+    vi.useFakeTimers();
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, data: { match_id: 1 }, error: null }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { unmount } = renderHook(() => useMatch(1));
+    await act(async () => {});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not update state when a request resolves after unmount', async () => {
+    vi.useFakeTimers();
+
+    let resolveFetch: (value: unknown) => void;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    let renders = 0;
+    const { result, unmount } = renderHook(() => {
+      renders += 1;
+      return useMatch(1);
+    });
+    expect(result.current.loading).toBe(true);
+
+    unmount();
+    const rendersAtUnmount = renders;
+
+    await act(async () => {
+      resolveFetch!({
+        ok: true,
+        json: async () => ({ success: true, data: { match_id: 1 }, error: null }),
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(renders).toBe(rendersAtUnmount);
+    expect(result.current.match).toBeNull();
+  });
+
   it('returns null match with no error or loading when matchId is null', () => {
     const { result } = renderHook(() => useMatch(null));
 

@@ -7,7 +7,7 @@ pub mod rate_limiter;
 
 pub use chess_com_client::{ChessComClient, ChessComGameResult};
 pub use errors::{ChessComError, LichessError, OracleServiceError};
-pub use lichess_client::{LichessClient, LichessGameResult};
+pub use lichess_client::{LichessClient, LichessGameResult, LICHESS_BATCH_MAX_IDS};
 
 /// Local re-export of the on-chain `Winner` enum so callers don't need to
 /// depend on `contracts_oracle` directly.

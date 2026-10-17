@@ -1,8 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use contracts_oracle::types::Winner;
-use reqwest::Client;
+use reqwest::{Client, Response};
 use serde::Deserialize;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
@@ -10,6 +11,13 @@ use super::errors::LichessError;
 use super::provider::GameProvider;
 use super::provider_error::ProviderError;
 use super::rate_limiter::{RateLimiter, RateLimiterConfig};
+
+/// Maximum number of game IDs Lichess accepts per `POST /api/games/export/_ids`.
+pub const LICHESS_BATCH_MAX_IDS: usize = 300;
+
+/// Lichess asks clients to wait a full minute after a 429 when no
+/// `Retry-After` header is provided.
+const DEFAULT_RATE_LIMIT_BACKOFF: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LichessGameResult {
@@ -153,29 +161,106 @@ impl LichessClient {
             return Err(LichessError::GameNotFound);
         }
         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = resp
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<u64>().ok())
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(60));
-            return Err(LichessError::RateLimited { retry_after });
+            return Err(LichessError::RateLimited {
+                retry_after: retry_after(&resp),
+            });
         }
         if !status.is_success() {
             return Err(LichessError::HttpStatus { status });
         }
 
         let body: LichessGame = resp.json().await.map_err(LichessError::Http)?;
+        game_result(&body)
+    }
 
-        let winner = match body.winner.as_deref() {
-            Some("white") => Winner::Player1,
-            Some("black") => Winner::Player2,
-            None => Winner::Draw,
-            _ => return Err(LichessError::InvalidResponse),
-        };
+    /// Fetch the results of many games with one request per
+    /// [`LICHESS_BATCH_MAX_IDS`] IDs (`POST /api/games/export/_ids`).
+    ///
+    /// Returns one entry per distinct input ID.  Per-game problems (invalid
+    /// ID, game missing from the response, game still in progress) are
+    /// reported in that game's entry.  A failure of the request itself —
+    /// including [`LichessError::RateLimited`] — fails the whole call so the
+    /// caller can back off instead of retrying each game individually.
+    pub async fn fetch_results_batch(
+        &self,
+        game_ids: &[String],
+    ) -> Result<HashMap<String, Result<LichessGameResult, LichessError>>, LichessError> {
+        let mut results = HashMap::new();
+        let mut valid: Vec<&str> = Vec::new();
+        for id in game_ids {
+            if results.contains_key(id) || valid.contains(&id.as_str()) {
+                continue;
+            }
+            match Self::validate_game_id(id) {
+                Ok(()) => valid.push(id),
+                Err(e) => {
+                    results.insert(id.clone(), Err(e));
+                }
+            }
+        }
 
-        Ok(LichessGameResult { winner })
+        for chunk in valid.chunks(LICHESS_BATCH_MAX_IDS) {
+            let body = self.export_games(chunk).await?;
+            let mut games: HashMap<String, LichessGame> = HashMap::new();
+            for line in body.lines().map(str::trim).filter(|l| !l.is_empty()) {
+                let game: LichessGame =
+                    serde_json::from_str(line).map_err(|_| LichessError::InvalidResponse)?;
+                if let Some(id) = game.id.clone() {
+                    games.insert(id, game);
+                }
+            }
+            for id in chunk {
+                // Lichess silently omits IDs it does not know.
+                let result = games
+                    .get(*id)
+                    .map_or(Err(LichessError::GameNotFound), game_result);
+                results.insert(id.to_string(), result);
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// One `POST /api/games/export/_ids` round trip; returns the NDJSON body.
+    async fn export_games(&self, ids: &[&str]) -> Result<String, LichessError> {
+        self.rate_limiter.acquire().await;
+        let _permit: OwnedSemaphorePermit = self
+            .semaphore
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("semaphore closed");
+
+        let url = format!(
+            "{}/api/games/export/_ids",
+            self.api_base.trim_end_matches('/')
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .header("Accept", "application/x-ndjson")
+            .header("Content-Type", "text/plain")
+            .body(ids.join(","))
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    LichessError::Timeout
+                } else {
+                    LichessError::Http(e)
+                }
+            })?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(LichessError::RateLimited {
+                retry_after: retry_after(&resp),
+            });
+        }
+        if !status.is_success() {
+            return Err(LichessError::HttpStatus { status });
+        }
+        resp.text().await.map_err(LichessError::Http)
     }
 
     /// Health check: test connectivity to the Lichess API.
@@ -211,6 +296,32 @@ impl LichessClient {
             })
         }
     }
+}
+
+/// `Retry-After` in whole seconds, defaulting to Lichess's one-minute guidance.
+fn retry_after(resp: &Response) -> Duration {
+    resp.headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_RATE_LIMIT_BACKOFF)
+}
+
+/// Map a Lichess game record onto a settled result.
+///
+/// Lichess omits `winner` for draws, but also for games still being played
+/// (`status` `created` / `started`); those are reported as
+/// [`LichessError::GameNotFinished`] rather than settled as a draw.
+fn game_result(game: &LichessGame) -> Result<LichessGameResult, LichessError> {
+    let winner = match (game.winner.as_deref(), game.status.as_deref()) {
+        (Some("white"), _) => Winner::Player1,
+        (Some("black"), _) => Winner::Player2,
+        (Some(_), _) => return Err(LichessError::InvalidResponse),
+        (None, Some("created" | "started")) => return Err(LichessError::GameNotFinished),
+        (None, _) => Winner::Draw,
+    };
+    Ok(LichessGameResult { winner })
 }
 
 // ── GameProvider impl ─────────────────────────────────────────────────────────
@@ -260,5 +371,7 @@ impl GameProvider for LichessClient {
 
 #[derive(Debug, Deserialize)]
 struct LichessGame {
+    id: Option<String>,
+    status: Option<String>,
     winner: Option<String>,
 }
