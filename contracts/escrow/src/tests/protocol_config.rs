@@ -10,17 +10,23 @@ use super::*;
 /// Build a non-default `ProtocolConfig` for assertion purposes.
 fn custom_config(env: &Env, treasury: &Address) -> ProtocolConfig {
     ProtocolConfig {
-        vesting_duration_seconds: 86_400,
-        cancellation_fee_basis_points: 50,
+        fee: FeeConfig {
+            protocol_fee_bps: 100,
+            fee_recipient: treasury.clone(),
+            cancellation_fee_basis_points: 50,
+            max_protocol_fee: None,
+        },
+        timeout: TimeoutConfig {
+            match_timeout_seconds: 604_800, // 7 days
+            vesting_duration_seconds: 86_400,
+        },
+        stake: StakeConfig {
+            minimum_stake: DEFAULT_MINIMUM_STAKE,
+            maximum_stake: Some(5_000),
+            stablecoin_only_mode: false,
+        },
         treasury: treasury.clone(),
-        stablecoin_only_mode: false,
-        maximum_stake: Some(5_000),
-        match_timeout_seconds: 604_800, // 7 days
-        protocol_fee_bps: 100,
-        fee_recipient: treasury.clone(),
-        minimum_stake: DEFAULT_MINIMUM_STAKE,
-                max_protocol_fee: None,
-                dispute_bond_tier_schedule: soroban_sdk::vec![env],
+        dispute_bond_tier_schedule: soroban_sdk::vec![env],
     }
 }
 
@@ -36,17 +42,23 @@ fn test_get_protocol_config_returns_config_set_during_initialize() {
 
     // The `setup()` fixture stores this exact config via `set_protocol_config`.
     let expected = ProtocolConfig {
-        vesting_duration_seconds: 0,
-        cancellation_fee_basis_points: 0,
+        fee: FeeConfig {
+            protocol_fee_bps: 0,
+            fee_recipient: admin.clone(),
+            cancellation_fee_basis_points: 0,
+            max_protocol_fee: None,
+        },
+        timeout: TimeoutConfig {
+            match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+            vesting_duration_seconds: 0,
+        },
+        stake: StakeConfig {
+            minimum_stake: DEFAULT_MINIMUM_STAKE,
+            maximum_stake: None,
+            stablecoin_only_mode: false,
+        },
         treasury: admin.clone(),
-        stablecoin_only_mode: false,
-        maximum_stake: None,
-        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
-        protocol_fee_bps: 0,
-        fee_recipient: admin.clone(),
-        minimum_stake: DEFAULT_MINIMUM_STAKE,
-                max_protocol_fee: None,
-                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
+        dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     };
 
     let actual = client.get_protocol_config();
@@ -62,17 +74,23 @@ fn test_get_protocol_config_reflects_update_after_set() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let updated = ProtocolConfig {
-        vesting_duration_seconds: 3_600,
-        cancellation_fee_basis_points: 25,
+        fee: FeeConfig {
+            protocol_fee_bps: 200,
+            fee_recipient: admin.clone(),
+            cancellation_fee_basis_points: 25,
+            max_protocol_fee: None,
+        },
+        timeout: TimeoutConfig {
+            match_timeout_seconds: 172_800, // 2 days
+            vesting_duration_seconds: 3_600,
+        },
+        stake: StakeConfig {
+            minimum_stake: DEFAULT_MINIMUM_STAKE,
+            maximum_stake: Some(10_000),
+            stablecoin_only_mode: false,
+        },
         treasury: admin.clone(),
-        stablecoin_only_mode: false,
-        maximum_stake: Some(10_000),
-        match_timeout_seconds: 172_800, // 2 days
-        protocol_fee_bps: 200,
-        fee_recipient: admin.clone(),
-        minimum_stake: DEFAULT_MINIMUM_STAKE,
-                max_protocol_fee: None,
-                dispute_bond_tier_schedule: soroban_sdk::vec![&env],
+        dispute_bond_tier_schedule: soroban_sdk::vec![&env],
     };
 
     client.set_protocol_config(&updated);
@@ -152,7 +170,7 @@ fn test_set_protocol_config_rejects_self_referential_fee_recipient() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     let mut cfg = custom_config(&env, &admin);
-    cfg.fee_recipient = contract_id.clone();
+    cfg.fee.fee_recipient = contract_id.clone();
 
     let result = client.try_set_protocol_config(&cfg);
     assert!(

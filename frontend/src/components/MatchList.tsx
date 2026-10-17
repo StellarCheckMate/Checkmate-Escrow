@@ -58,7 +58,14 @@ export function MatchList({ matches, loading = false, error = null, onRefresh }:
   }
 
   if (matches.length === 0) {
-    return <p>No matches found.</p>;
+    return (
+      <div role="status" aria-live="polite" className="empty-state">
+        <p>You have no matches yet.</p>
+        <a href="/matches/new" className="empty-state__cta">
+          Create a match
+        </a>
+      </div>
+    );
   }
 
   return (

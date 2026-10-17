@@ -44,36 +44,79 @@ pub struct PendingAdminProposal {
     pub pending_admin: Address,
 }
 
+/// Fee-related protocol configuration.
+///
+/// Groups the protocol fee, cancellation fee, fee recipient, and the optional
+/// per-match fee cap. Embedded in [`ProtocolConfig`] as `fees`.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProtocolConfig {
-    pub vesting_duration_seconds: u64,
-    pub cancellation_fee_basis_points: u32,
-    pub treasury: Address,
-    /// When true, only tokens issued by a registered stablecoin issuer are
-    /// accepted for new matches.  Disabled by default.
-    pub stablecoin_only_mode: bool,
-    /// Upper bound on `stake_amount` accepted by `create_match` and friends.
-    /// `None` means unlimited (default).
-    pub maximum_stake: Option<i128>,
-    /// Runtime-configurable match expiration timeout, in seconds.
-    pub match_timeout_seconds: u64,
+pub struct FeeConfig {
     /// Protocol fee charged on winner payouts, in basis points of the pot
     /// (1 bp = 0.01 %). Draw refunds are never charged this fee. Default 0.
     pub protocol_fee_bps: u32,
     /// Recipient of the protocol fee collected on winner payouts.
     pub fee_recipient: Address,
-    /// Minimum stake amount enforced in create_match (default 1).
-    pub minimum_stake: i128,
+    /// Fee charged when a match is cancelled, in basis points.
+    pub cancellation_fee_basis_points: u32,
     /// Optional absolute cap on the protocol fee per match (in token units).
     /// When set, `fee = min(calculated_fee, max_protocol_fee)`.
     /// `None` means no cap (default).
     pub max_protocol_fee: Option<i128>,
+}
+
+/// Timeout- and vesting-related protocol configuration.
+///
+/// Groups the match expiration timeout and the winner-payout vesting duration.
+/// Embedded in [`ProtocolConfig`] as `timeouts`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TimeoutConfig {
+    /// Runtime-configurable match expiration timeout, in seconds.
+    pub match_timeout_seconds: u64,
+    /// Duration winners must wait before claiming vested payouts, in seconds.
+    pub vesting_duration_seconds: u64,
+}
+
+/// Stake-limit-related protocol configuration.
+///
+/// Groups the minimum/maximum stake bounds, the stablecoin-only mode flag, and
+/// the per-tier dispute bond schedule. Embedded in [`ProtocolConfig`] as
+/// `stakes`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StakeConfig {
+    /// Minimum stake amount enforced in create_match (default 1).
+    pub minimum_stake: i128,
+    /// Upper bound on `stake_amount` accepted by `create_match` and friends.
+    /// `None` means unlimited (default).
+    pub maximum_stake: Option<i128>,
+    /// When true, only tokens issued by a registered stablecoin issuer are
+    /// accepted for new matches.  Disabled by default.
+    pub stablecoin_only_mode: bool,
     /// Per-tier dispute bond schedule, mirroring the fee-tier pattern. Stored in
     /// ascending `max_stake` order; each entry's `bond_basis_points` applies to
     /// stakes up to `max_stake`. When empty (default), the global
     /// `DisputeBondBasisPoints` value is used.
     pub dispute_bond_tier_schedule: soroban_sdk::Vec<DisputeBondTier>,
+}
+
+/// Combined protocol configuration.
+///
+/// The fee, timeout, and stake settings are grouped into the [`FeeConfig`],
+/// [`TimeoutConfig`], and [`StakeConfig`] sub-structs to keep this type
+/// manageable. `get_protocol_config` still returns this combined struct so the
+/// public ABI remains unchanged.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProtocolConfig {
+    /// Treasury address receiving cancellation fees and other protocol funds.
+    pub treasury: Address,
+    /// Fee-related settings.
+    pub fees: FeeConfig,
+    /// Timeout- and vesting-related settings.
+    pub timeouts: TimeoutConfig,
+    /// Stake-limit-related settings.
+    pub stakes: StakeConfig,
 }
 
 /// A single fee tier entry: matches with a stake up to `max_stake` are charged

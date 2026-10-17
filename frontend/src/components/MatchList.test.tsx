@@ -68,9 +68,11 @@ describe('MatchList', () => {
     expect(screen.getByRole('alert').textContent).toBe('Failed to load');
   });
 
-  it('shows empty state when no matches', () => {
+  it('shows empty state with a create-match call-to-action when no matches', () => {
     render(<MatchList matches={[]} />);
-    expect(screen.getByText('No matches found.')).toBeTruthy();
+    expect(screen.getByText(/no matches yet/i)).toBeTruthy();
+    const cta = screen.getByRole('link', { name: /create a match/i });
+    expect(cta.getAttribute('href')).toBe('/matches/create');
   });
 
   it('renders a list with accessible semantics', () => {

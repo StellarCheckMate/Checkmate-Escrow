@@ -43,16 +43,11 @@ use soroban_sdk::{
     Symbol, Vec,
 };
 use types::{
-    BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeBondTier, DisputeState, FeeTier,
-    Match, MatchState, OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform,
-    PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey, PlayerRating, PlayerRatingKey,
-    PlayerStats, PlayerTier, ProtocolConfig, SnapshotReason, TempOracleRotation,
-    TokenSymbolCacheKey, Winner,
     BalanceAtTimestamp, BalanceSnapshot, BracketKey, DataKey, Dispute, DisputeBondTier,
     DisputeState, FeeTier, Match, MatchState, OracleRotationState, PendingAdminProposal,
     PendingOracleRotation, Platform, PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey,
     PlayerRating, PlayerRatingKey, PlayerStats, PlayerTier, ProtocolConfig, SnapshotReason,
-    TempOracleRotation, Winner,
+    TempOracleRotation, TokenSymbolCacheKey, Winner,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -336,33 +331,35 @@ impl EscrowContract {
         admin.require_auth();
 
         // Validate protocol_fee_bps
-        if config.protocol_fee_bps > 10_000 {
+        if config.fees.protocol_fee_bps > 10_000 {
             return Err(Error::InvalidAmount);
         }
 
         // Validate cancellation_fee_basis_points
-        if config.cancellation_fee_basis_points > 10_000 {
+        if config.fees.cancellation_fee_basis_points > 10_000 {
             return Err(Error::InvalidAmount);
         }
 
         // Validate match_timeout_seconds
-        if !(MIN_MATCH_TIMEOUT_SECONDS..=MAX_MATCH_TIMEOUT_SECONDS).contains(&config.match_timeout_seconds) {
+        if !(MIN_MATCH_TIMEOUT_SECONDS..=MAX_MATCH_TIMEOUT_SECONDS)
+            .contains(&config.timeouts.match_timeout_seconds)
+        {
             return Err(Error::InvalidAmount);
         }
 
         // Validate minimum_stake and maximum_stake
-        if config.minimum_stake < 1 {
+        if config.stakes.minimum_stake < 1 {
             return Err(Error::InvalidAmount);
         }
-        if let Some(max) = config.maximum_stake {
-            if max < config.minimum_stake {
+        if let Some(max) = config.stakes.maximum_stake {
+            if max < config.stakes.minimum_stake {
                 return Err(Error::InvalidAmount);
             }
         }
 
         // Validate dispute_bond_tier_schedule: ordered and all bps <= 10_000
         let mut prev_max_stake: i128 = -1;
-        for tier in config.dispute_bond_tier_schedule.iter() {
+        for tier in config.stakes.dispute_bond_tier_schedule.iter() {
             if tier.max_stake <= prev_max_stake {
                 return Err(Error::InvalidAmount);
             }
@@ -374,10 +371,10 @@ impl EscrowContract {
 
         // Validate addresses
         let contract_address = env.current_contract_address();
-        if config.treasury == contract_address {
+        if config.fees.treasury == contract_address {
             return Err(Error::InvalidAddress);
         }
-        if config.fee_recipient == contract_address {
+        if config.fees.fee_recipient == contract_address {
             return Err(Error::InvalidAddress);
         }
 
@@ -385,9 +382,9 @@ impl EscrowContract {
             .storage()
             .instance()
             .get(&DataKey::ProtocolConfig)
-            .map(|c: ProtocolConfig| c.stablecoin_only_mode)
+            .map(|c: ProtocolConfig| c.stakes.stablecoin_only_mode)
             .unwrap_or(false);
-        let new_mode = config.stablecoin_only_mode;
+        let new_mode = config.stakes.stablecoin_only_mode;
         env.storage()
             .instance()
             .set(&DataKey::ProtocolConfig, &config);
@@ -462,7 +459,7 @@ impl EscrowContract {
             return Err(Error::InvalidAmount);
         }
         let mut config = Self::get_config(&env);
-        config.minimum_stake = amount;
+        config.stakes.minimum_stake = amount;
         env.storage()
             .instance()
             .set(&DataKey::ProtocolConfig, &config);
@@ -6782,17 +6779,23 @@ impl EscrowContract {
                     .unwrap_or_else(|| env.current_contract_address());
 
                 ProtocolConfig {
-                    vesting_duration_seconds: 259_200, // 3 days
-                    cancellation_fee_basis_points: 0,
-                    treasury: default_recipient.clone(),
-                    stablecoin_only_mode: false,
-                    maximum_stake: None,
-                    match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
-                    protocol_fee_bps: 0,
-                    fee_recipient: default_recipient,
-                    minimum_stake: DEFAULT_MINIMUM_STAKE,
-                    max_protocol_fee: None,
-                    dispute_bond_tier_schedule: soroban_sdk::vec![env],
+                    fees: types::FeeConfig {
+                        protocol_fee_bps: 0,
+                        cancellation_fee_basis_points: 0,
+                        treasury: default_recipient.clone(),
+                        fee_recipient: default_recipient,
+                        max_protocol_fee: None,
+                    },
+                    timeouts: types::TimeoutConfig {
+                        vesting_duration_seconds: 259_200, // 3 days
+                        match_timeout_seconds: DEFAULT_MATCH_TIMEOUT_SECONDS,
+                    },
+                    stakes: types::StakeConfig {
+                        stablecoin_only_mode: false,
+                        maximum_stake: None,
+                        minimum_stake: DEFAULT_MINIMUM_STAKE,
+                        dispute_bond_tier_schedule: soroban_sdk::vec![env],
+                    },
                 }
             })
     }
@@ -6808,11 +6811,11 @@ impl EscrowContract {
             return Ok(0);
         }
         let config = Self::get_config(env);
-        if config.cancellation_fee_basis_points == 0 {
+        if config.fees.cancellation_fee_basis_points == 0 {
             return Ok(0);
         }
         let platform_fee = pot
-            .checked_mul(config.cancellation_fee_basis_points as i128)
+            .checked_mul(config.fees.cancellation_fee_basis_points as i128)
             .ok_or(Error::Overflow)?
             / 10_000;
         let referral_share_bps: u32 = env
@@ -6835,15 +6838,15 @@ impl EscrowContract {
     /// Formula: `protocol_fee = pot * protocol_fee_bps / 10_000`
     fn compute_protocol_fee(env: &Env, pot: i128) -> Result<i128, Error> {
         let config = Self::get_config(env);
-        if config.protocol_fee_bps == 0 {
+        if config.fees.protocol_fee_bps == 0 {
             return Ok(0);
         }
         let fee = pot
-            .checked_mul(config.protocol_fee_bps as i128)
+            .checked_mul(config.fees.protocol_fee_bps as i128)
             .ok_or(Error::Overflow)?
             / 10_000;
         // Apply per-match fee cap if set (issue #1337).
-        let fee = if let Some(cap) = config.max_protocol_fee {
+        let fee = if let Some(cap) = config.fees.max_protocol_fee {
             fee.min(cap)
         } else {
             fee

@@ -304,7 +304,7 @@ impl Database {
                         timestamp, txn_hash
                  FROM events
                  WHERE match_id = $1
-                 ORDER BY ledger_sequence ASC",
+                 ORDER BY ledger_sequence ASC, event_index_in_txn ASC",
                 &[&(match_id as i64)],
             )
             .await

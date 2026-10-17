@@ -843,6 +843,74 @@ async fn reorg_event_marking() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Ledger ordering of match events (#1757)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Events inserted out of ledger order must be returned sorted by
+/// `ledger_sequence ASC, tx_index ASC` (i.e. in-txn index).
+#[tokio::test]
+#[cfg(feature = "pg_integration")]
+async fn get_events_by_match_returns_ledger_order() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping get_events_by_match_returns_ledger_order: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
+    db.init_schema().await.expect("schema");
+
+    const MATCH_ID: u64 = 987_654;
+    const ID_PREFIX: &str = "order-test-";
+
+    // Insert out of ledger order, with two events sharing a ledger to also
+    // exercise the tx_index tie-breaker.
+    let inserts: [(u32, u32); 6] = [
+        (103, 0),
+        (101, 1),
+        (105, 0),
+        (102, 0),
+        (104, 0),
+        (101, 0),
+    ];
+
+    for (ledger, tx_index) in inserts {
+        let mut e = make_event(&format!("{}{}-{}", ID_PREFIX, ledger, tx_index), MATCH_ID, ledger);
+        e.event_index_in_txn = Some(tx_index);
+        db.insert_event(&e).await.expect("insert");
+    }
+
+    let events = db
+        .get_events_by_match(MATCH_ID)
+        .await
+        .expect("get_events_by_match");
+
+    let ordering: Vec<(u32, u32)> = events
+        .iter()
+        .map(|e| (e.ledger_sequence, e.event_index_in_txn.unwrap_or(0)))
+        .collect();
+
+    assert_eq!(
+        ordering,
+        vec![(101, 0), (101, 1), (102, 0), (103, 0), (104, 0), (105, 0)],
+        "events must be sorted by ledger_sequence then tx_index"
+    );
+
+    // Cleanup
+    let conn = event_indexer::db::build_pool(&db_url, 1)
+        .unwrap()
+        .get()
+        .await
+        .unwrap();
+    let _ = conn
+        .execute(
+            "DELETE FROM events WHERE id LIKE $1",
+            &[&format!("{}%", ID_PREFIX)],
+        )
+        .await;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Event index tracking
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -34,6 +34,22 @@ For all of the above, `caller` is always the contract's registered `Admin`
 address, since every admin function calls `admin.require_auth()` before
 emitting its event.
 
+## Protocol configuration layout
+
+`ProtocolConfig` is split into three sub-structs so that each concern can be
+reasoned about and extended independently:
+
+| Sub-struct | Fields |
+|------------|--------|
+| `FeeConfig` | `platform_fee_bps`, `fee_tiers` |
+| `TimeoutConfig` | `min_timeout_ledgers`, `max_timeout_ledgers`, `default_timeout_ledgers` |
+| `StakeConfig` | `min_stake`, `max_stake`, `stablecoin_only_mode` |
+
+`ProtocolConfig` embeds these as `fee: FeeConfig`, `timeout: TimeoutConfig`
+and `stake: StakeConfig`. For backward ABI compatibility,
+`get_protocol_config` still returns the combined `ProtocolConfig` struct, so
+existing clients reading the flat configuration are unaffected.
+
 ## Slashing grace period
 
 See [`docs/oracle.md`](../../docs/oracle.md) and the oracle contract's
