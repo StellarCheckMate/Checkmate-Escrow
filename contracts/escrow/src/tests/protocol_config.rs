@@ -179,3 +179,63 @@ fn test_set_protocol_config_rejected_for_non_admin() {
         "non-admin must not be able to set ProtocolConfig"
     );
 }
+
+/// `set_protocol_config` must reject a `cancellation_fee_basis_points` above
+/// 10_000 (more than 100% of the stake) with `Error::InvalidAmount`, and the
+/// previously stored config must remain unchanged.
+#[test]
+fn test_set_protocol_config_rejects_cancellation_fee_above_max() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let cfg_before = client.get_protocol_config();
+
+    let mut cfg = custom_config(&env, &admin);
+    cfg.cancellation_fee_basis_points = 10_001;
+
+    let result = client.try_set_protocol_config(&cfg);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidAmount)),
+        "cancellation_fee_basis_points > 10_000 must be rejected"
+    );
+
+    let cfg_after = client.get_protocol_config();
+    assert_eq!(
+        cfg_before, cfg_after,
+        "rejected config must not be stored"
+    );
+}
+
+/// `set_protocol_config` must accept `cancellation_fee_basis_points` exactly
+/// at the 10_000 boundary.
+#[test]
+fn test_set_protocol_config_accepts_cancellation_fee_at_max() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let mut cfg = custom_config(&env, &admin);
+    cfg.cancellation_fee_basis_points = 10_000;
+
+    client.set_protocol_config(&cfg);
+
+    let actual = client.get_protocol_config();
+    assert_eq!(actual, cfg);
+}
+
+/// `set_protocol_config` must accept a valid `cancellation_fee_basis_points`
+/// below the bound and `get_protocol_config` must reflect it.
+#[test]
+fn test_set_protocol_config_accepts_valid_cancellation_fee() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let mut cfg = custom_config(&env, &admin);
+    cfg.cancellation_fee_basis_points = 250;
+
+    client.set_protocol_config(&cfg);
+
+    let actual = client.get_protocol_config();
+    assert_eq!(actual.cancellation_fee_basis_points, 250);
+    assert_eq!(actual, cfg);
+}

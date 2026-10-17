@@ -282,3 +282,211 @@ fn test_create_match_tournament_rejects_frozen_player2() {
     );
     assert_eq!(result, Err(Ok(Error::ContractPaused)));
 }
+
+// ── create_match frozen-player guard ─────────────────────────────────────────
+
+#[test]
+fn test_create_match_rejects_frozen_player1() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.admin_freeze_player(&player1, &reason(&env, "cheating"));
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match"),
+        &Platform::Lichess,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(Error::ContractPaused)),
+        "frozen player1 must not be able to create a match"
+    );
+}
+
+#[test]
+fn test_create_match_rejects_frozen_player2() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.admin_freeze_player(&player2, &reason(&env, "cheating"));
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match"),
+        &Platform::Lichess,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(Error::ContractPaused)),
+        "a frozen player must not be named as opponent"
+    );
+}
+
+// ── deposit frozen-player guard ──────────────────────────────────────────────
+
+#[test]
+fn test_deposit_rejects_frozen_player() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match"),
+        &Platform::Lichess,
+    );
+
+    client.admin_freeze_player(&player1, &reason(&env, "cheating"));
+
+    let result = client.try_deposit(&match_id, &player1);
+    assert_eq!(
+        result,
+        Err(Ok(Error::ContractPaused)),
+        "frozen player must not be able to deposit"
+    );
+}
+
+// ── cancel_match allowed for frozen player ───────────────────────────────────
+
+#[test]
+fn test_cancel_match_allowed_for_frozen_player() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match"),
+        &Platform::Lichess,
+    );
+
+    client.admin_freeze_player(&player1, &reason(&env, "cheating"));
+
+    client.cancel_match(&match_id, &player1);
+
+    let m = client.get_match(&match_id);
+    assert_eq!(
+        m.state,
+        MatchState::Cancelled,
+        "frozen player must still be able to cancel their own pending match"
+    );
+}
+
+// ── claim_vested_payout allowed for frozen player ────────────────────────────
+
+#[test]
+fn test_claim_vested_payout_allowed_for_frozen_player() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match"),
+        &Platform::Lichess,
+    );
+
+    client.deposit(&match_id, &player1);
+    client.deposit(&match_id, &player2);
+
+    client.admin_freeze_player(&player1, &reason(&env, "cheating"));
+
+    // Freezing must not block a player from claiming an already-vested payout.
+    client.claim_vested_payout(&match_id, &player1);
+}
+
+// ── admin_unfreeze_player restores all permissions ───────────────────────────
+
+#[test]
+fn test_admin_unfreeze_player_restores_create_match() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.admin_freeze_player(&player1, &reason(&env, "temp"));
+    client.admin_unfreeze_player(&player1);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match"),
+        &Platform::Lichess,
+    );
+    assert!(
+        result.is_ok(),
+        "unfrozen player must be able to create a match again"
+    );
+}
+
+#[test]
+fn test_admin_unfreeze_player_restores_deposit() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let match_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match"),
+        &Platform::Lichess,
+    );
+
+    client.admin_freeze_player(&player1, &reason(&env, "temp"));
+    client.admin_unfreeze_player(&player1);
+
+    let result = client.try_deposit(&match_id, &player1);
+    assert!(
+        result.is_ok(),
+        "unfrozen player must be able to deposit again"
+    );
+}
+
+#[test]
+fn test_admin_unfreeze_player_restores_cancel_and_claim() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Cancel path: freeze then unfreeze, then cancel must succeed.
+    let cancel_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match"),
+        &Platform::Lichess,
+    );
+    client.admin_freeze_player(&player1, &reason(&env, "temp"));
+    client.admin_unfreeze_player(&player1);
+    client.cancel_match(&cancel_id, &player1);
+    assert_eq!(client.get_match(&cancel_id).state, MatchState::Cancelled);
+
+    // Claim path: freeze then unfreeze, then claim must succeed.
+    let claim_id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "match"),
+        &Platform::Lichess,
+    );
+    client.deposit(&claim_id, &player1);
+    client.deposit(&claim_id, &player2);
+    client.admin_freeze_player(&player1, &reason(&env, "temp"));
+    client.admin_unfreeze_player(&player1);
+    client.claim_vested_payout(&claim_id, &player1);
+}

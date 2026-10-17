@@ -33,6 +33,7 @@ mod oracle_validation;
 mod pagination;
 mod player_balance_history;
 mod player_freeze;
+mod player_freeze_permissions;
 mod player_many_matches;
 mod referral;
 mod security;

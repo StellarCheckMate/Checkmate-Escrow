@@ -55,12 +55,23 @@ export function CreateMatchForm({ onSubmit }: CreateMatchFormProps) {
 
   function handleSubmit(ev: React.FormEvent) {
     ev.preventDefault();
-    if (validate()) onSubmit(form);
+    if (validate()) {
+      onSubmit({
+        ...form,
+        player2: form.player2.trim(),
+        stakeAmount: form.stakeAmount.trim(),
+        token: form.token.trim(),
+        gameId: form.gameId.trim(),
+      });
+    }
   }
 
   const set = (field: keyof CreateMatchData) =>
     (ev: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
       setForm(f => ({ ...f, [field]: ev.target.value }));
+
+  const setGameId = (ev: React.ChangeEvent<HTMLInputElement>) =>
+    setForm(f => ({ ...f, gameId: ev.target.value.trim() }));
 
   return (
     <form onSubmit={handleSubmit} noValidate>
@@ -86,7 +97,7 @@ export function CreateMatchForm({ onSubmit }: CreateMatchFormProps) {
       </div>
       <div>
         <label htmlFor="gameId">Game ID</label>
-        <input id="gameId" value={form.gameId} onChange={set('gameId')} />
+        <input id="gameId" value={form.gameId} onChange={setGameId} />
         {errors.gameId && <span role="alert">{errors.gameId}</span>}
       </div>
       {form.platform === 'lichess' && (

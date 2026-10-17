@@ -71,6 +71,35 @@ describe('CreateMatchForm', () => {
     expect(screen.getAllByRole('alert').length).toBeGreaterThan(0);
   });
 
+  it('shows a required error for a whitespace-only game ID and blocks submit', () => {
+    const onSubmit = vi.fn();
+    render(<CreateMatchForm onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByLabelText(/player 2/i), { target: { value: 'GBOB' } });
+    fireEvent.change(screen.getByLabelText(/stake amount/i), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText(/token address/i), { target: { value: 'GTOK' } });
+    fireEvent.change(screen.getByLabelText(/game id/i), { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: /create match/i }));
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByText(/required/i)).toBeInTheDocument();
+  });
+
+  it('trims surrounding whitespace from the game ID before submitting', () => {
+    const onSubmit = vi.fn();
+    render(<CreateMatchForm onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByLabelText(/player 2/i), { target: { value: 'GBOB' } });
+    fireEvent.change(screen.getByLabelText(/stake amount/i), { target: { value: '10' } });
+    fireEvent.change(screen.getByLabelText(/token address/i), { target: { value: 'GTOK' } });
+    fireEvent.change(screen.getByLabelText(/game id/i), { target: { value: ' abc12345 ' } });
+    fireEvent.click(screen.getByRole('button', { name: /create match/i }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      player2: 'GBOB',
+      stakeAmount: '10',
+      token: 'GTOK',
+      gameId: 'abc12345',
+      platform: 'lichess',
+    });
+  });
+
   it('shows error for invalid lichess game ID and blocks submit', () => {
     const onSubmit = vi.fn();
     render(<CreateMatchForm onSubmit={onSubmit} />);

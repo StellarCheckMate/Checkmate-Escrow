@@ -1239,6 +1239,23 @@ impl OracleContract {
         page
     }
 
+    /// Return the list of all currently approved oracle addresses.
+    ///
+    /// This is the authoritative on-chain view of the approved-oracle set,
+    /// maintained alongside the per-oracle approval records by
+    /// `add_approved_oracle` / `remove_approved_oracle`. Monitoring tools can
+    /// read it directly instead of reconstructing the set from
+    /// `admin/ora_add` and `admin/ora_rm` events.
+    ///
+    /// Returns an empty `Vec` when no oracle has been approved.
+    pub fn get_approved_oracles(env: Env) -> Vec<Address> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::ApprovedOracles)
+            .unwrap_or(Vec::new(&env))
+    }
+
     /// Returns performance metrics and SLA status for a registered oracle.
     pub fn get_oracle_metrics(env: Env, oracle_address: Address) -> OracleMetrics {
         env.storage()
@@ -1520,6 +1537,44 @@ impl OracleContract {
         env.storage()
             .instance()
             .set(&DataKey::OracleEligibilityVersion, &version);
+    }
+
+    /// Append `oracle` to the approved-oracle list if not already present.
+    /// Keeps `DataKey::ApprovedOracles` in sync with the per-oracle approval
+    /// records maintained by `add_approved_oracle`.
+    fn add_to_approved_list(env: &Env, oracle: &Address) {
+        let mut list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedOracles)
+            .unwrap_or(Vec::new(env));
+        if !list.contains(oracle) {
+            list.push_back(oracle.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::ApprovedOracles, &list);
+        }
+    }
+
+    /// Remove `oracle` from the approved-oracle list, if present. Keeps
+    /// `DataKey::ApprovedOracles` in sync with the per-oracle approval
+    /// records maintained by `remove_approved_oracle`.
+    fn remove_from_approved_list(env: &Env, oracle: &Address) {
+        let list: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedOracles)
+            .unwrap_or(Vec::new(env));
+        let mut updated = Vec::new(env);
+        for i in 0..list.len() {
+            let addr = list.get(i).unwrap();
+            if addr != *oracle {
+                updated.push_back(addr);
+            }
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::ApprovedOracles, &updated);
     }
 
     /// Slash `bps` basis points of `oracle`'s remaining stake, transferring

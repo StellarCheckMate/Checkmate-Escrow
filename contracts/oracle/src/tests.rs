@@ -3766,3 +3766,44 @@ fn test_pause_unpause_cycle_succeeds() {
     client.unpause();
     assert_eq!(client.try_unpause(), Err(Ok(Error::InvalidPauseState)));
 }
+
+// #1728 — get_approved_oracles exposes the approved oracle set so monitoring
+// tools do not have to reconstruct it from admin/ora_add and admin/ora_rm events.
+#[test]
+fn test_get_approved_oracles_tracks_additions_and_removals() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    // Initially empty.
+    assert_eq!(client.get_approved_oracles(), soroban_sdk::vec![&env]);
+
+    let oracle_a = Address::generate(&env);
+    let oracle_b = Address::generate(&env);
+
+    client.add_approved_oracle(&oracle_a);
+    client.add_approved_oracle(&oracle_b);
+
+    // Both listed in insertion order.
+    assert_eq!(
+        client.get_approved_oracles(),
+        soroban_sdk::vec![&env, oracle_a.clone(), oracle_b.clone()]
+    );
+
+    // Re-adding an already-approved oracle must not duplicate it.
+    client.add_approved_oracle(&oracle_a);
+    assert_eq!(
+        client.get_approved_oracles(),
+        soroban_sdk::vec![&env, oracle_a.clone(), oracle_b.clone()]
+    );
+
+    // Removing one leaves only the other.
+    client.remove_approved_oracle(&oracle_a);
+    assert_eq!(
+        client.get_approved_oracles(),
+        soroban_sdk::vec![&env, oracle_b.clone()]
+    );
+
+    // Removing the last one leaves an empty list.
+    client.remove_approved_oracle(&oracle_b);
+    assert_eq!(client.get_approved_oracles(), soroban_sdk::vec![&env]);
+}
