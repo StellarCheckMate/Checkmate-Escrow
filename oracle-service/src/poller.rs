@@ -39,7 +39,9 @@ use zeroize::Zeroizing;
 use crate::config::{OracleConfig, Platform};
 use crate::dead_letter::DeadLetterStore;
 use crate::metrics;
-use crate::oracle::errors::{ChessComError, LichessError, OracleServiceError};
+use crate::oracle::chess_com::{classify_chess_com_error, validate_chess_com_game_id};
+use crate::oracle::errors::OracleServiceError;
+use crate::oracle::lichess::{classify_lichess_error, validate_lichess_game_id};
 use crate::oracle::{ChessComClient, LichessClient, Winner};
 use crate::queue::{PendingEntry, PendingQueue};
 use crate::reconciliation_cursor::ReconciliationCursor;
@@ -536,7 +538,7 @@ impl Poller {
                     .await;
                 self.submit_and_complete(entry, winner).await;
             }
-            Err(FetchError::Permanent(reason)) => {
+            Err(crate::oracle::FetchError::Permanent(reason)) => {
                 warn!(match_id, %reason, "permanent fetch error; dead-lettering immediately");
                 entry.last_error = Some(reason);
                 // Count as exhausted right away — permanent errors should not
@@ -544,7 +546,7 @@ impl Poller {
                 entry.attempts = self.inner.max_retries;
                 self.exhaust_entry(entry).await;
             }
-            Err(FetchError::Transient(reason)) => {
+            Err(crate::oracle::FetchError::Transient(reason)) => {
                 warn!(match_id, %reason, "transient fetch error; scheduling retry");
                 self.handle_transient(entry, reason).await;
             }
@@ -631,43 +633,6 @@ fn pubkey_from_signing_key(seed: &[u8; 32]) -> [u8; 32] {
     SigningKey::from_bytes(seed).verifying_key().to_bytes()
 }
 
-// ── Error classification ──────────────────────────────────────────────────────
-
-enum FetchError {
-    /// Permanent errors (invalid ID, game deleted) — do not retry.
-    Permanent(String),
-    /// Transient errors (network, game not finished, rate-limit) — retry.
-    Transient(String),
-}
-
-fn classify_lichess_error(e: LichessError) -> FetchError {
-    match e {
-        LichessError::InvalidGameId => FetchError::Permanent(e.to_string()),
-        LichessError::GameNotFound => FetchError::Permanent(e.to_string()),
-        LichessError::GameNotFinished
-        | LichessError::Http(_)
-        | LichessError::Timeout
-        | LichessError::HttpStatus { .. }
-        | LichessError::RateLimited { .. }
-        | LichessError::ConcurrencyLimitReached
-        | LichessError::InvalidResponse => FetchError::Transient(e.to_string()),
-    }
-}
-
-fn classify_chess_com_error(e: ChessComError) -> FetchError {
-    match e {
-        ChessComError::InvalidGameId => FetchError::Permanent(e.to_string()),
-        ChessComError::GameNotFound => FetchError::Permanent(e.to_string()),
-        ChessComError::GameNotFinished
-        | ChessComError::Http(_)
-        | ChessComError::Timeout
-        | ChessComError::HttpStatus { .. }
-        | ChessComError::RateLimited { .. }
-        | ChessComError::ConcurrencyLimitReached
-        | ChessComError::InvalidResponse => FetchError::Transient(e.to_string()),
-    }
-}
-
 // ── Pre-flight game_id validation ─────────────────────────────────────────────
 
 /// Validate a `game_id` against the expected format for `platform` **before**
@@ -700,25 +665,9 @@ pub(crate) fn validate_game_id(platform: Platform, game_id: &str) -> Result<(), 
     }
 
     match platform {
-        Platform::Lichess => {
-            if (len != 8 && len != 12) || !game_id.chars().all(|c| c.is_ascii_alphanumeric()) {
-                return Err(format!(
-                    "invalid Lichess game_id '{}': must be 8 or 12 ASCII alphanumeric characters",
-                    game_id
-                ));
-            }
-        }
-        Platform::ChessDotCom => {
-            if !(7..=12).contains(&len) || !game_id.chars().all(|c| c.is_ascii_digit()) {
-                return Err(format!(
-                    "invalid Chess.com game_id '{}': must be 7–12 ASCII digit characters",
-                    game_id
-                ));
-            }
-        }
+        Platform::Lichess => validate_lichess_game_id(game_id),
+        Platform::ChessDotCom => validate_chess_com_game_id(game_id),
     }
-
-    Ok(())
 }
 
 #[cfg(test)]

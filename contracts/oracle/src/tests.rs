@@ -3766,3 +3766,131 @@ fn test_pause_unpause_cycle_succeeds() {
     client.unpause();
     assert_eq!(client.try_unpause(), Err(Ok(Error::InvalidPauseState)));
 }
+
+// ── #1746: configurable SLA threshold for deactivate_slow_oracle ─────────
+
+#[test]
+fn test_sla_threshold_defaults_when_unset() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    assert_eq!(
+        client.get_sla_threshold(),
+        crate::DEFAULT_SLA_THRESHOLD_MS,
+        "unset SLA threshold must fall back to the hardcoded default"
+    );
+    assert_eq!(client.get_sla_threshold(), 5_000u64);
+}
+
+#[test]
+fn test_set_sla_threshold_persists_and_is_returned_by_getter() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.set_sla_threshold(&12_000u64);
+    assert_eq!(client.get_sla_threshold(), 12_000u64);
+
+    // Overwriting the threshold must be reflected by the getter.
+    client.set_sla_threshold(&7_500u64);
+    assert_eq!(client.get_sla_threshold(), 7_500u64);
+}
+
+#[test]
+fn test_set_sla_threshold_emits_event() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    client.set_sla_threshold(&9_000u64);
+
+    let events = env.events().all();
+    let expected_topics = soroban_sdk::vec![
+        &env,
+        Symbol::new(&env, "oracle").into_val(&env),
+        symbol_short!("sla_thr").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "oracle/sla_thr event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let ev_threshold: u64 = soroban_sdk::TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_threshold, 9_000u64);
+}
+
+#[test]
+#[should_panic]
+fn test_set_sla_threshold_rejects_non_admin() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let contract_id = env.register_contract(None, OracleContract);
+    let client = OracleContractClient::new(&env, &contract_id);
+    client.initialize(&admin);
+
+    let attacker = Address::generate(&env);
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_sla_threshold",
+            args: (10_000u64,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.set_sla_threshold(&10_000u64);
+}
+
+#[test]
+fn test_deactivate_slow_oracle_uses_configured_threshold() {
+    let (env, contract_id, .., oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    // Raise the threshold well above the default so a 6s-old submission is
+    // no longer considered slow.
+    client.set_sla_threshold(&60_000u64);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+        &1000u64,
+    );
+
+    // Advance 6 seconds — beyond the default 5s but within the configured 60s.
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 6_000);
+
+    let deactivated = client.deactivate_slow_oracle(&oracle_admin);
+    assert!(
+        !deactivated,
+        "oracle within the configured SLA threshold must not be deactivated"
+    );
+}
+
+#[test]
+fn test_deactivate_slow_oracle_deactivates_beyond_configured_threshold() {
+    let (env, contract_id, .., oracle_admin, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    // Lower the threshold so a 2s-old submission counts as slow.
+    client.set_sla_threshold(&1_000u64);
+
+    client.submit_result(
+        &0u64,
+        &String::from_str(&env, "abc123"),
+        &Platform::Lichess,
+        &Winner::Player1,
+        &1000u64,
+    );
+
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + 2_000);
+
+    let deactivated = client.deactivate_slow_oracle(&oracle_admin);
+    assert!(
+        deactivated,
+        "oracle exceeding the configured SLA threshold must be deactivated"
+    );
+}

@@ -66,8 +66,20 @@ export function CreateMatchForm({ onSubmit }: CreateMatchFormProps) {
     <form onSubmit={handleSubmit} noValidate>
       <div>
         <label htmlFor="player2">Player 2 Address</label>
-        <input id="player2" value={form.player2} onChange={set('player2')} />
-        {errors.player2 && <span role="alert">{errors.player2}</span>}
+        <input
+          id="player2"
+          value={form.player2}
+          onChange={set('player2')}
+          aria-label="Player 2 Address"
+          aria-required="true"
+          aria-invalid={errors.player2 ? 'true' : 'false'}
+          aria-describedby={errors.player2 ? 'player2-error' : undefined}
+        />
+        {errors.player2 && (
+          <span id="player2-error" role="alert">
+            {errors.player2}
+          </span>
+        )}
       </div>
       <div>
         <label htmlFor="stakeAmount">Stake Amount</label>
@@ -77,28 +89,67 @@ export function CreateMatchForm({ onSubmit }: CreateMatchFormProps) {
           value={form.stakeAmount}
           onChange={set('stakeAmount')}
           min={0}
+          aria-label="Stake Amount"
+          aria-required="true"
+          aria-invalid={errors.stakeAmount ? 'true' : 'false'}
+          aria-describedby={errors.stakeAmount ? 'stakeAmount-error' : undefined}
         />
+        {errors.stakeAmount && (
+          <span id="stakeAmount-error" role="alert">
+            {errors.stakeAmount}
+          </span>
+        )}
       </div>
       <div>
         <label htmlFor="token">Token Address</label>
-        <input id="token" value={form.token} onChange={set('token')} />
-        {errors.token && <span role="alert">{errors.token}</span>}
+        <input
+          id="token"
+          value={form.token}
+          onChange={set('token')}
+          aria-label="Token Address"
+          aria-required="true"
+          aria-invalid={errors.token ? 'true' : 'false'}
+          aria-describedby={errors.token ? 'token-error' : undefined}
+        />
+        {errors.token && (
+          <span id="token-error" role="alert">
+            {errors.token}
+          </span>
+        )}
       </div>
-      <div>
-        <label htmlFor="gameId">Game ID</label>
-        <input id="gameId" value={form.gameId} onChange={set('gameId')} />
-        {errors.gameId && <span role="alert">{errors.gameId}</span>}
-      </div>
-      {form.platform === 'lichess' && (
-        <LichessGamePicker onSelect={gameId => setForm(f => ({ ...f, gameId }))} />
-      )}
       <div>
         <label htmlFor="platform">Platform</label>
-        <select id="platform" value={form.platform} onChange={set('platform')}>
+        <select
+          id="platform"
+          value={form.platform}
+          onChange={set('platform')}
+          aria-label="Platform"
+          aria-required="true"
+        >
           <option value="lichess">Lichess</option>
           <option value="chessdotcom">Chess.com</option>
         </select>
       </div>
+      <div>
+        <label htmlFor="gameId">Game ID</label>
+        <input
+          id="gameId"
+          value={form.gameId}
+          onChange={set('gameId')}
+          aria-label="Game ID"
+          aria-required="true"
+          aria-invalid={errors.gameId ? 'true' : 'false'}
+          aria-describedby={errors.gameId ? 'gameId-error' : undefined}
+        />
+        {errors.gameId && (
+          <span id="gameId-error" role="alert">
+            {errors.gameId}
+          </span>
+        )}
+      </div>
+      {form.platform === 'lichess' && (
+        <LichessGamePicker onSelect={gameId => setForm(f => ({ ...f, gameId }))} />
+      )}
       <button type="submit">Create Match</button>
     </form>
   );

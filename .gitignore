@@ -56,3 +56,8 @@ mutants.out.old/
 # CI-generated reports (security-scanning.yml, ci.yml, scripts/benchmark.sh,
 # scripts/security-scan.sh) — uploaded as workflow artifacts, not committed
 reports/
+
+# Scaffolded by mistake: contracts/predict-iq/ was a stub-only directory (just
+# src/ with placeholder files), never a workspace member in Cargo.toml, and had
+# no tests or docs. It has been removed; ignore it so it isn't re-added.
+contracts/predict-iq/

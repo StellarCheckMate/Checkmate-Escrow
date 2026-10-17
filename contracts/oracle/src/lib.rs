@@ -1254,7 +1254,58 @@ impl OracleContract {
             })
     }
 
-    /// Admin-only function to deactivate an oracle whose average response time exceeds the SLA target (> 5s).
+    /// Set the SLA response-time threshold (in milliseconds) used by
+    /// [`Self::deactivate_slow_oracle`]. Admin-only.
+    ///
+    /// When never configured, the contract falls back to
+    /// [`SLA_MAX_RESPONSE_TIME_MS`] (5 seconds).
+    ///
+    /// Emits an `oracle / sla_thresh` event with the new threshold.
+    ///
+    /// # Errors
+    /// - [`Error::Unauthorized`] — contract has not been initialized or caller is not the admin.
+    /// - [`Error::InvalidThreshold`] — `threshold_ms` is 0.
+    pub fn set_sla_threshold(env: Env, threshold_ms: u64) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        admin.require_auth();
+
+        if threshold_ms == 0 {
+            return Err(Error::InvalidThreshold);
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::SlaThreshold, &threshold_ms);
+
+        env.events().publish(
+            (Symbol::new(&env, "oracle"), symbol_short!("sla_thrsh")),
+            threshold_ms,
+        );
+        Ok(())
+    }
+
+    /// Return the currently configured SLA response-time threshold, in
+    /// milliseconds. Defaults to [`SLA_MAX_RESPONSE_TIME_MS`] if never set.
+    pub fn get_sla_threshold(env: Env) -> u64 {
+        extend_instance_ttl(&env);
+        Self::sla_threshold(&env)
+    }
+
+    /// Read the configured SLA threshold, defaulting to
+    /// [`SLA_MAX_RESPONSE_TIME_MS`].
+    fn sla_threshold(env: &Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::SlaThreshold)
+            .unwrap_or(SLA_MAX_RESPONSE_TIME_MS)
+    }
+
+    /// Admin-only function to deactivate an oracle whose average response time exceeds the SLA target.
     pub fn deactivate_slow_oracle(env: Env, oracle_address: Address) -> Result<(), Error> {
         extend_instance_ttl(&env);
         let admin: Address = env
@@ -1270,7 +1321,7 @@ impl OracleContract {
             .get(&DataKey::OracleMetrics(oracle_address.clone()))
             .ok_or(Error::ResultNotFound)?;
 
-        if metrics.avg_response_time_ms <= SLA_MAX_RESPONSE_TIME_MS {
+        if metrics.avg_response_time_ms <= Self::sla_threshold(&env) {
             return Err(Error::OracleNotSlow);
         }
 

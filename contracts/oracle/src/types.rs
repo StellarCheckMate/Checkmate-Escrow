@@ -168,6 +168,10 @@ pub enum DataKey {
     /// Set by `set_treasury` (admin-only). Falls back to the admin address
     /// when unset.
     Treasury,
+    /// Configurable SLA threshold (in milliseconds) used by
+    /// `deactivate_slow_oracle`. Set by `set_sla_threshold` (admin-only).
+    /// Falls back to the hardcoded default when unset.
+    SlaThreshold,
 }
 
 /// A slash that has been staged but not yet finalized, pending
