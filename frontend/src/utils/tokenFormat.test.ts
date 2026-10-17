@@ -57,4 +57,43 @@ describe('formatTokenAmount', () => {
     const negLarge = -1152921504606846976n; // -2^60
     expect(formatTokenAmount(negLarge, 7)).toBe('-115292150460.6846976');
   });
+
+  describe('typical token decimals', () => {
+    it('formats a 7-decimal token balance', () => {
+      expect(formatTokenAmount(123_456_789, 7)).toBe('12.3456789');
+    });
+
+    it('formats a 6-decimal token balance', () => {
+      expect(formatTokenAmount(123_456_789, 6)).toBe('123.456789');
+    });
+
+    it('formats an 18-decimal token balance', () => {
+      expect(formatTokenAmount(123_456_789_000_000_000_000n, 18)).toBe('123.456789');
+    });
+  });
+
+  describe('edge cases', () => {
+    it('formats a zero balance as "0" for any decimals', () => {
+      expect(formatTokenAmount(0, 7)).toBe('0');
+      expect(formatTokenAmount(0n, 6)).toBe('0');
+      expect(formatTokenAmount('0', 18)).toBe('0');
+    });
+
+    it('formats whole amounts without a fraction part', () => {
+      expect(formatTokenAmount(10_000_000, 7)).toBe('1');
+      expect(formatTokenAmount(1_000_000, 6)).toBe('1');
+      expect(formatTokenAmount(1_000_000_000_000_000_000n, 18)).toBe('1');
+    });
+
+    it('formats amounts smaller than one unit', () => {
+      expect(formatTokenAmount(1, 7)).toBe('0.0000001');
+      expect(formatTokenAmount(1, 6)).toBe('0.000001');
+      expect(formatTokenAmount(1n, 18)).toBe('0.000000000000000001');
+    });
+
+    it('formats negative amounts smaller than one unit', () => {
+      expect(formatTokenAmount(-1, 7)).toBe('-0.0000001');
+      expect(formatTokenAmount(-1n, 18)).toBe('-0.000000000000000001');
+    });
+  });
 });

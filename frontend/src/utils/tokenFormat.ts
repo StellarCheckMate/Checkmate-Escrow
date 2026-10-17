@@ -16,6 +16,14 @@ const NETWORK_PASSPHRASE = import.meta.env.VITE_STELLAR_NETWORK_PASSPHRASE ?? Ne
 const decimalsCache = new Map<string, number>();
 
 /**
+ * Clears the per-token `decimals` cache. Intended for tests so that each
+ * test case starts from a clean slate.
+ */
+export function clearTokenDecimalsCache(): void {
+  decimalsCache.clear();
+}
+
+/**
  * Formats a raw on-chain integer amount (stroops, or the smallest unit of
  * any Stellar token) into a human-readable decimal string using the
  * token's `decimals` value.
@@ -34,6 +42,47 @@ export function formatTokenAmount(rawAmount: string | number | bigint, decimals:
   const fraction = (abs % divisor).toString().padStart(decimals, '0').replace(/0+$/, '');
 
   const result = fraction.length > 0 ? `${whole}.${fraction}` : whole.toString();
+  return negative ? `-${result}` : result;
+}
+
+/**
+ * Formats a raw on-chain integer amount into a human-readable decimal string
+ * with a fixed number of decimal places (trailing zeros preserved).
+ *
+ * @example formatTokenAmountFixed(1_000_000, 7, 2) === "0.10"
+ * @example formatTokenAmountFixed("2500000000", 7, 2) === "250.00"
+ */
+export function formatTokenAmountFixed(
+  rawAmount: string | number | bigint,
+  decimals: number,
+  displayDecimals: number,
+): string {
+  const raw = BigInt(rawAmount);
+  const places = Math.max(0, Math.trunc(displayDecimals));
+  if (places === 0) {
+    // Round-half-up to the nearest whole unit.
+    const divisor = 10n ** BigInt(Math.max(0, decimals));
+    const negative = raw < 0n;
+    const abs = negative ? -raw : raw;
+    const rounded = (abs + divisor / 2n) / divisor;
+    return negative ? `-${rounded.toString()}` : rounded.toString();
+  }
+
+  const negative = raw < 0n;
+  const abs = negative ? -raw : raw;
+  const targetDivisor = 10n ** BigInt(places);
+
+  let scaled: bigint;
+  if (decimals >= places) {
+    const drop = 10n ** BigInt(decimals - places);
+    scaled = (abs + drop / 2n) / drop;
+  } else {
+    scaled = abs * 10n ** BigInt(places - decimals);
+  }
+
+  const whole = scaled / targetDivisor;
+  const fraction = (scaled % targetDivisor).toString().padStart(places, '0');
+  const result = `${whole}.${fraction}`;
   return negative ? `-${result}` : result;
 }
 

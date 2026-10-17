@@ -10,7 +10,14 @@ import { useBalance } from '../hooks/useBalance';
 
 describe('BalanceDisplay', () => {
   it('renders loading state', () => {
-    vi.mocked(useBalance).mockReturnValue({ balance: null, loading: true, error: null });
+    vi.mocked(useBalance).mockReturnValue({
+      balance: null,
+      raw: null,
+      decimals: null,
+      formatted: null,
+      loading: true,
+      error: null,
+    });
 
     render(<BalanceDisplay publicKey="GABC" />);
 
@@ -18,7 +25,14 @@ describe('BalanceDisplay', () => {
   });
 
   it('renders balance value', () => {
-    vi.mocked(useBalance).mockReturnValue({ balance: '100.5', loading: false, error: null });
+    vi.mocked(useBalance).mockReturnValue({
+      balance: '100.5',
+      raw: '1005000000',
+      decimals: 7,
+      formatted: '100.5',
+      loading: false,
+      error: null,
+    });
 
     render(<BalanceDisplay publicKey="GABC" />);
 
@@ -26,10 +40,32 @@ describe('BalanceDisplay', () => {
   });
 
   it('renders error state', () => {
-    vi.mocked(useBalance).mockReturnValue({ balance: null, loading: false, error: 'Failed to fetch' });
+    vi.mocked(useBalance).mockReturnValue({
+      balance: null,
+      raw: null,
+      decimals: null,
+      formatted: null,
+      loading: false,
+      error: 'Failed to fetch',
+    });
 
     render(<BalanceDisplay publicKey="GABC" />);
 
     expect(screen.getByRole('alert')).toHaveTextContent('Failed to fetch');
+  });
+
+  it('scales raw balance by token decimals', () => {
+    vi.mocked(useBalance).mockReturnValue({
+      balance: '1',
+      raw: '10000000',
+      decimals: 7,
+      formatted: '1',
+      loading: false,
+      error: null,
+    });
+
+    render(<BalanceDisplay publicKey="GABC" />);
+
+    expect(screen.getByText('1 XLM')).toBeInTheDocument();
   });
 });

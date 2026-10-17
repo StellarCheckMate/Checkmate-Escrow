@@ -1,10 +1,16 @@
 import { useState, useEffect } from 'react';
 import { Horizon } from '@stellar/stellar-sdk';
+import { fetchTokenDecimals, formatTokenAmount } from '../utils/tokenFormat';
 
 const HORIZON_URL = import.meta.env.VITE_HORIZON_URL ?? 'https://horizon-testnet.stellar.org';
 
+// Native XLM balances are reported with 7 decimal places.
+const NATIVE_DECIMALS = 7;
+
 export function useBalance(publicKey: string | null) {
   const [balance, setBalance] = useState<string | null>(null);
+  const [rawBalance, setRawBalance] = useState<string | null>(null);
+  const [decimals, setDecimals] = useState<number>(NATIVE_DECIMALS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -15,6 +21,8 @@ export function useBalance(publicKey: string | null) {
     setPrevPublicKey(publicKey);
     if (!publicKey) {
       setBalance(null);
+      setRawBalance(null);
+      setDecimals(NATIVE_DECIMALS);
     }
   }
 
@@ -33,7 +41,13 @@ export function useBalance(publicKey: string | null) {
         const xlm = account.balances.find(
           (b): b is Horizon.HorizonApi.BalanceLine<'native'> => b.asset_type === 'native'
         );
-        if (!cancelled) setBalance(xlm?.balance ?? '0');
+        const raw = xlm?.balance ?? '0';
+        const tokenDecimals = await fetchTokenDecimals('native');
+        if (!cancelled) {
+          setRawBalance(raw);
+          setDecimals(tokenDecimals);
+          setBalance(formatTokenAmount(raw, tokenDecimals));
+        }
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
       } finally {
@@ -49,5 +63,5 @@ export function useBalance(publicKey: string | null) {
     };
   }, [publicKey]);
 
-  return { balance, loading, error };
+  return { balance, rawBalance, decimals, loading, error };
 }

@@ -43,16 +43,11 @@ use soroban_sdk::{
     Symbol, Vec,
 };
 use types::{
-    BalanceAtTimestamp, BalanceSnapshot, DataKey, Dispute, DisputeBondTier, DisputeState, FeeTier,
-    Match, MatchState, OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform,
-    PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey, PlayerRating, PlayerRatingKey,
-    PlayerStats, PlayerTier, ProtocolConfig, SnapshotReason, TempOracleRotation,
-    TokenSymbolCacheKey, Winner,
     BalanceAtTimestamp, BalanceSnapshot, BracketKey, DataKey, Dispute, DisputeBondTier,
     DisputeState, FeeTier, Match, MatchState, OracleRotationState, PendingAdminProposal,
     PendingOracleRotation, Platform, PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey,
     PlayerRating, PlayerRatingKey, PlayerStats, PlayerTier, ProtocolConfig, SnapshotReason,
-    TempOracleRotation, Winner,
+    TempOracleRotation, TokenSymbolCacheKey, Winner,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -215,6 +210,7 @@ struct MatchParams {
     referrer: Option<Address>,
     bracket_id: Option<u64>,
     round: Option<u32>,
+    vesting_override_seconds: Option<u64>,
 }
 
 #[contractimpl]
@@ -6795,6 +6791,16 @@ impl EscrowContract {
                     dispute_bond_tier_schedule: soroban_sdk::vec![env],
                 }
             })
+    }
+
+    /// Resolve the vesting duration (in seconds) that applies to `m`.
+    ///
+    /// A per-match `vesting_override_seconds` agreed at match creation time
+    /// takes precedence over the global `ProtocolConfig::vesting_duration_seconds`
+    /// (issue #1731).
+    fn resolve_vesting_duration(env: &Env, m: &Match) -> u64 {
+        m.vesting_override_seconds
+            .unwrap_or_else(|| Self::get_config(env).vesting_duration_seconds)
     }
 
     /// Compute the referral fee to deduct from a winner's payout.

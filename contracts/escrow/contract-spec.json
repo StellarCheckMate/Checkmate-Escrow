@@ -16,7 +16,7 @@
     { "name": "accept_admin" },
     { "name": "transfer_admin" },
     { "name": "update_oracle" },
-    { "name": "create_match" },
+    { "name": "create_match", "inputs": [{ "name": "vesting_override_seconds", "type": "Option<u64>" }] },
     { "name": "create_match_with_conversion" },
     { "name": "create_match_with_referrer" },
     { "name": "deposit" },

@@ -233,7 +233,8 @@ Returned by `get_match(match_id)`. All fields below are stable and safe to read.
 | `winner` | `Winner` | Match outcome once completed; defaults to `Draw` until set. |
 | `created_ledger`   | `u32`           | Ledger sequence at match creation. |
 | `completed_ledger` | `Option<u32>`   | Ledger sequence at completion or cancellation, if applicable. |
-| `vested_at`        | `Option<u64>`   | Unix timestamp at which a completed payout's vesting period ends, if the protocol config has a non-zero `vesting_duration_seconds`. `None` when vesting does not apply. |
+| `vested_at`        | `Option<u64>`   | Unix timestamp at which a completed payout's vesting period ends, if the effective vesting duration (see `vesting_override_seconds`) is non-zero. `None` when vesting does not apply. |
+| `vesting_override_seconds` | `Option<u64>` | Per-match vesting duration override supplied at creation time via `create_match`. When `Some`, it takes precedence over `ProtocolConfig::vesting_duration_seconds` for this match's payout vesting; when `None`, the global config value is used. |
 | `player1_claimed`  | `bool`          | Whether `player1` has claimed their vested payout via `claim_vested_payout`. |
 | `player2_claimed`  | `bool`          | Whether `player2` has claimed their vested payout via `claim_vested_payout`. |
 | `conversion_rate`  | `Option<i128>`  | For multi-token matches created via `create_match_with_conversion`: the oracle-validated `token`→`token_b` conversion rate. `None` for single-token matches. |
@@ -293,7 +294,7 @@ Set via `set_protocol_config`, read via `get_protocol_config`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `vesting_duration_seconds` | `u64` | Seconds a completed payout must vest before `claim_vested_payout` releases it. `0` disables vesting (payout is immediate at `submit_result`/`finalize_match`/`resolve_dispute_by_vote` time). |
+| `vesting_duration_seconds` | `u64` | Default seconds a completed payout must vest before `claim_vested_payout` releases it. Applies only to matches whose `vesting_override_seconds` is `None`; a per-match override takes precedence. `0` disables vesting (payout is immediate at `submit_result`/`finalize_match`/`resolve_dispute_by_vote` time). |
 | `cancellation_fee_basis_points` | `u32` | Basis-point fee deducted on cancellation, if configured. |
 | `treasury` | `Address` | Recipient address for cancellation fees. |
 
@@ -421,7 +422,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `create_match` | `(player1: Address, player2: Address, stake_amount: i128, token: Address, game_id: String, platform: Platform) -> u64` | Creates a new single-token match and returns its ID. |
+| `create_match` | `(player1: Address, player2: Address, stake_amount: i128, token: Address, game_id: String, platform: Platform, vesting_override_seconds: Option<u64>) -> u64` | Creates a new single-token match and returns its ID. `vesting_override_seconds` optionally sets a per-match vesting duration (stored on `Match.vesting_override_seconds`); when `None`, the match falls back to `ProtocolConfig::vesting_duration_seconds`. |
 | `create_match_with_conversion` | `(player1: Address, player2: Address, stake_amount: i128, token_a: Address, token_b: Address, rate: i128, game_id: String, platform: Platform) -> u64` | Creates a multi-token match: `player1` stakes `token_a`, `player2` stakes the equivalent in `token_b` at `rate`, validated against the oracle contract's `get_rate` within a ±5% tolerance (see [oracle.md](oracle.md#contract-function-reference) and [Roadmap v1.0.1](roadmap.md#v101--multi-token-conversion-rate-hardening-complete)). |
 | `create_match_with_referrer` | `(player1: Address, player2: Address, stake_amount: i128, token: Address, game_id: String, platform: Platform, referrer: Address) -> Result<u64, Error>` | Identical to `create_match`, additionally storing a `referrer` address on the match. On winner payout, a referral fee is deducted from the winner's proceeds and sent to the referrer (see `set_referral_share_bps`); only applies when `cancellation_fee_basis_points > 0`. |
 | `get_match` | `(match_id: u64) -> Match` | Returns the current state of a match. |
@@ -441,7 +442,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_escrow_balance` | `(match_id: u64) -> i128` | Returns the total escrowed balance for a match. |
 | `is_funded` | `(match_id: u64) -> bool` | Returns `true` when both players have deposited. |
 | `get_depositor_count` | `(match_id: u64) -> u32` | Returns how many of the two players (0, 1, or 2) have deposited. |
-| `claim_vested_payout` | `(match_id: u64, player: Address)` | For matches settled under a non-zero `vesting_duration_seconds`: releases `player`'s share once the vesting period (tracked via `vested_at`) has elapsed. Returns `Error::Overflow` on timestamp arithmetic overflow. |
+| `claim_vested_payout` | `(match_id: u64, player: Address)` | For matches settled under a non-zero effective vesting duration (the match's `vesting_override_seconds` if set, otherwise `ProtocolConfig::vesting_duration_seconds`): releases `player`'s share once the vesting period (tracked via `vested_at`) has elapsed. Returns `Error::Overflow` on timestamp arithmetic overflow. |
 | `deposit_batch` | `(entries: Vec<(u64, Address)>) -> Result<Vec<Option<Error>>, Error>` | Batch version of `deposit`. Accepts a list of `(match_id, player)` pairs and processes each independently. Returns `Error::ContractPaused` immediately if the contract is paused; otherwise returns a `Vec` of outcomes (`None` = success, `Some(Error)` = that entry's failure) in input order. |
 #### Oracle, Payouts & Disputes
 

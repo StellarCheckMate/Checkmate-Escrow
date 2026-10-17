@@ -156,6 +156,11 @@ pub struct Match {
     pub rollback_vote_player2: bool,
     /// Tournament round for bracket matches.
     pub round: Option<u32>,
+    /// Optional per-match vesting duration override, in seconds, agreed upon
+    /// at match creation time. When `Some`, this value takes precedence over
+    /// the global `ProtocolConfig::vesting_duration_seconds` for this match's
+    /// payouts; when `None`, the global config value is used.
+    pub vesting_override_seconds: Option<u64>,
 }
 
 #[contracttype]
