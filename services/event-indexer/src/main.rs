@@ -40,6 +40,16 @@ async fn main() -> Result<()> {
         ),
     }
 
+    // ── SQLite database directory ─────────────────────────────────────────
+    // Ensure the directory holding the SQLite database file exists before we
+    // try to open it.  A missing directory used to cause a panic deep inside
+    // the indexer; now we fail fast with a clear message that names the path
+    // and the underlying OS error.
+    if let Err(e) = db::ensure_db_directory(&config.database_url) {
+        error!("Failed to prepare database directory: {:#}", e);
+        return Err(e);
+    }
+
     // ── PostgreSQL pools ──────────────────────────────────────────────────
     let database = Arc::new(db::Database::from_dsns(
         &config.database_url,

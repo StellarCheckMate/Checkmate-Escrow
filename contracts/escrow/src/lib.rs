@@ -3638,6 +3638,13 @@ impl EscrowContract {
             return Err(Error::InvalidAddress);
         }
 
+        // Reject a proposal that would make the pending admin the current admin:
+        // accepting it would be a no-op that wastes ledger budget and confuses
+        // off-chain tooling tracking pending admin transfers.
+        if new_admin == admin {
+            return Err(Error::InvalidAddress);
+        }
+
         env.storage().instance().set(
             &DataKey::PendingAdmin,
             &PendingAdminProposal {

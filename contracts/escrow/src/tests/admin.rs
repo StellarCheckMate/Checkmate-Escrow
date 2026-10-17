@@ -889,6 +889,34 @@ fn test_pause_blocks_create_match() {
     assert_eq!(id, 0, "create_match must succeed after unpause");
 }
 
+// #1759 — propose_admin must reject the current admin as the pending admin
+#[test]
+fn test_propose_admin_rejects_current_admin() {
+    let (env, contract_id, _oracle, _player1, _player2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_propose_admin(&admin);
+    assert_eq!(result, Err(Ok(Error::InvalidAddress)));
+
+    let pending: Option<PendingAdminProposal> = env.as_contract(&contract_id, || {
+        env.storage().instance().get(&DataKey::PendingAdmin)
+    });
+    assert!(
+        pending.is_none(),
+        "PendingAdmin must not be written when proposing the current admin"
+    );
+}
+
+// #1755 — get_contract_version returns the crate version from Cargo.toml
+#[test]
+fn test_get_contract_version_matches_cargo_pkg_version() {
+    let (env, contract_id, ..) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let version = client.get_contract_version();
+    assert_eq!(version.to_string(), env!("CARGO_PKG_VERSION"));
+}
+
 // #1162 — get_contract_version returns the crate's semver string
 #[test]
 fn test_get_contract_version_returns_semver_string() {

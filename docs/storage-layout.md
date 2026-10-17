@@ -27,7 +27,89 @@ All TTL values are expressed in **ledger sequence numbers** (5 s/ledger on Stell
 
 ---
 
+## Storage Key Relationship Diagram
+
+The diagram below shows how the storage keys relate to one another. Instance-scope config keys sit at the top; per-match keys hang off `Match(id)`; the snapshot ring buffers are fed by match activity; and the separate `OracleConsensusKey` enum is shown alongside.
+
+```mermaid
+flowchart TD
+    subgraph Instance["Instance scope (global config)"]
+        Admin["Admin"]
+        PendingAdmin["PendingAdmin"]
+        Oracle["Oracle"]
+        ProtocolConfig["ProtocolConfig"]
+        Paused["Paused"]
+        ContractVersion["ContractVersion"]
+        MatchCount["MatchCount"]
+        Allowlist["AllowedToken / AllowlistEnforced"]
+        ConsensusCfg["ApprovedOracles / RequiredOracleConfirmations"]
+        DisputeCfg["DisputePeriod / QuorumBasisPoints"]
+    end
+
+    subgraph MatchData["Per-match data (Persistent)"]
+        Match["Match(id)"]
+        GameId["GameId(game_id)"]
+        OracleRecord["OracleRecord(id)"]
+        PlayerMatches["PlayerMatches(player)"]
+        ActiveMatch["ActiveMatch(player, id)"]
+        DepositGuard["DepositInProgress(id) (Temporary)"]
+        PendingWinner["PendingWinner(id)"]
+        ResultDeadline["ResultDeadline(id)"]
+        Dispute["Dispute(id) / MatchDispute(id)"]
+        DisputeVote["DisputeVote(id, voter)"]
+    end
+
+    subgraph Snapshots["Balance snapshot ring buffers (Persistent)"]
+        Snapshot["Snapshot(id, slot % 8)"]
+        SnapshotCount["SnapshotCount(id)"]
+        PlayerSnapshot["PlayerBalanceSnapshot(player, slot % 32)"]
+        PlayerSnapshotCount["PlayerBalanceSnapshotCount(player)"]
+    end
+
+    subgraph Consensus["OracleConsensusKey (separate enum)"]
+        OracleDeadlock["OracleDeadlock(id)"]
+        OracleVote["OracleVote(id, oracle)"]
+        OracleConfirmations["OracleConfirmations(id)"]
+    end
+
+    MatchCount -->|"allocates id"| Match
+    Match --> GameId
+    Match --> OracleRecord
+    Match --> ActiveMatch
+    Match --> DepositGuard
+    Match --> PendingWinner
+    PendingWinner --> ResultDeadline
+    Match --> Dispute
+    Dispute --> DisputeVote
+    Match --> PlayerMatches
+    Match --> Snapshot
+    SnapshotCount -->|"indexes"| Snapshot
+    Match --> PlayerSnapshot
+    PlayerSnapshotCount -->|"indexes"| PlayerSnapshot
+    Match --> OracleDeadlock
+    Match --> OracleVote
+    Match --> OracleConfirmations
+    ConsensusCfg --> OracleConfirmations
+    Oracle --> OracleVote
+    DisputeCfg --> Dispute
+    Admin --> PendingAdmin
+    ProtocolConfig --> Match
+```
+
+Reading the diagram:
+
+- **Instance config** (`Admin`, `PendingAdmin`, `Oracle`, `ProtocolConfig`, `Paused`, `ContractVersion`, allowlist keys, consensus and dispute config) is global and bumped on every invocation.
+- **`MatchCount`** allocates a new `id`, which is the anchor for all per-match keys: `Match(id)`, `GameId`, `OracleRecord(id)`, `ActiveMatch`, `PendingWinner(id)` → `ResultDeadline(id)`, `Dispute(id)` → `DisputeVote(id, voter)`, and the consensus keys.
+- **`DepositInProgress(id)`** is a *Temporary* reentrancy guard around `deposit`; it is set on entry and cleared on exit.
+- **Snapshot ring buffers** are written as match balances change: `SnapshotCount(id)` indexes into `Snapshot(id, slot % 8)`, and `PlayerBalanceSnapshotCount(player)` indexes into `PlayerBalanceSnapshot(player, slot % 32)`.
+- **`OracleConsensusKey`** is a separate enum (see below) holding `OracleDeadlock(id)`, `OracleVote(id, oracle)`, and `OracleConfirmations(id)`.
+
+---
+
 ## DataKey Variant Reference
+
+> See the [Storage Key Relationship Diagram](#storage-key-relationship-diagram) above for how these keys connect.
+=======
 
 > Source: [`contracts/escrow/src/types.rs`](../contracts/escrow/src/types.rs)
 

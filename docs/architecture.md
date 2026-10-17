@@ -636,6 +636,7 @@ let page: Vec<u64> = all_ids.iter().skip(40).take(20).collect();
 For a complete mapping of every `DataKey` variant to its value type, storage scope (instance vs persistent vs temporary), TTL behaviour, and description, see the dedicated reference document:
 
 - [**Storage Layout Reference**](storage-layout.md) — full `DataKey` and `OracleConsensusKey` tables, upgrade safety checklist
+- [**Storage Layout Diagram**](storage-layout.md#storage-layout-diagram) — visual (Mermaid) diagram of how storage keys relate to each other (match → deposit flags → snapshot ring buffer)
 
 This is the recommended starting point for anyone performing a contract upgrade or building tooling that reads contract storage directly.
 

@@ -40,6 +40,45 @@ pub fn build_pool(dsn: &str, max_size: usize) -> Result<Pool> {
         .map_err(|e| anyhow!("Failed to create connection pool: {}", e))
 }
 
+// ── Startup path preparation ──────────────────────────────────────────────────
+
+/// Ensure the directory that will hold the SQLite database file exists.
+///
+/// `dsn` may be either a bare filesystem path (`/var/lib/indexer/events.db`) or
+/// a `sqlite://…` style URL.  The parent directory is created with
+/// [`std::fs::create_dir_all`] when missing.  Any failure is reported as an
+/// `anyhow` error that names the offending path and the underlying OS error, so
+/// the indexer can log it and exit gracefully instead of panicking.
+pub fn ensure_database_dir(dsn: &str) -> Result<()> {
+    let path = database_path_from_dsn(dsn);
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        // No parent component (e.g. a bare filename) – nothing to create.
+        _ => return Ok(()),
+    };
+
+    std::fs::create_dir_all(&parent).map_err(|e| {
+        anyhow!(
+            "Failed to create database directory '{}': {}",
+            parent.display(),
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
+/// Extract the filesystem path from a DSN, stripping any `sqlite:` scheme and
+/// query string (e.g. `sqlite:///tmp/x.db?mode=rwc` → `/tmp/x.db`).
+fn database_path_from_dsn(dsn: &str) -> std::path::PathBuf {
+    let without_query = dsn.split('?').next().unwrap_or(dsn);
+    let stripped = without_query
+        .strip_prefix("sqlite://")
+        .or_else(|| without_query.strip_prefix("sqlite:"))
+        .unwrap_or(without_query);
+    std::path::PathBuf::from(stripped)
+}
+
 // ── Database ──────────────────────────────────────────────────────────────────
 
 /// Primary database handle.  Cloning is cheap – both fields are `Arc`-backed.
@@ -1121,6 +1160,55 @@ fn row_to_transaction(row: &tokio_postgres::Row) -> Option<TransactionRecord> {
         event_type,
         ledger_sequence: ledger as u32,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_database_dir_creates_missing_parent() {
+        let base = std::env::temp_dir().join(format!(
+            "event-indexer-db-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let nested = base.join("a").join("b");
+        let dsn = nested.join("events.db").to_string_lossy().to_string();
+
+        ensure_database_dir(&dsn).expect("directory should be created");
+        assert!(nested.is_dir());
+
+        // Idempotent: a second call must not fail.
+        ensure_database_dir(&dsn).expect("second call should succeed");
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn ensure_database_dir_handles_bare_filename() {
+        // No parent component – nothing to create, must not error.
+        ensure_database_dir("events.db").expect("bare filename should be a no-op");
+    }
+
+    #[test]
+    fn database_path_from_dsn_strips_scheme_and_query() {
+        assert_eq!(
+            database_path_from_dsn("sqlite:///tmp/x.db?mode=rwc"),
+            std::path::PathBuf::from("/tmp/x.db")
+        );
+        assert_eq!(
+            database_path_from_dsn("sqlite:/tmp/y.db"),
+            std::path::PathBuf::from("/tmp/y.db")
+        );
+        assert_eq!(
+            database_path_from_dsn("/tmp/z.db"),
+            std::path::PathBuf::from("/tmp/z.db")
+        );
+    }
 }
 
 fn row_to_event(row: &tokio_postgres::Row) -> Result<IndexedEvent> {
