@@ -297,6 +297,57 @@ fn test_consensus_three_of_three_requires_all_votes() {
     assert_eq!(tc.balance(&player1), p1_before + 200);
 }
 
+// ── Exact-threshold tests ────────────────────────────────────────────────────
+
+#[test]
+fn test_consensus_requires_exact_threshold_votes() {
+    // 3 approved oracles, threshold 2: the match must stay Active after the
+    // (T-1)th vote and only settle once the Tth agreeing vote is cast.
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(3, 2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // T-1 = 1 vote: not settled.
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+    assert_eq!(client.get_oracle_confirmations(&match_id), 1);
+    assert_eq!(
+        client.get_match(&match_id).state,
+        MatchState::Active,
+        "match must not settle before threshold votes are reached"
+    );
+
+    // T = 2 votes: settled.
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(1).unwrap());
+    assert_eq!(client.get_oracle_confirmations(&match_id), 2);
+    assert_eq!(
+        client.get_match(&match_id).state,
+        MatchState::Completed,
+        "match must settle once threshold votes are reached"
+    );
+    assert_eq!(client.get_match(&match_id).winner, Winner::Player1);
+}
+
+#[test]
+fn test_consensus_disagreeing_minority_triggers_slash_signal() {
+    // A minority oracle voting a different winner than the majority must be
+    // rejected with `ConflictingResult`, which is the contract's slash signal
+    // for a disagreeing oracle.
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(3, 2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Majority oracle votes Player1.
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+    assert_eq!(client.get_oracle_confirmations(&match_id), 1);
+
+    // Minority oracle disagrees — conflict/slash signal surfaced.
+    let result =
+        client.try_submit_result_consensus(&match_id, &Winner::Player2, &oracles.get(1).unwrap());
+    assert_eq!(result, Err(Ok(Error::ConflictingResult)));
+
+    // The conflicting vote leaves no trace and the match is not settled.
+    assert_eq!(client.get_oracle_confirmations(&match_id), 1);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Active);
+}
+
 // ── Partial vote / no-payout tests ───────────────────────────────────────────
 
 #[test]

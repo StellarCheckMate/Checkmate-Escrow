@@ -367,6 +367,14 @@ impl OracleContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
+        // Reject addresses that never registered via `register_oracle_with_stake`
+        // so a slash cannot be staged for a phantom (non-oracle) address.
+        let registration: OracleRegistration = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle_address.clone()))
+            .ok_or(Error::NotRegisteredOracle)?;
+
         // Reject if a pending slash already exists for this (oracle, match_id) pair.
         // Silently overwriting would reset `eligible_ledger`, potentially shortening or
         // extending the governance grace window unintentionally.
@@ -377,12 +385,6 @@ impl OracleContract {
         {
             return Err(Error::SlashAlreadyPending);
         }
-
-        let registration: OracleRegistration = env
-            .storage()
-            .instance()
-            .get(&DataKey::OracleRegistration(oracle_address.clone()))
-            .ok_or(Error::InsufficientStake)?;
 
         if slash_amount <= 0 || slash_amount > registration.oracle_stake {
             return Err(Error::InsufficientStake);

@@ -191,6 +191,49 @@ fn test_finalize_slash_succeeds_immediately_with_zero_grace_period() {
     assert!(client.get_pending_slash(&oracle_admin, &0u64).is_none());
 }
 
+// #1741 — slash_oracle must reject addresses that never registered as an
+// oracle, rather than staging phantom slash records for them.
+#[test]
+fn test_slash_oracle_rejects_unregistered_address() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+
+    let stranger = Address::generate(&env);
+
+    let result = client.try_slash_oracle(&stranger, &0u64, &75i128);
+    assert_eq!(
+        result,
+        Err(Ok(Error::NotRegisteredOracle)),
+        "slash_oracle must reject an address that never registered"
+    );
+
+    // No phantom pending slash may be staged for the unregistered address.
+    assert!(
+        client.get_pending_slash(&stranger, &0u64).is_none(),
+        "no pending slash must be staged for an unregistered address"
+    );
+}
+
+// #1741 — companion: a genuinely registered oracle must still be slashable.
+#[test]
+fn test_slash_oracle_still_stages_for_registered_oracle() {
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+
+    asset_client.mint(&oracle_admin, &300);
+    client.register_oracle_with_stake(&oracle_admin, &300i128, &token_addr);
+
+    client.slash_oracle(&oracle_admin, &0u64, &75i128);
+
+    let pending = client.get_pending_slash(&oracle_admin, &0u64);
+    assert!(
+        pending.is_some(),
+        "a registered oracle must still have a slash staged"
+    );
+    assert_eq!(pending.unwrap().slash_amount, 75);
+}
+
 // #1577 — slash_oracle must return SlashAlreadyPending if a pending slash already
 // exists for the same (oracle, match_id) pair, preventing a silent overwrite that
 // would reset `eligible_ledger` and shorten/extend the governance grace window.

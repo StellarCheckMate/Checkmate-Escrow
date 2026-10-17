@@ -23,6 +23,7 @@ extern crate std;
 ///
 /// See [`docs/error-codes.md`](../../docs/error-codes.md) for all 50 error codes with causes and recovery actions.
 pub mod errors;
+pub mod state_machine;
 pub mod types;
 
 #[cfg(test)]
