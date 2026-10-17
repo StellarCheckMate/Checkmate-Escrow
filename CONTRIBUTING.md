@@ -71,6 +71,26 @@ cargo test -p escrow
 cargo test -p oracle
 ```
 
+### Benchmarks
+
+`scripts/benchmark.sh` runs the performance benchmark suite for the escrow and
+oracle contracts. It measures the CPU-instruction cost of the hot paths
+(match creation, deposits, settlement, and oracle result submission) so that
+regressions in resource usage are caught before they reach `main`.
+
+Run it before opening any PR that touches contract logic on a performance-
+sensitive path (storage layout, TTL handling, auth checks, or settlement math).
+It is not required for docs-only or test-only changes.
+
+```bash
+./scripts/benchmark.sh
+```
+
+Results are written to `reports/performance/benchmark-results.json`. Compare the
+output against the previous run and mention any significant change in your PR
+description. See [docs/performance-report.md](docs/performance-report.md) for
+how to interpret the results.
+
 ### Code Style
 
 - Follow Rust standard formatting: `cargo fmt`

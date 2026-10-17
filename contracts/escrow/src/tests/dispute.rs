@@ -504,6 +504,54 @@ fn test_resolve_dispute_fails_before_voting_deadline() {
     assert_eq!(result, Err(Ok(Error::VotingPeriodNotElapsed)));
 }
 
+/// Regression test for #1753: reaching quorum before the voting window closes
+/// must not resolve the dispute early. Resolution is only allowed once the
+/// voting deadline has passed, regardless of quorum.
+#[test]
+fn test_resolve_dispute_quorum_met_before_deadline_still_blocked() {
+    let (env, contract_id, oracle, player1, player2, token, _admin) =
+        setup_with_dispute_period(200);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Quorum of 50% of the 200-token snapshot weight = 100 tokens.
+    client.set_quorum_basis_points(&5000);
+
+    let match_id =
+        create_funded_active_match(&client, &env, &player1, &player2, &token, "dquorum1");
+
+    env.ledger().set_sequence_number(1000);
+    client.submit_result(&match_id, &Winner::Player1, &oracle);
+
+    let dispute_id =
+        client.dispute_oracle_result(&match_id, &player2, &String::from_str(&env, "394661e8"));
+
+    // A single 100-token vote meets quorum exactly, but the window is open.
+    client.vote_on_dispute(&dispute_id, &player1, &true);
+
+    // Still before the deadline: resolution must be rejected even though
+    // quorum is satisfied.
+    let result = client.try_resolve_dispute_by_vote(&dispute_id);
+    assert_eq!(
+        result,
+        Err(Ok(Error::VotingPeriodNotElapsed)),
+        "quorum met before the deadline must not resolve the dispute"
+    );
+
+    // Dispute remains active and funds stay escrowed.
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.state, DisputeState::Active);
+    assert_eq!(client.get_match(&match_id).state, MatchState::PendingResult);
+
+    // Advance past the voting deadline: resolution now succeeds.
+    env.ledger()
+        .set_sequence_number(1000 + VOTING_PERIOD_LEDGERS);
+    client.resolve_dispute_by_vote(&dispute_id);
+
+    let dispute = client.get_dispute(&dispute_id);
+    assert_eq!(dispute.state, DisputeState::ResolvedOverturned);
+    assert_eq!(client.get_match(&match_id).state, MatchState::Completed);
+}
+
 #[test]
 fn test_resolve_dispute_fails_for_nonexistent_dispute() {
     let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();

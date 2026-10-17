@@ -64,6 +64,12 @@ use soroban_sdk::testutils::Ledger as _;
 use soroban_sdk::token::StellarAssetClient;
 use soroban_sdk::BytesN;
 
+// NOTE: This file intentionally contains no `#[should_panic]` tests. Every
+// scenario that exercises a contract `Error` enum value asserts the exact
+// variant via the typed `try_*` client methods (e.g. `Err(Ok(Error::X))`).
+// String-panic cases (such as double-initialize) live elsewhere in the suite
+// and remain `#[should_panic]` there.
+
 // ── Discriminant sanity-check ─────────────────────────────────────────────────
 //
 // For variants that are hard to trigger in a pure contract test (Overflow,
