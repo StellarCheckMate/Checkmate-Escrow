@@ -101,4 +101,7 @@ pub enum Error {
     /// before an admin can unilaterally recover funds.  This prevents a
     /// compromised admin key from immediately draining any active escrow.
     RecoveryTimelockNotElapsed = 59,
+    /// A match with the same `bracket_id`, `round`, and player set already exists.
+    /// Returned by `create_match_tournament` to reject duplicate bracket matches.
+    DuplicateBracketMatch = 60,
 }
