@@ -1461,6 +1461,20 @@ impl EscrowContract {
         {
             return Err(Error::InvalidPlayers);
         }
+        for player in [&params.player1, &params.player2] {
+            let active_count: u32 = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PlayerActiveMatchCount((*player).clone()))
+                .unwrap_or(0);
+            if active_count >= MAX_ACTIVE_MATCHES_PER_PLAYER {
+                env.events().publish(
+                    (Symbol::new(&env, "match"), Symbol::new(&env, "limit_reached")),
+                    ((*player).clone(), active_count),
+                );
+                return Err(Error::TooManyActiveMatches);
+            }
+        }
         if params.token_b.is_some() != params.conversion_rate.is_some() {
             return Err(Error::InvalidAmount);
         }
@@ -3601,6 +3615,10 @@ impl EscrowContract {
         let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
 
         if count >= MAX_ACTIVE_MATCHES_PER_PLAYER {
+            env.events().publish(
+                (Symbol::new(env, "match"), Symbol::new(env, "limit_reached")),
+                (player.clone(), count),
+            );
             return Err(Error::TooManyActiveMatches);
         }
 
@@ -3610,10 +3628,18 @@ impl EscrowContract {
             .persistent()
             .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
 
-        env.storage().persistent().set(&count_key, &(count + 1));
+        let new_count = count + 1;
+        env.storage().persistent().set(&count_key, &new_count);
         env.storage()
             .persistent()
             .extend_ttl(&count_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        if new_count >= MAX_ACTIVE_MATCHES_PER_PLAYER {
+            env.events().publish(
+                (Symbol::new(env, "match"), Symbol::new(env, "limit_reached")),
+                (player.clone(), new_count),
+            );
+        }
 
         Ok(())
     }

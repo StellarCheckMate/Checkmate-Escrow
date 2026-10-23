@@ -631,3 +631,59 @@ fn test_transfer_admin_emits_event() {
         "new admin must match provided address"
     );
 }
+
+#[test]
+fn test_too_many_active_matches_emits_limit_reached_event() {
+    let (env, contract_id, _oracle, player1, player2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Seed player1 at MAX_ACTIVE_MATCHES_PER_PLAYER - 1 active matches, then activate
+    // one more match to reach the limit and verify the match/limit_reached event and
+    // subsequent TooManyActiveMatches error path.
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().set(
+            &DataKey::PlayerActiveMatchCount(player1.clone()),
+            &(MAX_ACTIVE_MATCHES_PER_PLAYER - 1),
+        );
+    });
+
+    let id = client.create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "1818aaaa"),
+        &Platform::Lichess,
+    );
+    client.deposit(&id, &player1);
+    client.deposit(&id, &player2);
+
+    let result = client.try_create_match(
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "1818bbbb"),
+        &Platform::Lichess,
+    );
+    assert_eq!(result, Err(Ok(Error::TooManyActiveMatches)));
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        Symbol::new(&env, "limit_reached").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(
+        matched.is_some(),
+        "match/limit_reached event must be emitted when active match limit is reached"
+    );
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_player, ev_count): (Address, u32) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_player, player1);
+    assert_eq!(ev_count, MAX_ACTIVE_MATCHES_PER_PLAYER);
+}

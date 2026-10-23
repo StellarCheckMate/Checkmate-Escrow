@@ -751,6 +751,7 @@ stellar contract invoke --id $ESCROW_ID -- is_paused
 **Critical Events to Monitor:**
 - Contract pause/unpause events
 - Admin address changes
+- Active match cap alerts (`match/limit_reached` when `TooManyActiveMatches` limit is hit)
 - Unusual transaction patterns
 - Oracle submission delays
 - API failures
