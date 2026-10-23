@@ -632,3 +632,37 @@ fn test_multiple_deposits_from_same_player_rejected() {
         "duplicate deposit from same player must be rejected"
     );
 }
+
+#[test]
+fn test_tournament_duplicate_bracket_round_players_rejected() {
+    let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.register_bracket(&admin, &11, &admin);
+
+    let first = client.try_create_match_tournament(
+        &11,
+        &3,
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "dup00001"),
+        &Platform::Lichess,
+    );
+    assert!(first.is_ok(), "first bracket match must be created");
+
+    let duplicate = client.try_create_match_tournament(
+        &11,
+        &3,
+        &player1,
+        &player2,
+        &100,
+        &token,
+        &String::from_str(&env, "dup00002"),
+        &Platform::Lichess,
+    );
+    assert!(
+        duplicate.is_err(),
+        "duplicate bracket_id + round + players must be rejected"
+    );
+}
