@@ -113,6 +113,9 @@ pub struct OracleConfig {
     /// Submission will fail if the calculated fee exceeds this limit.
     /// Defaults to `ORACLE_MAX_FEE_STROOPS` env var, or 1_000_000 (0.1 XLM) if unset.
     pub max_fee_stroops: u32,
+    /// When `true`, settlements are logged but never submitted on-chain.
+    /// Defaults to `DRY_RUN` env var (`true`/`1` enable), or `false` if unset.
+    pub dry_run: bool,
     /// HTTP server bind address (host:port).
     /// Defaults to `ORACLE_HTTP_ADDR` env var, or `0.0.0.0:8000` if unset.
     pub http_addr: String,
@@ -158,6 +161,7 @@ impl fmt::Debug for OracleConfig {
             )
             .field("dead_letter_max_entries", &self.dead_letter_max_entries)
             .field("max_fee_stroops", &self.max_fee_stroops)
+            .field("dry_run", &self.dry_run)
             .field("http_addr", &self.http_addr)
             .field(
                 "metrics_auth_username",
@@ -267,6 +271,7 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
     let reconciliation_interval_secs = parse_u64_env("ORACLE_RECONCILIATION_INTERVAL_SECS", 60)?;
     let dead_letter_max_entries = parse_usize_env("ORACLE_DEAD_LETTER_MAX_ENTRIES", 1000)?;
     let max_fee_stroops = parse_u32_env("ORACLE_MAX_FEE_STROOPS", 1_000_000)?;
+    let dry_run = parse_bool_env("DRY_RUN", false)?;
     let http_addr = std::env::var("ORACLE_HTTP_ADDR").unwrap_or_else(|_| "0.0.0.0:8000".to_string());
 
     let metrics_auth_username = std::env::var("METRICS_AUTH_USERNAME")
@@ -293,6 +298,7 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
         reconciliation_interval_secs,
         dead_letter_max_entries,
         max_fee_stroops,
+        dry_run,
         http_addr,
         metrics_auth_username,
         metrics_auth_password,
@@ -332,6 +338,20 @@ fn parse_usize_env(name: &'static str, default: usize) -> Result<usize, ConfigEr
             var: name,
             reason: e.to_string(),
         }),
+    }
+}
+
+fn parse_bool_env(name: &'static str, default: bool) -> Result<bool, ConfigError> {
+    match std::env::var(name) {
+        Err(_) => Ok(default),
+        Ok(v) => match v.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" => Ok(true),
+            "false" | "0" | "" => Ok(false),
+            other => Err(ConfigError::InvalidValue {
+                var: name,
+                reason: format!("expected true/false/1/0, got '{}'", other),
+            }),
+        },
     }
 }
 
