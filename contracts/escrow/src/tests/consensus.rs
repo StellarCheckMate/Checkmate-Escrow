@@ -772,3 +772,28 @@ fn test_deadlock_not_triggered_with_partial_votes() {
     client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
     assert!(!client.is_oracle_deadlocked(&match_id));
 }
+
+#[test]
+fn test_no_deadlock_event_emitted_when_consensus_reachable() {
+    let (env, contract_id, _admin, _p1, _p2, _token, oracles, match_id) = setup_consensus(3, 2);
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // First oracle votes: 1 confirmation recorded, 2 required, 2 remaining oracles can still vote.
+    client.submit_result_consensus(&match_id, &Winner::Player1, &oracles.get(0).unwrap());
+    assert!(!client.is_oracle_deadlocked(&match_id));
+
+    let dead_topics = vec![
+        &env,
+        Symbol::new(&env, "match").into_val(&env),
+        soroban_sdk::symbol_short!("ora_dead").into_val(&env),
+    ];
+    let emitted = env
+        .events()
+        .all()
+        .iter()
+        .any(|(_, topics, _)| *topics == dead_topics);
+    assert!(
+        !emitted,
+        "match/ora_dead event must not be emitted when consensus is still reachable"
+    );
+}

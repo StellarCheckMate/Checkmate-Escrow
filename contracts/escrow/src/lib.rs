@@ -2211,26 +2211,35 @@ impl EscrowContract {
         current_confirmations: u32,
         required: u32,
     ) -> Result<(), Error> {
+        if current_confirmations >= required {
+            return Ok(());
+        }
+
         let oracles: soroban_sdk::Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::ApprovedOracles)
             .unwrap_or_else(|| soroban_sdk::vec![&env]);
 
-        let oracle_count = oracles.len() as u32;
-
-        if required > oracle_count {
-            Self::mark_oracle_deadlock(env, match_id, current_confirmations, required);
-            return Ok(());
-        }
+        let oracle_count = oracles.len();
+        let unvoted_oracles = oracles
+            .iter()
+            .filter(|o| {
+                !env.storage()
+                    .persistent()
+                    .has(&DataKey::OracleVote(match_id, o.clone()))
+            })
+            .count() as u32;
 
         // Calculate how many more confirmations could theoretically be obtained.
-        // We assume all remaining oracles might vote once each.
-        let remaining_possible = oracle_count.saturating_sub(current_confirmations);
+        // We assume all remaining unvoted approved oracles might vote once each.
+        let remaining_possible =
+            unvoted_oracles.min(oracle_count.saturating_sub(current_confirmations));
         let max_possible_confirmations = current_confirmations.saturating_add(remaining_possible);
 
-        // If even if all remaining oracles vote, we still can't reach the threshold, deadlock.
-        if max_possible_confirmations < required {
+        // Only emit the event when current_confirmations < required and no further
+        // oracle can tip the balance to reach the required confirmation threshold.
+        if current_confirmations < required && max_possible_confirmations < required {
             Self::mark_oracle_deadlock(env, match_id, current_confirmations, required);
         }
 
