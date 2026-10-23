@@ -293,7 +293,8 @@ existing registration; a top-up call with a different token is rejected with
 be meaningfully summed. A first-time registration behaves exactly as before.
 
 Registering appends the address to the contract's oracle set (queryable via
-`get_registered_oracle_count`). The admin configures how many *distinct*
+`get_registered_oracle_count`, with individual registration details queryable
+via `get_oracle_registration`). The admin configures how many *distinct*
 registered oracles must submit a matching result before it finalizes:
 
 ```rust

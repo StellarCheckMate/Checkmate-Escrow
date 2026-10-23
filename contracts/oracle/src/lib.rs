@@ -255,6 +255,15 @@ impl OracleContract {
         Ok(())
     }
 
+    /// Return the registration details (`OracleRegistration`) for `oracle`, or
+    /// `None` if the address has not been registered via `register_oracle_with_stake`.
+    pub fn get_oracle_registration(env: Env, oracle: Address) -> Option<OracleRegistration> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .instance()
+            .get(&DataKey::OracleRegistration(oracle))
+    }
+
     /// Set the number of ledgers a staged slash must wait before it can be
     /// finalized via [`Self::finalize_slash`]. Admin-only.
     ///

@@ -4163,3 +4163,43 @@ fn test_deactivate_slow_oracle_deactivates_beyond_configured_threshold() {
         "oracle exceeding the configured SLA threshold must be deactivated"
     );
 }
+
+#[test]
+fn test_get_oracle_registration_returns_none_when_unregistered() {
+    let (env, contract_id, ..) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let unregistered = Address::generate(&env);
+
+    assert_eq!(client.get_oracle_registration(&unregistered), None);
+}
+
+#[test]
+fn test_get_oracle_registration_returns_details_when_registered() {
+    let (env, contract_id, .., oracle_admin, _, _, token_addr) = setup();
+    let client = OracleContractClient::new(&env, &contract_id);
+    let asset_client = StellarAssetClient::new(&env, &token_addr);
+
+    assert_eq!(client.get_oracle_registration(&oracle_admin), None);
+
+    asset_client.mint(&oracle_admin, &500);
+    client.register_oracle_with_stake(&oracle_admin, &300i128, &token_addr);
+
+    let registration = client
+        .get_oracle_registration(&oracle_admin)
+        .expect("registered oracle must return Some(OracleRegistration)");
+    assert_eq!(
+        registration,
+        OracleRegistration {
+            oracle_address: oracle_admin.clone(),
+            oracle_stake: 300,
+            token: token_addr.clone(),
+        }
+    );
+
+    // Top-up updates the registration returned by the view function.
+    client.register_oracle_with_stake(&oracle_admin, &200i128, &token_addr);
+    let updated = client
+        .get_oracle_registration(&oracle_admin)
+        .expect("registered oracle must still return Some(OracleRegistration)");
+    assert_eq!(updated.oracle_stake, 500);
+}

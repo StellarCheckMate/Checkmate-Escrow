@@ -45,7 +45,7 @@ pub struct BatchResultEntry {
 }
 
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OracleRegistration {
     pub oracle_address: Address,
     pub oracle_stake: i128,
