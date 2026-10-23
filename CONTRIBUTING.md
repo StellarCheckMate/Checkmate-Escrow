@@ -286,6 +286,13 @@ fn test_double_initialize_fails() {
 
 ## Contributing by Component
 
+### Frontend Changes
+
+For changes to the frontend application, see [docs/contributing-frontend.md](docs/contributing-frontend.md) for guidance on:
+- Setting up the dev server with `npm run dev`
+- Running frontend tests with Vitest
+- Configuring `VITE_*` environment variables
+
 ### Smart Contract Changes
 
 For changes to `contracts/escrow` or `contracts/oracle`, see [docs/contributing-contracts.md](docs/contributing-contracts.md) for detailed guidance on:

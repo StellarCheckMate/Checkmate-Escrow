@@ -10,7 +10,6 @@ __pycache__/
 *.pyc
 
 # Environment secrets
-.env
 
 # Test snapshots (Rust-side scratch dirs from contracts/*/src/tests/snapshots.rs
 # fixtures — unrelated to frontend Vitest snapshots, which ARE committed:
@@ -23,7 +22,6 @@ __pycache__/
 **/test_snapshots/
 
 # IDE / editor
-.vscode/
 .idea/
 *.iml
 
@@ -61,3 +59,5 @@ reports/
 # src/ with placeholder files), never a workspace member in Cargo.toml, and had
 # no tests or docs. It has been removed; ignore it so it isn't re-added.
 contracts/predict-iq/
+config.bat
+node_modules
