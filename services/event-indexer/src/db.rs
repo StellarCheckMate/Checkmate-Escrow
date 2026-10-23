@@ -681,6 +681,37 @@ impl Database {
         rows.iter().map(row_to_event).collect()
     }
 
+    /// Events for `match_id` strictly after `after_ledger` (ordered), used by
+    /// the SSE stream to deliver only new events on each poll tick.
+    pub async fn get_events_by_match_after(
+        &self,
+        match_id: u64,
+        after_ledger: u32,
+    ) -> Result<Vec<IndexedEvent>> {
+        let conn = self
+            .read_pool
+            .get()
+            .await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
+
+        let rows = conn
+            .query(
+                format!(
+                    "SELECT {EVENT_COLUMNS}
+                     FROM events
+                     WHERE match_id = $1 AND ledger_sequence > $2
+                       AND reorg_invalidated_at IS NULL
+                     ORDER BY ledger_sequence ASC, event_index_in_txn ASC NULLS FIRST"
+                )
+                .as_str(),
+                &[&(match_id as i64), &(after_ledger as i32)],
+            )
+            .await
+            .map_err(|e| anyhow!("get_events_by_match_after failed: {}", e))?;
+
+        rows.iter().map(row_to_event).collect()
+    }
+
     pub async fn query_events(&self, filters: &QueryFilters) -> Result<Vec<IndexedEvent>> {
         let conn = self
             .read_pool

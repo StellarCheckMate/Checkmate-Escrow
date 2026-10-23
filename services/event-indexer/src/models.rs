@@ -117,6 +117,12 @@ pub struct QueryFilters {
     pub offset: Option<i64>,
 }
 
+/// Query parameters for `GET /events/stream`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EventStreamQuery {
+    pub match_id: Option<u64>,
+}
+
 // ── Analytics models ──────────────────────────────────────────────────────────
 
 /// Platform-wide statistics returned by `GET /analytics/overview`.
