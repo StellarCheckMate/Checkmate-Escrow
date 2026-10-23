@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+pub const PROTOCOL_VERSION: u32 = 1;
+
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -90,6 +92,13 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let client_id = state.next_client_id();
     let (mut sender, mut receiver) = socket.split();
 
+    let hello = serde_json::json!({
+        "type": "hello",
+        "protocol": PROTOCOL_VERSION,
+        "server_version": env!("CARGO_PKG_VERSION"),
+    });
+    let _ = sender.send(Message::Text(hello.to_string())).await;
+
     let (tx, mut rx) = broadcast::channel::<WsEvent>(256);
     state.register_client(client_id, tx).await;
 
@@ -151,6 +160,18 @@ enum ClientMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hello_frame_contains_version_fields() {
+        let hello = serde_json::json!({
+            "type": "hello",
+            "protocol": PROTOCOL_VERSION,
+            "server_version": env!("CARGO_PKG_VERSION"),
+        });
+        assert_eq!(hello["type"], "hello");
+        assert_eq!(hello["protocol"], 1);
+        assert!(hello["server_version"].is_string());
+    }
 
     #[tokio::test]
     async fn broadcast_only_reaches_subscribed_clients() {

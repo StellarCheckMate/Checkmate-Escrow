@@ -16,6 +16,30 @@ use tracing::{debug, error, info, warn};
 
 use crate::state::AppState;
 
+/// Current WebSocket protocol version advertised in the `hello` frame.
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Server version advertised in the `hello` frame.
+pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// First frame sent to every client on connection.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HelloFrame {
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub protocol: u32,
+    pub server_version: &'static str,
+}
+
+/// Build the `hello` frame sent on connection.
+pub fn hello_frame() -> HelloFrame {
+    HelloFrame {
+        kind: "hello",
+        protocol: PROTOCOL_VERSION,
+        server_version: SERVER_VERSION,
+    }
+}
+
 /// Message sent by a client to subscribe to a specific match's events.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -111,6 +135,16 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let client_id = state.next_client_id();
     let (mut sender, mut receiver) = socket.split();
 
+    // Send the hello frame before any other traffic.
+    match serde_json::to_string(&hello_frame()) {
+        Ok(text) => {
+            if sender.send(Message::Text(text)).await.is_err() {
+                return;
+            }
+        }
+        Err(e) => error!(?e, "failed to serialize hello frame"),
+    }
+
     let (tx, mut rx) = broadcast::channel::<MatchEvent>(256);
     state.register_client(client_id, tx.clone()).await;
     info!(client_id, "websocket client connected");
@@ -164,6 +198,18 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hello_frame_includes_protocol_and_server_version() {
+        let frame = hello_frame();
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&frame).unwrap()).unwrap();
+
+        assert_eq!(json["type"], "hello");
+        assert_eq!(json["protocol"], PROTOCOL_VERSION);
+        assert_eq!(json["server_version"], SERVER_VERSION);
+        assert!(!SERVER_VERSION.is_empty());
+    }
 
     #[tokio::test]
     async fn dispatch_only_reaches_subscribed_clients() {
