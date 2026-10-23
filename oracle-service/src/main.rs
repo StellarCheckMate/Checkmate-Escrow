@@ -276,6 +276,9 @@ async fn main() {
     info!("oracle service listening on http://{}", http_addr);
     info!("API docs available at http://{}/api/docs", http_addr);
     info!("Prometheus metrics available at http://{}/metrics", http_addr);
+    if cfg_dry_run {
+        warn!("DRY_RUN enabled: settlements will be logged but not submitted");
+    }
 
     // ── Run all four tasks concurrently ─────────────────────────────────────
     tokio::select! {
