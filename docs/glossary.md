@@ -12,6 +12,14 @@ The privileged contract role set at deployment (emitted in the `escrow` / `init`
 
 The admin-managed set of tokens accepted for new matches. By default, before any token has been added, **any** Stellar token address is accepted. Once the admin adds at least one token with `add_allowed_token`, only allowlisted tokens may be used to create matches; attempting to use any other token fails with `TokenNotAllowed`. The allowlist is enforced in `create_match`.
 
+## Balance snapshot
+
+A point-in-time record of a player's or the contract's token balance, captured at a specific [ledger](#ledger) so that later checks can compare against a known baseline. Snapshots are used to verify that deposits and payouts moved the expected amounts, and to reconcile escrow custody against the sum of recorded [stakes](#stake) and [pots](#pot). Snapshot-based reconciliation is described in [match-lifecycle.md](match-lifecycle.md) under the deposit and payout sections; see also the balance checks in `contracts/escrow/src/tests`.
+
+## Bracket
+
+A grouping of [matches](#match) used to organize multi-round or tournament-style play, where each bracket collects matches that share a round or seeding slot and determines which winners advance. Brackets are a coordination concept for off-chain tournament tooling; the escrow contract itself tracks each match independently and does not store bracket membership. See the tournament notes in [wave-guide.md](wave-guide.md) and the project overview in the README.
+
 ## Cancelled
 
 A terminal [match](#match) state. A match reaches `Cancelled` when either player calls `cancel_match` while it is still [Pending](#pending), or when anyone calls `expire_match` after the timeout has elapsed. Any stake already deposited is refunded, and `completed_ledger` is recorded. See the [match lifecycle](match-lifecycle.md).
@@ -23,6 +31,10 @@ A terminal [match](#match) state reached when the [oracle](#oracle) submits a re
 ## Active
 
 A [match](#match) state. A match becomes `Active` once both players have completed their [deposits](#deposit) while it was [Pending](#pending). The escrow now holds `2 × stake` (the [pot](#pot)), the game is in progress, and only the [oracle](#oracle) can advance the match to [Completed](#completed).
+
+## Dead-letter queue
+
+A holding area for [oracle](#oracle) result submissions or off-chain events that could not be processed successfully (for example, a submission rejected because the match was already terminal, or a fetch from Lichess/Chess.com that failed repeatedly). Failed items are parked rather than dropped so an operator can inspect and replay them after the cause is fixed. The oracle service's retry and parking behavior is described in [oracle.md](oracle.md).
 
 ## Deposit
 
@@ -100,6 +112,14 @@ Stellar's smart contract platform. Contracts are written in Rust, compiled to We
 
 The token amount each player commits to a [match](#match), recorded as `stake_amount` and required to be greater than zero (`InvalidAmount` otherwise). Both players stake the same amount; together they form the [pot](#pot) that is paid out on completion.
 
+## TempOracleRotation
+
+A temporary, time-limited oracle rotation in which the [admin](#admin) installs a replacement [oracle](#oracle) address for a bounded window rather than permanently. Once the window elapses, the original oracle is restored automatically. This is used for planned maintenance or migrations where the primary oracle must be briefly offline, and it avoids leaving the contract pointed at a stand-in address by mistake. It is a time-bounded variant of the [Oracle Rotation](#oracle-rotation) process; follow the temporary-rotation steps in [runbook-rotation.md](runbook-rotation.md).
+
+## Vesting
+
+A release schedule under which a reward or token allocation becomes claimable gradually over a set number of [ledgers](#ledger) rather than all at once. Vesting applies to project allocations and reward distributions, not to match [payouts](#payout), which settle immediately. Vesting schedules are defined in the tokenomics documentation; see the distribution notes in [wave-guide.md](wave-guide.md) for how contributor rewards are scheduled.
+
 ## Wave-ready
 
 A label applied to GitHub issues that have been vetted and prepared for contribution under the project's Drips Wave program. Wave-ready issues carry a point value by complexity and can be claimed by commenting `/wave claim`. See the [Drips Wave Contributor Guide](wave-guide.md).
@@ -112,9 +132,4 @@ The native asset of the Stellar network, also called the lumen. XLM pays Stellar
 
 ## Related documentation
 
-- [Architecture Overview](architecture.md) — components, public API, and data model
-- [Match Lifecycle](match-lifecycle.md) — the complete state machine
-- [Oracle Design](oracle.md) — how results are verified and submitted
-- [Drips Wave Contributor Guide](wave-guide.md) — claiming wave-ready issues
-- [Error Codes Reference](error-codes.md) — every contract error and how to recover
-- [FAQ](faq.md) — common questions
+- [Architect
