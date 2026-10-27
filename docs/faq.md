@@ -128,9 +128,69 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match --match_id <ID>
 - **If the oracle is permanently down:** The 7-day admin resolution window ensures your funds are never permanently locked.
 - The combination of player rollback (24h) and admin resolution (7d) provides multiple circuit breakers — your funds cannot remain locked indefinitely.
 
+### 10. What happens to an active match if the oracle is offline for an extended period?
+
+Your stakes stay locked in the escrow contract. They are never released without either a verified oracle result or an authorized recovery action. If the oracle is down for days or weeks, recovery escalates through three layers: **oracle deadlock detection**, **admin recovery**, and finally **match timeout/expiry**.
+
+#### Layer 1: Oracle deadlock detection (multi-oracle consensus)
+
+When results are submitted through multi-oracle consensus (`submit_result_consensus`), each approved oracle votes once per match. The payout runs automatically once `get_required_confirmations()` matching votes are recorded (default: 2). After every accepted vote that does not reach the threshold, the contract checks whether the threshold can still be reached with the approved oracles who have not voted yet (`get_approved_oracles()`). If it can't (for example, `required_confirmations` is higher than the number of approved oracles), the match is flagged as **deadlocked**:
+
+- `is_oracle_deadlocked(match_id)` returns `true`.
+- A `("match", "ora_dead")` event is emitted with `(match_id, current_confirmations, required)`.
+
+> **Note:** The deadlock check only runs when an oracle vote is *accepted*. An oracle that is simply offline casts no votes, so silence alone never flags a match as deadlocked. A conflicting vote returns `ConflictingResult`, and Soroban rolls back all of that call's storage writes, so it does not set the flag either (see [architecture.md](architecture.md)). Plain outages are covered by the stall window in Layer 2.
+
+#### Layer 2: Admin recovery
+
+None of these admin paths are blocked by the contract-wide pause, because they exist to return funds.
+
+| Situation | Admin call | Precondition | Outcome |
+|-----------|-----------|--------------|---------|
+| Oracle key lost, compromised, or the service won't come back | `rotate_oracle_temporary`, or `propose_oracle_rotation` then `rotate_oracle_permanent` | Admin auth | A replacement oracle submits the **real** game result. This is the preferred fix because the payout matches the actual game. See [runbook-rotation.md](runbook-rotation.md). |
+| Match is flagged deadlocked | `resolve_oracle_deadlock(match_id, winner)` | Match is `Active` and `is_oracle_deadlocked` is `true` | Pays out to the winner the admin picks, using the normal settlement path. Emits `("match", "ora_adm")`. |
+| Oracle offline, both players deposited, no result | `admin_resolve_stalled_match(match_id, admin, resolution)` | Match is `Active` (or `Paused`) and **more than 7 days** (`ADMIN_STALL_WINDOW_SECONDS` = 604,800 s) have passed since `activated_at` | `Winner::Player1` / `Winner::Player2` sends the full pot to that player. `Winner::Draw` refunds both stakes in full with no cancellation fee. Emits `("match", "adm_stall")`. |
+
+Key details of the stall path:
+
+- The 7-day window starts at `activated_at`, the moment the second deposit made the match `Active`. It does **not** start at `last_heartbeat`, so a player cannot keep pushing admin recovery back by calling `heartbeat_match` (#1518).
+- Calling it before the window has passed returns [error #14 `MatchNotExpired`](error-codes.md#14-matchnotexpired). Calling it on a match that is not fully funded returns `NotFunded`. `Winner::None` is rejected.
+- Before the admin steps in, players still have their own option: within 24 hours of the last heartbeat, **both** players can agree to a full refund by each calling `dispute_and_rollback_match` (see [question 9](#9-what-happens-if-the-oracle-goes-offline)).
+
+#### Layer 3: Match timeout / expiry (last resort)
+
+`expire_match(match_id)` is the only recovery path that needs **no oracle, no admin, and no counterparty**. Anyone can call it once `get_match_timeout()` has passed since the match's `created_ledger` (default 30 days, configurable from 1 to 90 days). It refunds every depositor in full with no fee, moves the match to `Cancelled`, and emits `("match", "expired")`.
+
+> **Important:** `expire_match` only applies to `Pending` matches, meaning matches where the second deposit never arrived. Calling it on an `Active` match returns [error #5 `InvalidState`](error-codes.md). An `Active` match never times out by itself; for those, the Layer 2 admin paths are the backstop that keeps funds from being locked forever.
+
+If a `Pending` match's token was blacklisted after the match was created, `expire_match` refuses to transfer it (`TokenNotAllowed`). The admin can then force the refund with `admin_recover_match(match_id)`. That call has the **same time-lock** as the match timeout and returns `RecoveryTimelockNotElapsed` (#59) if called early, so even a compromised admin key cannot drain an escrow before it would have expired anyway (#1812).
+
+#### Quick reference: active match with the oracle offline
+
+| Time | What you can do |
+|------|-----------------|
+| Within 24 h of the last heartbeat | Wait for the oracle, or have **both** players call `dispute_and_rollback_match` for a full refund |
+| Any time | Ask the admin to rotate in a replacement oracle so the real result can be submitted. If `is_oracle_deadlocked` is `true`, the admin can call `resolve_oracle_deadlock` |
+| More than 7 days after activation | Ask the admin to call `admin_resolve_stalled_match` (a draw resolution means full refunds) |
+
+```bash
+# Inspect match state and timing (state, created_ledger, activated_at, last_heartbeat)
+stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match --match_id <ID>
+
+# Consensus / deadlock status
+stellar contract invoke --id $ESCROW_CONTRACT_ID -- is_oracle_deadlocked --match_id <ID>
+stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_oracle_confirmations --match_id <ID>
+stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_required_confirmations
+
+# Expiry timeout for Pending matches (seconds)
+stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match_timeout
+```
+
+Operators: see [disaster-recovery.md](disaster-recovery.md) and [oracle-troubleshooting.md](oracle-troubleshooting.md) for incident procedures.
+
 ## Testnet vs. Mainnet
 
-### 10. How do I test on testnet without real money?
+### 11. How do I test on testnet without real money?
 
 1. Use `stellar keys generate` to create a testnet account.
 2. Fund it with free testnet tokens via the [Stellar Testnet Faucet](https://laboratory.stellar.org/#account-creator?network=testnet).
@@ -139,7 +199,7 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match --match_id <ID>
 
 Testnet tokens have zero real value — no financial risk.
 
-### 11. What's the risk difference between testnet and mainnet?
+### 12. What's the risk difference between testnet and mainnet?
 
 - **Testnet**: Tokens are test-only. Contracts are frequently updated. Use for learning and integration testing.
 - **Mainnet**: Real tokens with real value. Contract code is audited and stable. Players risk actual funds. Always verify the contract address before sending real money.
@@ -148,11 +208,11 @@ Check `STELLAR_NETWORK` in `.env` to confirm which network you're on. Testnet RP
 
 ## Tokens & Allowlisting
 
-### 12. Which tokens can I use?
+### 13. Which tokens can I use?
 
 By default, any Stellar token address is accepted. However, once the admin calls `add_allowed_token` with at least one token, the contract **only** accepts tokens on the allowlist. Call `get_allowed_tokens()` to see which tokens are currently allowed.
 
-### 13. What if I try to create a match with a non-allowed token?
+### 14. What if I try to create a match with a non-allowed token?
 
 You'll get [error code #17](error-codes.md#code-17-tokennotallowed). Ask the admin to either:
 - Add your token via `add_allowed_token`, or
@@ -160,7 +220,7 @@ You'll get [error code #17](error-codes.md#code-17-tokennotallowed). Ask the adm
 
 ## Administration
 
-### 14. What can the admin do?
+### 15. What can the admin do?
 
 The admin can:
 - Add/remove allowed tokens
@@ -171,7 +231,7 @@ The admin can:
 
 The admin cannot directly cancel matches or refund stuck stakes — only `expire_match`, `cancel_match`, or player actions do that.
 
-### 15. How do I transfer admin rights safely?
+### 16. How do I transfer admin rights safely?
 
 Use a two-step process:
 1. Current admin calls `propose_admin(new_admin_address)`.
@@ -181,7 +241,7 @@ This prevents mistakes like typos in the new admin address. If the new admin rej
 
 ## Errors & Troubleshooting
 
-### 16. I got error #4 (Unauthorized). What now?
+### 17. I got error #4 (Unauthorized). What now?
 
 Either:
 1. You're signing with the wrong keypair (not the admin, oracle, or depositing player).
