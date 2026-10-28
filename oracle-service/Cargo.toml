@@ -44,7 +44,7 @@ sha2 = "0.10"
 contracts-oracle = { package = "oracle", path = "../contracts/oracle" }
 
 # Prometheus metrics exposition
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 # Lazy static initialization for global metrics
 once_cell = "1"
 # LRU cache for oracle result caching (#1353)

@@ -43,7 +43,7 @@ redis = { version = "0.25", default-features = false, features = [
 ] }
 
 # Prometheus metrics for the /metrics scrape endpoint.
-prometheus = { version = "0.13", features = ["process"] }
+prometheus = { version = "0.14", features = ["process"] }
 once_cell = "1"
 
 [dev-dependencies]
