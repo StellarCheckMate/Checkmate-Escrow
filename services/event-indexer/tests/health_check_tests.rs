@@ -221,3 +221,23 @@ async fn health_check_disabled_cache_not_shared() {
         "disabled cache should report cache_shared=false"
     );
 }
+
+#[tokio::test]
+async fn health_check_returns_db_status_field() {
+    let (_status, health) = get_health().await;
+
+    // Issue #1783: GET /health must return db status ("ok" or "degraded")
+    assert!(!health.db.is_empty(), "DB status field should not be empty");
+    assert!(
+        health.db == "ok" || health.db == "degraded",
+        "DB status must be either 'ok' or 'degraded', got: {}",
+        health.db
+    );
+
+    if health.db_reachable {
+        assert_eq!(health.db, "ok", "DB status should be 'ok' when DB is reachable");
+    } else {
+        assert_eq!(health.db, "degraded", "DB status should be 'degraded' when DB is unreachable");
+    }
+}
+

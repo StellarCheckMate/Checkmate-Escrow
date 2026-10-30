@@ -191,12 +191,13 @@ impl Config {
 
         // ── Polling ───────────────────────────────────────────────────────
         let poll_interval_secs = env::var("EVENT_INDEXER_POLL_INTERVAL")
+            .unwrap_or_else(|_| "5".to_string())
+            .parse::<u64>()?;
+
         // ── Fallback ─────────────────────────────────────────────────────
         let fallback_start_ledger = env::var("EVENT_INDEXER_FALLBACK_START_LEDGER")
             .unwrap_or_else(|_| "0".to_string())
             .parse::<u32>()?;
-            .unwrap_or_else(|_| "5".to_string())
-            .parse::<u64>()?;
 
         if !(1..=60).contains(&poll_interval_secs) {
             return Err(anyhow!(

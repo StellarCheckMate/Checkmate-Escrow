@@ -31,11 +31,19 @@ use tracing::{debug, error, info, info_span, warn, Instrument};
 
 use crate::api_cache::ApiCache;
 use crate::cache::EventCache;
+use crate::config::Config;
 use crate::db::Database;
 use crate::id_gen::compute_event_id;
 use crate::leader::LeaderElection;
 use crate::models::IndexedEvent;
 use chrono::Utc;
+
+/// Response from getEvents RPC call including pagination cursor.
+#[derive(Debug, Clone)]
+pub struct GetEventsResponse {
+    pub events: Vec<Value>,
+    pub next_cursor: Option<String>,
+}
 
 // ── RPC client ────────────────────────────────────────────────────────────────
 
@@ -127,12 +135,7 @@ impl SorobanRpcClient {
         Ok(GetEventsResponse { events, next_cursor })
     }
 
-    /// Response from getEvents RPC call including pagination cursor.
-    #[derive(Debug)]
-    pub struct GetEventsResponse {
-        pub events: Vec<Value>,
-        pub next_cursor: Option<String>,
-    }
+
 
 
     pub async fn get_ledger(&self) -> Result<u32> {
@@ -212,6 +215,7 @@ pub async fn event_poller(
                     .update_ingestion_state(
                         contract_id,
                         last_ledger.unwrap_or(0),
+                        None,
                         Some(&e.to_string()),
                     )
                     .await;
@@ -264,7 +268,7 @@ async fn poll_events(
 
     // Try polling with cursor first
     let mut use_cursor = cursor.is_some();
-    let mut events_response = match rpc.get_events(contract_id, poll_start, cursor.as_deref(), Some(100)).await {
+    let events_response = match rpc.get_events(contract_id, poll_start, cursor.as_deref(), Some(100)).await {
         Ok(resp) => resp,
         Err(e) if use_cursor && e.to_string().contains("CursorInvalid") => {
             warn!(

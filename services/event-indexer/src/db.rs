@@ -122,6 +122,8 @@ pub fn ensure_database_dir(dsn: &str) -> Result<()> {
     Ok(())
 }
 
+pub use ensure_database_dir as ensure_db_directory;
+
 /// Extract the filesystem path from a DSN, stripping any `sqlite:` scheme and
 /// query string (e.g. `sqlite:///tmp/x.db?mode=rwc` → `/tmp/x.db`).
 fn database_path_from_dsn(dsn: &str) -> std::path::PathBuf {
@@ -131,6 +133,14 @@ fn database_path_from_dsn(dsn: &str) -> std::path::PathBuf {
         .or_else(|| without_query.strip_prefix("sqlite:"))
         .unwrap_or(without_query);
     std::path::PathBuf::from(stripped)
+}
+
+/// Ingestion state with optional cursor for resumption.
+#[derive(Debug, Clone)]
+pub struct IngestionState {
+    pub last_polled_ledger: Option<u32>,
+    pub last_polled_cursor: Option<String>,
+    pub fallback_start_ledger: Option<u32>,
 }
 
 // ── Database ──────────────────────────────────────────────────────────────────
@@ -468,40 +478,7 @@ impl Database {
             .map(|l| l as u32))
     }
 
-    /// Update ingestion state after a poll.
-    pub async fn update_ingestion_state(
-        &self,
-        contract_id: &str,
-        ledger: u32,
-        error: Option<&str>,
-    ) -> Result<()> {
-        let conn = self
-            .write_pool
-            .get()
-            .await
-            .map_err(|e| anyhow!("Pool error: {}", e))?;
 
-        conn.execute(
-            "INSERT INTO ingestion_state (contract_id, last_polled_ledger, last_polled_at, last_error, last_error_at)
-             VALUES ($1, $2, NOW(), $3, CASE WHEN $3 IS NOT NULL THEN NOW() ELSE NULL END)
-             ON CONFLICT (contract_id) DO UPDATE
-             SET last_polled_ledger = $2, last_polled_at = NOW(), last_error = $3,
-                 last_error_at = CASE WHEN $3 IS NOT NULL THEN NOW() ELSE last_error_at END",
-            &[&contract_id, &(ledger as i32), &error],
-        )
-        .await
-        .map_err(|e| anyhow!("update_ingestion_state failed: {}", e))?;
-
-        Ok(())
-    }
-
-    /// Ingestion state with optional cursor for resumption.
-    #[derive(Debug)]
-    pub struct IngestionState {
-        pub last_polled_ledger: Option<u32>,
-        pub last_polled_cursor: Option<String>,
-        pub fallback_start_ledger: Option<u32>,
-    }
 
     /// Get latest ingestion state including cursor.
     pub async fn get_ingestion_state(&self, contract_id: &str) -> Result<IngestionState> {

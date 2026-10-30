@@ -118,6 +118,7 @@ async fn main() -> Result<()> {
         let response_cache = response_cache.clone();
         let contract = config.contract_escrow.clone();
         let interval = config.poll_interval_secs;
+        let poller_config = config.clone();
         tokio::spawn(async move {
             if let Err(e) = rpc::event_poller(
                 rpc,
@@ -125,7 +126,7 @@ async fn main() -> Result<()> {
                 cache,
                 response_cache,
                 election,
-                &config,
+                &poller_config,
                 &contract,
                 interval,
             )
