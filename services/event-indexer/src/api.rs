@@ -382,6 +382,7 @@ async fn api_openapi_yaml() -> Response {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthResponse {
     pub status: String,
+    pub db: String,
     pub db_reachable: bool,
     pub rpc_reachable: bool,
     pub cache_backend: String,
@@ -391,14 +392,16 @@ pub struct HealthResponse {
 /// `GET /health` – health check for load balancers and monitoring tools.
 ///
 /// Checks both database and RPC connectivity.
-/// Returns 200 OK with status "ok" when healthy.
-/// Returns 503 Service Unavailable with status "degraded" when RPC is unreachable
+/// Returns 200 OK with status "ok" and db "ok" when healthy.
+/// Returns 503 Service Unavailable with status "degraded" when DB or RPC is unreachable
 /// or when the cache has degraded to a non-shared (memory) backend.
 async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
     let db_reachable = state.db.ping().await.is_ok();
     let rpc_reachable = state.rpc.get_ledger().await.is_ok();
     let cache_backend = state.api_cache.backend_name().to_string();
     let cache_shared = state.api_cache.is_shared();
+
+    let db_status = if db_reachable { "ok" } else { "degraded" };
 
     // Degraded if DB/RPC unreachable OR cache is not shared (correctness risk).
     let degraded = !db_reachable || !rpc_reachable || !cache_shared;
@@ -412,6 +415,7 @@ async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<Health
         status_code,
         Json(HealthResponse {
             status: status_str.to_string(),
+            db: db_status.to_string(),
             db_reachable,
             rpc_reachable,
             cache_backend,
@@ -783,7 +787,7 @@ async fn get_match_info(
         );
     }
 
-    match state.db.get_match_state(match_id).await {
+    match state.db.get_match_by_id(match_id).await {
         Ok(Some(match_info)) => {
             let ttl = api_cache::ttl_for_status(&match_info.status);
             state.api_cache.set_json(&cache_key, &match_info, ttl).await;
