@@ -109,6 +109,20 @@ pub struct OracleConfig {
     ///
     /// Defaults to `ORACLE_DEAD_LETTER_MAX_ENTRIES` env var, or 1000 if unset.
     pub dead_letter_max_entries: usize,
+    /// Quiet period (seconds) a dead-letter entry must age past before the
+    /// automatic retry sweep will replay it back into the pending queue.
+    ///
+    /// A transient failure that later clears leaves matches stuck in the
+    /// dead-letter store; the sweep gives them another chance once they have
+    /// been quiet for this long (#1976).  Defaults to
+    /// `ORACLE_DEAD_LETTER_RETRY_QUIET_PERIOD_SECS`, or 1800 (30 minutes) if
+    /// unset.  `0` means entries become eligible for replay immediately.
+    pub dead_letter_retry_quiet_period_secs: u64,
+    /// Maximum number of dead-letter entries replayed by a single sweep, so a
+    /// large dead-letter store cannot trigger a thundering herd of retries
+    /// (#1976).  Defaults to `ORACLE_DEAD_LETTER_RETRY_SWEEP_BATCH_SIZE`, or 25
+    /// if unset.  `0` disables the automatic sweep.
+    pub dead_letter_retry_sweep_batch_size: usize,
     /// Maximum oracle transaction fee (stroops) to protect against fee spikes.
     /// Submission will fail if the calculated fee exceeds this limit.
     /// Defaults to `ORACLE_MAX_FEE_STROOPS` env var, or 1_000_000 (0.1 XLM) if unset.
@@ -157,6 +171,14 @@ impl fmt::Debug for OracleConfig {
                 &self.reconciliation_interval_secs,
             )
             .field("dead_letter_max_entries", &self.dead_letter_max_entries)
+            .field(
+                "dead_letter_retry_quiet_period_secs",
+                &self.dead_letter_retry_quiet_period_secs,
+            )
+            .field(
+                "dead_letter_retry_sweep_batch_size",
+                &self.dead_letter_retry_sweep_batch_size,
+            )
             .field("max_fee_stroops", &self.max_fee_stroops)
             .field("http_addr", &self.http_addr)
             .field(
