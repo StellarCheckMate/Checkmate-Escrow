@@ -22,6 +22,10 @@ pub fn test_config() -> OracleConfig {
         queue_dir: "/tmp/test-oracle-queue".to_string(),
         reconciliation_interval_secs: 60,
         dead_letter_max_entries: 1000,
+        max_fee_stroops: 1_000_000,
+        http_addr: "0.0.0.0:8000".to_string(),
+        metrics_auth_username: None,
+        metrics_auth_password: None,
     }
 }
 

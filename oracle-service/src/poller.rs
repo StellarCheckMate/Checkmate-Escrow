@@ -77,9 +77,6 @@ struct PollerInner {
     retry_base_delay_secs: u64,
     /// How often (seconds) the Chess.com-specific poll loop wakes.
     chessdotcom_poll_interval_secs: u64,
-    /// Strkey of the oracle contract — used by reconciliation to check
-    /// `has_result` before enqueuing a discovered match.
-    contract_oracle: String,
     /// Raw ed25519 public key derived from `signing_key`, used as the source
     /// account for read-only simulation calls (`get_active_matches_paginated`,
     /// `has_result`). Never used to sign anything.
@@ -105,6 +102,7 @@ impl Poller {
             cfg.rpc_url.clone(),
             cfg.network_passphrase.clone(),
             &cfg.contract_escrow,
+            &cfg.contract_oracle,
             cfg.max_fee_stroops,
         )?;
 
@@ -127,6 +125,7 @@ impl Poller {
             cfg.rpc_url.clone(),
             cfg.network_passphrase.clone(),
             &cfg.contract_escrow,
+            &cfg.contract_oracle,
             cfg.max_fee_stroops,
         )?;
 
@@ -152,6 +151,7 @@ impl Poller {
             cfg.rpc_url.clone(),
             cfg.network_passphrase.clone(),
             &cfg.contract_escrow,
+            &cfg.contract_oracle,
             cfg.max_fee_stroops,
         )?;
 
@@ -188,7 +188,6 @@ impl Poller {
                 max_retries: cfg.max_retries,
                 retry_base_delay_secs: cfg.retry_base_delay_secs,
                 chessdotcom_poll_interval_secs: cfg.chessdotcom_poll_interval_secs,
-                contract_oracle: cfg.contract_oracle.clone(),
                 pubkey,
                 result_cache: ResultCache::with_defaults(),
                 submission_log: SubmissionLog::new(&cfg.queue_dir),
@@ -384,7 +383,7 @@ impl Poller {
                 let has_result = self
                     .inner
                     .soroban
-                    .has_result(&self.inner.contract_oracle, m.match_id, &self.inner.pubkey)
+                    .has_result(m.match_id, &self.inner.pubkey)
                     .await;
 
                 // If the oracle contract or RPC returns an error (e.g. timeout,

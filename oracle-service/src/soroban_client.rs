@@ -53,6 +53,7 @@ pub struct SorobanClient {
     rpc_url: String,
     network_passphrase: String,
     contract_escrow: [u8; 32],
+    contract_oracle: [u8; 32],
     _oracle_address: AccountId,
     max_fee_stroops: u32,
 }
@@ -60,14 +61,20 @@ pub struct SorobanClient {
 impl SorobanClient {
     /// Construct a client from config values.
     ///
+    /// Both contract address strings are validated at construction time so a
+    /// misconfigured address produces a typed [`OracleServiceError::Config`]
+    /// immediately rather than an opaque RPC error on the first submission.
+    ///
     /// * `rpc_url` — e.g. `https://soroban-testnet.stellar.org`
     /// * `network_passphrase` — e.g. `"Test SDF Network ; September 2015"`
     /// * `contract_escrow` — strkey C-address of the escrow contract
+    /// * `contract_oracle` — strkey C-address of the oracle contract
     /// * `max_fee_stroops` — maximum transaction fee in stroops
     pub fn new(
         rpc_url: String,
         network_passphrase: String,
         contract_escrow_strkey: &str,
+        contract_oracle_strkey: &str,
         max_fee_stroops: u32,
     ) -> Result<Self, OracleServiceError> {
         // Fail fast if we're in production and someone has misconfigured
@@ -92,6 +99,10 @@ impl SorobanClient {
             .map_err(|e| OracleServiceError::Transport(e.to_string()))?;
 
         let contract_escrow = decode_contract_id(contract_escrow_strkey)?;
+        // Validate the oracle contract address at construction time too, so a
+        // misconfigured CONTRACT_ORACLE surfaces as a typed Config error
+        // rather than an opaque RPC error on the first has_result call.
+        let contract_oracle = decode_contract_id(contract_oracle_strkey)?;
         let oracle_address = AccountId(PublicKey::PublicKeyTypeEd25519(Uint256([0u8; 32]))); // placeholder; set per-call
 
         Ok(Self {
@@ -99,6 +110,7 @@ impl SorobanClient {
             rpc_url,
             network_passphrase,
             contract_escrow,
+            contract_oracle,
             _oracle_address: oracle_address,
             max_fee_stroops,
         })
@@ -206,14 +218,12 @@ impl SorobanClient {
     /// `match_id` via `has_result`.
     pub async fn has_result(
         &self,
-        contract_oracle_strkey: &str,
         match_id: u64,
         source_pubkey: &[u8; 32],
     ) -> Result<bool, OracleServiceError> {
-        let contract_oracle = decode_contract_id(contract_oracle_strkey)?;
         let args = vec![ScVal::U64(match_id)];
         let result = self
-            .simulate_read_call(&contract_oracle, "has_result", args, source_pubkey)
+            .simulate_read_call(&self.contract_oracle, "has_result", args, source_pubkey)
             .await?;
         match result {
             ScVal::Bool(b) => Ok(b),
@@ -823,6 +833,7 @@ mod tests {
             "http://soroban-testnet.stellar.org".to_string(),
             "Test SDF Network ; September 2015".to_string(),
             "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             1_000_000,
         );
         std::env::remove_var("ORACLE_ENV");
@@ -839,12 +850,47 @@ mod tests {
             "https://soroban-testnet.stellar.org".to_string(),
             "Test SDF Network ; September 2015".to_string(),
             "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             1_000_000,
         );
         std::env::remove_var("ORACLE_ENV");
         assert!(
             result.is_ok() || matches!(result, Err(OracleServiceError::XdrError(_))),
             "https rpc_url should not be rejected for TLS reasons"
+        );
+    }
+
+    /// #1965 — invalid contract address is rejected with a typed Config error
+    /// at construction time, not at first submission with an opaque RPC error.
+    #[test]
+    fn invalid_contract_escrow_address_rejected_at_construction() {
+        let result = SorobanClient::new(
+            "https://soroban-testnet.stellar.org".to_string(),
+            "Test SDF Network ; September 2015".to_string(),
+            "not-a-valid-contract-address",
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            1_000_000,
+        );
+        assert!(
+            matches!(result, Err(OracleServiceError::Config(_))),
+            "expected OracleServiceError::Config for invalid escrow address, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn invalid_contract_oracle_address_rejected_at_construction() {
+        let result = SorobanClient::new(
+            "https://soroban-testnet.stellar.org".to_string(),
+            "Test SDF Network ; September 2015".to_string(),
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "not-a-valid-contract-address",
+            1_000_000,
+        );
+        assert!(
+            matches!(result, Err(OracleServiceError::Config(_))),
+            "expected OracleServiceError::Config for invalid oracle address, got: {:?}",
+            result
         );
     }
 
@@ -872,4 +918,7 @@ mod tests {
     #[test]
     fn decode_active_matches_empty_vec() {
         let val = ScVal::Vec(Some(ScVec(VecM::default())));
-        let matches = decode_active_matches(&val).expect("decode should succeed
+        let matches = decode_active_matches(&val).expect("decode should succeed for empty vec");
+        assert!(matches.is_empty());
+    }
+}
