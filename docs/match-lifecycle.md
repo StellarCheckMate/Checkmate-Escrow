@@ -95,6 +95,33 @@ stateDiagram-v2
 
 ## State Transition Guards
 
+### `TooManyActiveMatches` Rejection
+
+Before a new match record is written, `create_match` checks the active-match count for **both** `player1` and `player2`. If either player already has `MAX_ACTIVE_MATCHES_PER_PLAYER` (1 000) simultaneously-active matches, the call is rejected immediately with error code **45** (`TooManyActiveMatches`).
+
+```
+create_match(player1, player2, ...)
+        │
+        ▼
+  player1_active_count >= 1000?  ──YES──► Error::TooManyActiveMatches (#45)
+        │ NO
+        ▼
+  player2_active_count >= 1000?  ──YES──► Error::TooManyActiveMatches (#45)
+        │ NO
+        ▼
+  (proceed with match creation → Pending)
+```
+
+**When this happens**: A player who participates in a large number of ongoing wagers
+hits this limit. The cap exists to bound the O(n) cost of active-match index operations.
+
+**Recovery**: The player must wait for enough of their existing active matches to reach a
+terminal state (`Completed` or `Cancelled`) before creating new ones. There is no admin
+override for this check — the cap applies unconditionally.
+
+**Note**: This check runs before any storage is written, so no partial state is created
+when the error fires.
+
 ### `create_match` → `Pending`
 
 | Guard | Error if violated |
@@ -108,6 +135,7 @@ stateDiagram-v2
 | `player2 ≠ contract address` | `InvalidPlayers` |
 | Token on allowlist (only when allowlist is enforced) | `TokenNotAllowed` |
 | Match ID not already occupied | `AlreadyExists` |
+| Neither player has reached `MAX_ACTIVE_MATCHES_PER_PLAYER` (1 000) active matches | `TooManyActiveMatches` |
 
 ### `deposit` (1st player) → `Pending` (partial funding)
 
@@ -200,6 +228,7 @@ Match records in persistent storage share the same ~30-day TTL, extended on ever
 | Call `submit_result` while contract is paused | `ContractPaused` | Admin must unpause the contract first. |
 | Call `create_match` with a duplicate `game_id` | `DuplicateGameId` | Use a fresh, unique game ID from the chess platform. |
 | Call `create_match` with a disallowed token | `TokenNotAllowed` | Admin must add the token via `add_allowed_token`, or use a listed token. |
+| Call `create_match` when either player already has 1 000 active matches | `TooManyActiveMatches` (error code **45**) | The player must wait for existing active matches to complete or be cancelled before creating new ones. This cap (`MAX_ACTIVE_MATCHES_PER_PLAYER = 1_000`) prevents unbounded index growth on the contract. |
 
 ## Events Emitted per Transition
 

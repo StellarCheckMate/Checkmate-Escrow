@@ -207,6 +207,13 @@ impl ChessComClient {
             return Err(ChessComError::HttpStatus { status });
         }
 
+        // Guard: reject non-JSON responses (e.g. captive-portal HTML) before
+        // attempting to deserialize.  A missing or non-JSON Content-Type is
+        // treated as an invalid response rather than a panic from serde.
+        if !is_json_content_type(resp.headers()) {
+            return Err(ChessComError::InvalidResponse);
+        }
+
         let body: ChessComGame = resp.json().await.map_err(ChessComError::Http)?;
 
         let result_str = body
@@ -371,6 +378,11 @@ impl ChessComClient {
             return Err(ChessComError::HttpStatus { status });
         }
 
+        // Guard: reject non-JSON responses before attempting to deserialize.
+        if !is_json_content_type(resp.headers()) {
+            return Err(ChessComError::InvalidResponse);
+        }
+
         let body: ChessComGamesBatch = resp.json().await.map_err(ChessComError::Http)?;
 
         // Index returned games by their URL-derived id so we can map back to
@@ -457,6 +469,24 @@ impl GameProvider for ChessComClient {
     }
 }
 
+// ── Content-type guard ────────────────────────────────────────────────────────
+
+/// Return `true` only when the response `Content-Type` header indicates JSON.
+///
+/// Accepts `application/json` and `application/json; charset=utf-8` (and any
+/// other parameter suffix).  Rejects HTML pages returned by captive portals or
+/// intermediary proxies, which would otherwise cause a serde panic.
+fn is_json_content_type(headers: &reqwest::header::HeaderMap) -> bool {
+    headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| {
+            let ct = ct.trim().to_ascii_lowercase();
+            ct.starts_with("application/json")
+        })
+        .unwrap_or(false)
+}
+
 // ── Response shapes ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -489,4 +519,50 @@ struct ChessComEnd {
 struct ChessComGamesBatch {
     #[serde(default)]
     games: Vec<ChessComGame>,
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers_with_content_type(ct: &str) -> reqwest::header::HeaderMap {
+        let mut map = reqwest::header::HeaderMap::new();
+        map.insert(
+            reqwest::header::CONTENT_TYPE,
+            ct.parse().unwrap(),
+        );
+        map
+    }
+
+    #[test]
+    fn is_json_content_type_accepts_application_json() {
+        let headers = headers_with_content_type("application/json");
+        assert!(is_json_content_type(&headers));
+    }
+
+    #[test]
+    fn is_json_content_type_accepts_with_charset() {
+        let headers = headers_with_content_type("application/json; charset=utf-8");
+        assert!(is_json_content_type(&headers));
+    }
+
+    #[test]
+    fn is_json_content_type_rejects_html() {
+        let headers = headers_with_content_type("text/html; charset=utf-8");
+        assert!(!is_json_content_type(&headers));
+    }
+
+    #[test]
+    fn is_json_content_type_rejects_missing_header() {
+        let headers = reqwest::header::HeaderMap::new();
+        assert!(!is_json_content_type(&headers));
+    }
+
+    #[test]
+    fn is_json_content_type_rejects_plain_text() {
+        let headers = headers_with_content_type("text/plain");
+        assert!(!is_json_content_type(&headers));
+    }
 }

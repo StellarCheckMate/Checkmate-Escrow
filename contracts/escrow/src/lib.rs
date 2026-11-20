@@ -175,6 +175,11 @@ const MAX_ACTIVE_MATCHES_PER_PLAYER: u32 = 1_000;
 /// per-call cost. Callers requiring more results should use the _paginated variants.
 const MAX_UNBOUNDED_MATCH_RESULTS: u32 = 10_000;
 
+/// Maximum number of items returned by any single paginated view call.
+/// Keeps per-call ledger I/O bounded and prevents callers from requesting
+/// arbitrarily large slices that would exhaust the instruction budget.
+pub const MAX_PAGE_LIMIT: usize = 100;
+
 /// Maximum matches processed in a single admin bulk-expiration call.
 const MAX_BULK_EXPIRE_SIZE: usize = 100;
 
@@ -501,6 +506,19 @@ impl EscrowContract {
         let key = DataKey::PlayerPreferredToken(player);
         match token_address {
             Some(addr) => {
+                // Reject blacklisted tokens.
+                if Self::is_token_blacklisted(env.clone(), addr.clone()) {
+                    return Err(Error::TokenNotAllowed);
+                }
+                // Reject tokens that are not on the allowlist when enforcement is active.
+                let allowlist_enforced: bool = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::AllowlistEnforced)
+                    .unwrap_or(false);
+                if allowlist_enforced && !Self::is_token_allowed(env.clone(), addr.clone()) {
+                    return Err(Error::TokenNotAllowed);
+                }
                 env.storage().persistent().set(&key, &addr);
                 env.storage()
                     .persistent()
@@ -948,6 +966,36 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::BlacklistedTokens)
             .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
+    /// Return a paginated slice of the blacklist.
+    ///
+    /// `offset` is the zero-based index of the first item to return.
+    /// `limit` is the maximum number of items to return; it is clamped to
+    /// `MAX_PAGE_LIMIT` so callers cannot request unbounded slices.
+    ///
+    /// An `offset` beyond the end of the list returns an empty vec.
+    /// A `limit` that would extend past the end is clamped to the remaining
+    /// items (i.e. the last page may be shorter than `limit`).
+    pub fn get_blacklist_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Address> {
+        let all: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::BlacklistedTokens)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        let mut result = soroban_sdk::vec![&env];
+        let total = all.len();
+        let clamped_limit = limit.min(MAX_PAGE_LIMIT as u32);
+        let start = offset.min(total);
+        let end = (start.saturating_add(clamped_limit)).min(total);
+        for i in start..end {
+            result.push_back(all.get(i).unwrap());
+        }
+        result
     }
 
     // ── Player Freeze ────────────────────────────────────────────────────────
