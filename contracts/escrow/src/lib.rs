@@ -461,6 +461,22 @@ impl EscrowContract {
             .unwrap_or(2000u32)
     }
 
+    /// Return the total stake volume attributed to a referrer.
+    ///
+    /// Accumulates the full pot (stake × 2) for every match in which the
+    /// referrer received a referral fee via `claim_vested_payout`. Draw
+    /// refunds are excluded because no referral fee is paid on draws.
+    ///
+    /// Returns 0 when the referrer has no attributed matches, or when their
+    /// volume entry has expired from storage.
+    pub fn get_referral_volume(env: Env, referrer: Address) -> i128 {
+        extend_instance_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&ReferralKey::Volume(referrer))
+            .unwrap_or(0i128)
+    }
+
     /// Set the minimum stake amount — admin only.
     ///
     /// Enforces a global minimum stake floor for all matches. Default is 1.
@@ -5666,6 +5682,27 @@ impl EscrowContract {
         Self::collect_matches_by_state_paginated(&env, MatchState::Pending, offset, limit)
     }
 
+    /// Return a paginated page of matches awaiting oracle result submission.
+    ///
+    /// A match is "pending result" when the oracle has submitted a result but the
+    /// dispute window has not yet elapsed (state = `MatchState::PendingResult`).
+    /// Dashboards can call this view to surface unsettled matches without replaying
+    /// all emitted events.
+    ///
+    /// `offset` — number of pending-result matches to skip before collecting results.
+    /// `limit`  — maximum number of matches to return (0 returns an empty vec).
+    ///
+    /// Results are ordered by ascending match ID (insertion order into the
+    /// per-state index). The index is updated atomically whenever a match enters
+    /// or leaves the `PendingResult` state.
+    pub fn get_pending_results(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state_paginated(&env, MatchState::PendingResult, offset, limit)
+    }
+
     /// Return all matches that are in Active state (fully funded).
     pub fn get_active_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
         Self::collect_matches_by_state(&env, MatchState::Active)
@@ -6271,6 +6308,22 @@ impl EscrowContract {
                         let referrer = m.referrer.clone().ok_or(Error::InvalidState)?;
                         let client = token::Client::new(&env, &m.token);
                         client.transfer(&env.current_contract_address(), &referrer, &referral_fee);
+                        // Accumulate attributed stake volume for this referrer.
+                        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                        let prev_volume: i128 = env
+                            .storage()
+                            .persistent()
+                            .get(&ReferralKey::Volume(referrer.clone()))
+                            .unwrap_or(0i128);
+                        let new_volume = prev_volume.checked_add(pot).ok_or(Error::Overflow)?;
+                        env.storage()
+                            .persistent()
+                            .set(&ReferralKey::Volume(referrer.clone()), &new_volume);
+                        env.storage().persistent().extend_ttl(
+                            &ReferralKey::Volume(referrer),
+                            MATCH_TTL_LEDGERS,
+                            MATCH_TTL_LEDGERS,
+                        );
                     }
                     if protocol_fee > 0 {
                         let client = token::Client::new(&env, &m.token);
@@ -6336,6 +6389,22 @@ impl EscrowContract {
                         let referrer = m.referrer.clone().ok_or(Error::InvalidState)?;
                         let client = token::Client::new(&env, &m.token);
                         client.transfer(&env.current_contract_address(), &referrer, &referral_fee);
+                        // Accumulate attributed stake volume for this referrer.
+                        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                        let prev_volume: i128 = env
+                            .storage()
+                            .persistent()
+                            .get(&ReferralKey::Volume(referrer.clone()))
+                            .unwrap_or(0i128);
+                        let new_volume = prev_volume.checked_add(pot).ok_or(Error::Overflow)?;
+                        env.storage()
+                            .persistent()
+                            .set(&ReferralKey::Volume(referrer.clone()), &new_volume);
+                        env.storage().persistent().extend_ttl(
+                            &ReferralKey::Volume(referrer),
+                            MATCH_TTL_LEDGERS,
+                            MATCH_TTL_LEDGERS,
+                        );
                     }
                     if protocol_fee > 0 {
                         let client = token::Client::new(&env, &m.token);
