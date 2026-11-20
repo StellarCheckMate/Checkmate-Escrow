@@ -288,3 +288,30 @@ fn test_fee_uses_large_realistic_amounts() {
     // stake=200 XLM → pot=400 XLM → fee = 400 XLM * 2.5% = 10 XLM
     assert_eq!(client.calculate_fee_by_tier(&(200 * ONE_XLM)), 10 * ONE_XLM);
 }
+
+// ── #1913: overlapping stake ranges ───────────────────────────────────────────
+
+#[test]
+fn test_set_fee_tiers_rejects_overlapping_stake_ranges() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // The third tier's max_stake (250) falls inside the second tier's range
+    // (101..=500), so its stake range overlaps the second tier's — fee
+    // selection would be ambiguous for any stake in 101..=250.  Such a
+    // schedule must be rejected (#1913).
+    let t = tiers_vec(&env, &[(100, 50), (500, 100), (250, 75)]);
+    let result = client.try_set_fee_tiers(&t);
+    assert_eq!(
+        result,
+        Err(Ok(Error::InvalidAmount)),
+        "tiers with overlapping stake ranges must be rejected"
+    );
+
+    // A non-overlapping, strictly ascending schedule is still accepted.
+    let t_ok = tiers_vec(&env, &[(100, 50), (500, 100), (i128::MAX, 200)]);
+    assert!(
+        client.try_set_fee_tiers(&t_ok).is_ok(),
+        "non-overlapping ascending tiers must be accepted"
+    );
+}

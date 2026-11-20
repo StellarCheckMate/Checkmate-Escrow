@@ -3,6 +3,7 @@ use crate::types::{MatchState, Platform, ProtocolConfig, Winner};
 use crate::{
     EscrowContract, EscrowContractClient, DEFAULT_MATCH_TIMEOUT_SECONDS, DEFAULT_MINIMUM_STAKE,
 };
+use crate::errors::Error;
 use oracle::{OracleContract, OracleContractClient};
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
@@ -625,4 +626,35 @@ fn test_multi_token_with_valid_rate_at_boundary() {
     );
     let m_upper = escrow_client.get_match(&match_id_upper);
     assert_eq!(m_upper.conversion_rate, Some(rate_upper));
+}
+
+// ── #1915: conversion-rate scale validation ──────────────────────────────────
+
+#[test]
+fn test_create_match_with_conversion_rejects_out_of_scale_rate() {
+    let (env, _admin, oracle_client, escrow_client, player1, player2, token_a, token_b, _oracle_id) =
+        setup_multi_token_fixture();
+
+    // A rate at the wrong scale (1e18 instead of the 1e7 oracle convention) — a
+    // misplaced decimal that would shift the payout by ~1e11x.  The oracle is
+    // configured to AGREE with this rate, so the existing 5% bounds check
+    // alone would accept it; the explicit scale bound (#1915) must reject it.
+    let out_of_scale: i128 = 1_000_000_000_000_000_000; // 1e18
+    oracle_client.set_rate(&token_a, &token_b, &out_of_scale);
+
+    let result = escrow_client.try_create_match_with_conversion(
+        &player1,
+        &player2,
+        &100,
+        &token_a,
+        &token_b,
+        &out_of_scale,
+        &String::from_str(&env, "c5f19a02"),
+        &Platform::Lichess,
+    );
+    assert_eq!(
+        result,
+        Err(Ok(Error::ConversionRateOutOfBounds)),
+        "a conversion rate outside the valid scale must be rejected"
+    );
 }

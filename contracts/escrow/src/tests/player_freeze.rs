@@ -91,9 +91,40 @@ fn test_admin_freeze_player_emits_event() {
         .find(|(_, topics, _)| *topics == expected_topics);
     assert!(matched.is_some(), "freeze event must be emitted");
 
+    // The freeze event payload is now `(player, admin)` (issue #1917), so the
+    // data decodes as a 2-tuple rather than a bare address.
     let (_, _, data) = matched.unwrap();
-    let ev_player: Address = TryFromVal::try_from_val(&env, &data).unwrap();
+    let (ev_player, _ev_admin): (Address, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
     assert_eq!(ev_player, player1);
+}
+
+/// Issue #1917: the freeze event must carry the caller admin address so every
+/// freeze is attributable for audit, not just the frozen player.
+#[test]
+fn test_admin_freeze_player_event_carries_caller_admin() {
+    let (env, contract_id, _oracle, player1, _p2, _token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.admin_freeze_player(&player1, &reason(&env, "cheating"));
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        symbol_short!("freeze").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics);
+    assert!(matched.is_some(), "freeze event must be emitted");
+
+    let (_, _, data) = matched.unwrap();
+    let (ev_player, ev_admin): (Address, Address) = TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_player, player1, "freeze event must carry the frozen player");
+    assert_eq!(
+        ev_admin, admin,
+        "freeze event must carry the caller admin address so freezes are attributable"
+    );
 }
 
 #[test]

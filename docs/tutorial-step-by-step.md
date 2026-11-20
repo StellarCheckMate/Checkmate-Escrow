@@ -15,6 +15,7 @@ By the end you will have:
 - ✅ Funded the escrow with both players' stakes
 - ✅ Submitted a verified result and watched the winner get paid automatically
 - ✅ Verified the on-chain payout transaction on Stellar Explorer
+- ✅ Queried get_player_stats and confirmed the on-chain analytics reflect the match result
 
 ---
 
@@ -56,7 +57,8 @@ Pick the format that suits you — the content is identical across all three:
 | Step 2 | Deposit funds | ~2 min |
 | Step 3 | Check the result & payout | ~3 min |
 | Step 4 | Verify the payout | ~2 min |
-| **Total** | | **< 15 min** |
+| Step 5 | Read player stats | ~1 min |
+| **Total** | | **< 17 min** |
 
 > 💡 **First time only:** the contract build (`./scripts/build.sh`) can take a
 > few minutes as Rust compiles dependencies. Subsequent runs are fast.
@@ -333,6 +335,70 @@ The ledger records a contract call to <code>submit_result</code> which invoked t
 
 ---
 
+## 📊 Step 5 — Read player statistics
+
+**What you're doing:** querying the escrow contract for cumulative match statistics for each player after the game is complete.
+
+**Why it matters:** `get_player_stats` is the analytics endpoint of the protocol. It aggregates every match a player has participated in — wins, losses, draws, and total volume — directly from on-chain state. Reading it after a match confirms the result was recorded correctly and shows the running lifetime totals for each player.
+
+```bash
+# Query stats for the winner (Player1)
+stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
+  -- get_player_stats --player $P1_ADDR
+
+# Query stats for the loser (Player2)
+stellar contract invoke --id $ESCROW_ID --source admin --network testnet \
+  -- get_player_stats --player $P2_ADDR
+```
+
+**Expected output for a finished match (Player1 won):**
+
+```
+# Player1 (winner)
+{
+  "matches_played": 1,
+  "wins": 1,
+  "losses": 0,
+  "draws": 0,
+  "total_wagered": 100000000,
+  "total_won": 200000000
+}
+
+# Player2 (loser)
+{
+  "matches_played": 1,
+  "wins": 0,
+  "losses": 1,
+  "draws": 0,
+  "total_wagered": 100000000,
+  "total_won": 0
+}
+```
+
+**Field reference:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `matches_played` | integer | Total matches completed by this player (wins + losses + draws) |
+| `wins` | integer | Matches where this player was declared the winner |
+| `losses` | integer | Matches where the opposing player won |
+| `draws` | integer | Matches that ended in a draw (both players refunded) |
+| `total_wagered` | integer (stroops) | Sum of all stake amounts this player deposited across all matches |
+| `total_won` | integer (stroops) | Total payout received (stake × 2 on a win, stake × 1 on a draw, 0 on a loss) |
+
+> 🔢 **Stroops reminder.** `total_wagered: 100000000` means the player wagered 10 XLM. `total_won: 200000000` means they won the full 20 XLM pot (both players' stakes combined).
+
+> 📸 _Screenshot:_ `assets/tutorial/05-player-stats.png` — terminal showing `get_player_stats` output for both players after the match is completed.
+
+✅ **Checkpoint:** `get_player_stats` for Player1 shows `wins: 1` and `total_won: 200000000`. Player2 shows `losses: 1` and `total_won: 0`. These totals accumulate across all matches, so running this tutorial again with the same keys will increment the counters.
+
+🧩 **Quick check:** *What would `total_won` be for each player if the match had ended in a draw?*
+<details><summary>Answer</summary>
+Both players would show <code>total_won: 100000000</code> (their original 10 XLM stake returned) and <code>draws: 1</code>. Neither player receives the other's stake on a draw — the escrow refunds each depositor their own stake in full.
+</details>
+
+---
+
 ## 🎬 Video Walkthroughs
 
 Short screen recordings of the full tutorial flow and individual steps. Each walkthrough shows setup, match creation, funding, and payout verification.
@@ -418,6 +484,7 @@ Still stuck? Open an issue or ask in the project's discussions — and please no
 ## ✅ Next steps
 
 - 🧩 Test your understanding with the [tutorial quiz & checklist](tutorial-quiz.md)
+- 📊 Query both players' career statistics with `get_player_stats` to see how totals accumulate over multiple matches
 - 📖 Read the full [demo walkthrough](../demo/demo-script.md) for governance,
   timeouts, and cancellation flows
 - 🏛️ Understand the design in the [architecture overview](architecture.md)

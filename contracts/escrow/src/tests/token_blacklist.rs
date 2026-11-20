@@ -156,6 +156,38 @@ fn test_remove_token_from_blacklist_emits_event() {
 }
 
 #[test]
+fn test_remove_token_from_blacklist_event_names_caller_and_token() {
+    let (env, contract_id, _oracle, _p1, _p2, token, admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.add_token_to_blacklist(&token, &reason(&env, "scam"));
+    client.remove_token_from_blacklist(&token);
+
+    let events = env.events().all();
+    let expected_topics = vec![
+        &env,
+        Symbol::new(&env, "admin").into_val(&env),
+        Symbol::new(&env, "tok_unblacklist").into_val(&env),
+    ];
+    let matched = events
+        .iter()
+        .find(|(_, topics, _)| *topics == expected_topics)
+        .expect("tok_unblacklist event must be emitted");
+
+    // #1914: the removal event must name both the removed token and the
+    // caller (admin) who removed it, so blacklist removals leave an on-chain
+    // audit trail of who performed them.
+    let (_, _, data) = matched;
+    let (ev_token, ev_admin): (Address, Address) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(ev_token, token, "event must name the removed token");
+    assert_eq!(
+        ev_admin, admin,
+        "event must name the admin who removed the token"
+    );
+}
+
+#[test]
 fn test_remove_token_removes_from_get_blacklist() {
     let (env, contract_id, _oracle, _p1, _p2, token, _admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
