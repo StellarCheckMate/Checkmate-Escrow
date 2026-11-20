@@ -45,10 +45,10 @@ use soroban_sdk::{
 };
 use types::{
     BalanceAtTimestamp, BalanceSnapshot, BracketKey, DataKey, Dispute, DisputeBondTier,
-    DisputeState, FeeTier, Match, MatchState, OracleRotationState, PendingAdminProposal,
-    PendingOracleRotation, Platform, PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey,
-    PlayerRating, PlayerRatingKey, PlayerStats, PlayerTier, ProtocolConfig, SnapshotReason,
-    TempOracleRotation, TokenSymbolCacheKey, UpgradeKey, Winner,
+    DisputeState, FeeTier, Match, MatchIndexKey, MatchState, OracleHistoryKey, OracleRotationEntry,
+    OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform, PlatformStats,
+    PlayerBalanceSnapshot, PlayerFreezeKey, PlayerRating, PlayerRatingKey, PlayerStats, PlayerTier,
+    ProtocolConfig, SnapshotReason, TempOracleRotation, TokenSymbolCacheKey, UpgradeKey, Winner,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -90,6 +90,16 @@ pub const VOTING_PERIOD_LEDGERS: u32 = 17_280;
 /// may invoke `dispute_and_rollback_match` against an Active match to claw
 /// back a stake after claiming the opponent disconnected. 24 hours.
 pub const ROLLBACK_WINDOW_SECONDS: u64 = 24 * 60 * 60; // 86_400
+
+/// Minimum heartbeat interval: the liveness window the heartbeat/rollback
+/// mechanism spans (equal to [`ROLLBACK_WINDOW_SECONDS`]). A match expiration
+/// timeout shorter than this window is inconsistent — the match could expire
+/// before a player's heartbeat/rollback window has even elapsed — so
+/// [`EscrowContract::set_match_timeout`] rejects any timeout below it
+/// (issue #1928). Expressed in terms of [`ROLLBACK_WINDOW_SECONDS`] so the two
+/// stay linked by construction instead of drifting apart as independent
+/// literals.
+pub const MIN_HEARTBEAT_INTERVAL_SECONDS: u64 = ROLLBACK_WINDOW_SECONDS;
 
 /// Maximum duration (in ledgers) that a match may stay in `Paused` state
 /// before the oracle is permitted to settle it as if it were `Active`, and
@@ -174,6 +184,11 @@ const MAX_ACTIVE_MATCHES_PER_PLAYER: u32 = 1_000;
 /// scan the full match history and are limited to this many results to cap
 /// per-call cost. Callers requiring more results should use the _paginated variants.
 const MAX_UNBOUNDED_MATCH_RESULTS: u32 = 10_000;
+
+/// Maximum number of items returned by any single paginated view call.
+/// Keeps per-call ledger I/O bounded and prevents callers from requesting
+/// arbitrarily large slices that would exhaust the instruction budget.
+pub const MAX_PAGE_LIMIT: usize = 100;
 
 /// Maximum matches processed in a single admin bulk-expiration call.
 const MAX_BULK_EXPIRE_SIZE: usize = 100;
@@ -456,6 +471,22 @@ impl EscrowContract {
             .unwrap_or(2000u32)
     }
 
+    /// Return the total stake volume attributed to a referrer.
+    ///
+    /// Accumulates the full pot (stake × 2) for every match in which the
+    /// referrer received a referral fee via `claim_vested_payout`. Draw
+    /// refunds are excluded because no referral fee is paid on draws.
+    ///
+    /// Returns 0 when the referrer has no attributed matches, or when their
+    /// volume entry has expired from storage.
+    pub fn get_referral_volume(env: Env, referrer: Address) -> i128 {
+        extend_instance_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&ReferralKey::Volume(referrer))
+            .unwrap_or(0i128)
+    }
+
     /// Set the minimum stake amount — admin only.
     ///
     /// Enforces a global minimum stake floor for all matches. Default is 1.
@@ -501,6 +532,19 @@ impl EscrowContract {
         let key = DataKey::PlayerPreferredToken(player);
         match token_address {
             Some(addr) => {
+                // Reject blacklisted tokens.
+                if Self::is_token_blacklisted(env.clone(), addr.clone()) {
+                    return Err(Error::TokenNotAllowed);
+                }
+                // Reject tokens that are not on the allowlist when enforcement is active.
+                let allowlist_enforced: bool = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::AllowlistEnforced)
+                    .unwrap_or(false);
+                if allowlist_enforced && !Self::is_token_allowed(env.clone(), addr.clone()) {
+                    return Err(Error::TokenNotAllowed);
+                }
                 env.storage().persistent().set(&key, &addr);
                 env.storage()
                     .persistent()
@@ -744,8 +788,21 @@ impl EscrowContract {
     }
 
     /// Return the current allowlist as an ordered list.
+    ///
+    /// DEPRECATED: use [`Self::get_allowed_tokens_paginated`] instead.
+    ///
+    /// This unbounded accessor returns the full allowlist with no limit and
+    /// risks exhausting the ledger instruction budget on a large allowlist
+    /// (issue #1926). It now delegates to the paginated getter with a hard cap
+    /// of [`MAX_UNBOUNDED_TOKEN_RESULTS`] so legacy callers stay within budget;
+    /// any allowlist larger than the cap is silently truncated. New code
+    /// should page through the list directly.
     pub fn get_allowed_tokens(env: Env) -> Result<soroban_sdk::Vec<Address>, Error> {
-        Ok(Self::get_allowed_token_list(&env))
+        Ok(Self::get_allowed_tokens_paginated(
+            env,
+            0,
+            MAX_UNBOUNDED_TOKEN_RESULTS,
+        ))
     }
 
     /// Return a paginated slice of the allowlist.
@@ -935,6 +992,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns the blacklist reason for `token`, or `None` if the token is not blacklisted.
+    ///
+    /// `add_token_to_blacklist` stores the reason on-chain for auditability, but
+    /// previously there was no view to read it back. This fills that gap so UIs
+    /// and monitoring tools can show why a token is blocked.
+    pub fn get_blacklist_reason(env: Env, token: Address) -> Option<String> {
+        env.storage()
+            .instance()
+            .get(&DataKey::BlacklistedToken(token))
+    }
+
     /// Returns `true` when `token` is on the blacklist.
     pub fn is_token_blacklisted(env: Env, token: Address) -> bool {
         env.storage()
@@ -943,11 +1011,88 @@ impl EscrowContract {
     }
 
     /// Returns all blacklisted token addresses.
+    ///
+    /// DEPRECATED: prefer `get_blacklist_paginated`. On a large blacklist this
+    /// unbounded accessor can exhaust the ledger instruction budget (issue
+    /// #1925); callers that may encounter a large list should page through it
+    /// instead.
     pub fn get_blacklist(env: Env) -> soroban_sdk::Vec<Address> {
-        env.storage()
+        Self::get_blacklist_list(&env)
+    }
+
+    /// Return a paginated slice of the blacklist.
+    ///
+    /// Mirrors the allowlist pagination signature ([`Self::get_allowed_tokens_paginated`]):
+    /// `offset` is the number of entries to skip and `limit` caps the page
+    /// size. An `offset` past the end returns an empty page and a `limit` of
+    /// `0` returns nothing. Use this instead of the unbounded
+    /// [`Self::get_blacklist`] when the blacklist may be large, so the read
+    /// stays within the ledger instruction budget (issue #1925).
+    pub fn get_blacklist_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Address> {
+        let all = Self::get_blacklist_list(&env);
+        let mut result = soroban_sdk::vec![&env];
+        let total = all.len();
+        let start = offset.min(total);
+        let end = (start.saturating_add(limit)).min(total);
+        for i in start..end {
+            result.push_back(all.get(i).unwrap());
+        }
+        result
+    }
+
+    /// Internal helper returning the full blacklist, extending its TTL on read
+    /// so a long-lived blacklist entry never silently expires. Shared by
+    /// [`Self::get_blacklist`] and [`Self::get_blacklist_paginated`] to keep a
+    /// single source of truth for the blacklist read (issue #1925).
+    fn get_blacklist_list(env: &Env) -> soroban_sdk::Vec<Address> {
+        if let Some(list) = env
+            .storage()
             .persistent()
             .get(&DataKey::BlacklistedTokens)
-            .unwrap_or_else(|| soroban_sdk::vec![&env])
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::BlacklistedTokens,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+            list
+        } else {
+            soroban_sdk::vec![env]
+        }
+    }
+
+    /// Return a paginated slice of the blacklist.
+    ///
+    /// `offset` is the zero-based index of the first item to return.
+    /// `limit` is the maximum number of items to return; it is clamped to
+    /// `MAX_PAGE_LIMIT` so callers cannot request unbounded slices.
+    ///
+    /// An `offset` beyond the end of the list returns an empty vec.
+    /// A `limit` that would extend past the end is clamped to the remaining
+    /// items (i.e. the last page may be shorter than `limit`).
+    pub fn get_blacklist_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Address> {
+        let all: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::BlacklistedTokens)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        let mut result = soroban_sdk::vec![&env];
+        let total = all.len();
+        let clamped_limit = limit.min(MAX_PAGE_LIMIT as u32);
+        let start = offset.min(total);
+        let end = (start.saturating_add(clamped_limit)).min(total);
+        for i in start..end {
+            result.push_back(all.get(i).unwrap());
+        }
+        result
     }
 
     // ── Player Freeze ────────────────────────────────────────────────────────
@@ -1147,6 +1292,21 @@ impl EscrowContract {
         Ok(result)
     }
 
+    /// Returns the total count of currently frozen players.
+    ///
+    /// This is cheaper than calling `get_frozen_players` and counting the
+    /// result, because it reads the persistent list length without paginating
+    /// or returning the addresses themselves.
+    pub fn get_frozen_players_count(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        let all: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&PlayerFreezeKey::FrozenPlayers)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        all.len()
+    }
+
     /// Internal helper — rejects `player` with `Error::ContractPaused` when
     /// frozen. Used by `create_match` (all variants) and `deposit`.
     fn require_player_not_frozen(env: &Env, player: &Address) -> Result<(), Error> {
@@ -1214,6 +1374,33 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::FeeTiers)
             .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
+    /// Return the `FeeTier` that applies to `stake_amount` without computing the fee.
+    ///
+    /// UIs can call this before a deposit to show the user which tier bracket
+    /// their stake falls into. Returns `None` when no fee tiers have been
+    /// configured. Matching logic is identical to `calculate_fee_by_tier`: the
+    /// first tier whose `max_stake >= stake_amount` wins, with the last tier as
+    /// the catch-all for stakes that exceed all explicit thresholds.
+    pub fn get_fee_tier_for_stake(env: Env, stake_amount: i128) -> Option<FeeTier> {
+        let tiers: soroban_sdk::Vec<FeeTier> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::FeeTiers)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        if tiers.is_empty() {
+            return None;
+        }
+
+        for tier in tiers.iter() {
+            if stake_amount <= tier.max_stake {
+                return Some(tier);
+            }
+        }
+        // stake exceeds all explicit thresholds — fall back to the last tier.
+        tiers.get(tiers.len().saturating_sub(1))
     }
 
     /// Calculate the fee in token units for a given `stake_amount` using the
@@ -2043,7 +2230,16 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        Self::settle_result(&env, match_id, Winner::Draw, confidence)
+        Self::settle_result(&env, match_id, Winner::Draw, confidence)?;
+
+        // #1933: emit a dedicated draw event so indexers don't have to infer
+        // draws from balance changes alone.
+        env.events().publish(
+            (Symbol::new(&env, "match"), Symbol::new(&env, "draw")),
+            (match_id, Winner::Draw),
+        );
+
+        Ok(())
     }
 
     /// Core result-settlement logic shared by `submit_result` and
@@ -3058,8 +3254,10 @@ impl EscrowContract {
     /// Update the heartbeat for a match — player only.
     ///
     /// Alias for `heartbeat_match` with the parameter order specified in issue #1343.
+    /// Both entrypoints are thin wrappers over the single internal
+    /// [`Self::apply_heartbeat`] implementation so they cannot drift (issue #1927).
     pub fn update_heartbeat(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
-        Self::heartbeat_match(env, match_id, caller)
+        Self::apply_heartbeat(&env, match_id, &caller)
     }
 
     // ── Heartbeat (refreshes `last_heartbeat` to keep the rollback window alive) ──
@@ -3092,7 +3290,15 @@ impl EscrowContract {
     ///   last_heartbeat)` so off-chain indexers / front-ends can observe the
     ///   rolling window without having to re-read the full match state.
     pub fn heartbeat_match(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
-        extend_instance_ttl(&env);
+        Self::apply_heartbeat(&env, match_id, &player)
+    }
+
+    /// Single internal implementation of the match heartbeat refresh, shared by
+    /// the [`Self::update_heartbeat`] and [`Self::heartbeat_match`] public
+    /// entrypoints (issue #1927). Keeping the liveness update in one place
+    /// prevents the two entrypoints from drifting apart in behaviour.
+    fn apply_heartbeat(env: &Env, match_id: u64, player: &Address) -> Result<(), Error> {
+        extend_instance_ttl(env);
 
         player.require_auth();
 
@@ -3104,8 +3310,8 @@ impl EscrowContract {
 
         // Player-only access. Either side may invoke; signalling intent that
         // the game is still progressing counts equally from either party.
-        let is_p1 = player == m.player1;
-        let is_p2 = player == m.player2;
+        let is_p1 = *player == m.player1;
+        let is_p2 = *player == m.player2;
         if !is_p1 && !is_p2 {
             // Intentionally no extend_ttl / storage touch on rejection: an
             // unauthorized caller must not be able to indefinitely keep a
@@ -3140,8 +3346,8 @@ impl EscrowContract {
         );
 
         env.events().publish(
-            (Symbol::new(&env, "match"), symbol_short!("heartbeat")),
-            (match_id, player, now),
+            (Symbol::new(env, "match"), symbol_short!("heartbeat")),
+            (match_id, player.clone(), now),
         );
 
         Ok(())
@@ -3374,6 +3580,29 @@ impl EscrowContract {
                 .instance()
                 .set(&DataKey::OracleRotation, &state);
         }
+    }
+
+    /// Append a rotation entry to the persistent rotation history log.
+    fn record_oracle_rotation(env: &Env, old_oracle: Address, new_oracle: Address, kind: String) {
+        let mut history: soroban_sdk::Vec<OracleRotationEntry> = env
+            .storage()
+            .persistent()
+            .get(&OracleHistoryKey::RotationHistory)
+            .unwrap_or_else(|| soroban_sdk::vec![env]);
+        history.push_back(OracleRotationEntry {
+            old_oracle,
+            new_oracle,
+            timestamp: env.ledger().timestamp(),
+            kind,
+        });
+        env.storage()
+            .persistent()
+            .set(&OracleHistoryKey::RotationHistory, &history);
+        env.storage().persistent().extend_ttl(
+            &OracleHistoryKey::RotationHistory,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
     }
 
     fn effective_oracle(env: &Env) -> Result<Address, Error> {
@@ -3724,6 +3953,15 @@ impl EscrowContract {
             return Err(Error::InvalidTimeout);
         }
 
+        // A timeout shorter than the minimum heartbeat interval is inconsistent
+        // with the heartbeat/rollback window: the match could expire before a
+        // player's liveness window has even elapsed. Reject it even when the
+        // value falls inside the generic [MIN, MAX] range above, so the two
+        // bounds cannot drift independently (issue #1928).
+        if seconds < MIN_HEARTBEAT_INTERVAL_SECONDS {
+            return Err(Error::InvalidTimeout);
+        }
+
         let mut config = Self::get_config(&env);
         let old_timeout = config.match_timeout_seconds;
         config.match_timeout_seconds = seconds;
@@ -3775,13 +4013,15 @@ impl EscrowContract {
         }
         // amount == None always passes: unlimited upper bound ≥ any minimum_stake.
 
-        config.stakes.maximum_stake = amount;
+        let mut config = Self::get_config(&env);
+        let old_maximum_stake = config.maximum_stake;
+        config.maximum_stake = amount;
         env.storage()
             .instance()
             .set(&DataKey::ProtocolConfig, &config);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("max_stake")),
-            amount,
+            (old_maximum_stake, amount),
         );
         Ok(())
     }
@@ -4035,6 +4275,34 @@ impl EscrowContract {
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
         Ok(m.depositor_count)
+    }
+
+    /// Return the depositor addresses for a match.
+    ///
+    /// Returns a `Vec` containing the address of each player who has deposited
+    /// their stake. The list is empty when no deposits have been made, holds
+    /// one address when only one player has deposited, and holds two addresses
+    /// (player1 first, player2 second) when both have deposited.
+    ///
+    /// #1935: lets wallet UIs query depositors directly instead of
+    /// reconstructing the list from events.
+    pub fn get_match_depositors(
+        env: Env,
+        match_id: u64,
+    ) -> Result<soroban_sdk::Vec<Address>, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        let mut depositors: soroban_sdk::Vec<Address> = soroban_sdk::vec![&env];
+        if m.player1_deposited {
+            depositors.push_back(m.player1.clone());
+        }
+        if m.player2_deposited {
+            depositors.push_back(m.player2.clone());
+        }
+        Ok(depositors)
     }
 
     /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
@@ -4858,6 +5126,56 @@ impl EscrowContract {
             .ok_or(Error::DisputeNotFound)
     }
 
+    /// Return a paginated list of open (Active) disputes.
+    ///
+    /// `offset` — number of open disputes to skip before collecting results.
+    /// `limit`  — maximum number of disputes to return; silently clamped to
+    ///            100 to bound the response size.
+    ///
+    /// Iterates the full dispute history once to find Active entries.  Callers
+    /// requiring a specific page should supply the `offset` / `limit` pair
+    /// rather than fetching everything and slicing off-chain.
+    ///
+    /// #1934: provides a dedicated view so indexers and dashboards can surface
+    /// open disputes without iterating all matches.
+    pub fn get_pending_disputes(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Dispute> {
+        let total: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeCount)
+            .unwrap_or(0);
+
+        let capped_limit = if limit > 100 { 100 } else { limit };
+        let mut result: soroban_sdk::Vec<Dispute> = soroban_sdk::vec![&env];
+        // Counts of Active disputes seen so far (for offset/limit accounting).
+        let mut active_seen: u32 = 0;
+
+        for dispute_id in 0..total {
+            let dispute: Option<Dispute> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Dispute(dispute_id));
+            if let Some(d) = dispute {
+                if d.state == DisputeState::Active {
+                    if active_seen >= offset && result.len() < capped_limit {
+                        result.push_back(d);
+                    }
+                    active_seen = active_seen.saturating_add(1);
+                    if active_seen >= offset.saturating_add(capped_limit)
+                        && result.len() >= capped_limit
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        result
+    }
+
     /// Set the dispute bond requirement in basis points of match stake. Admin only.
     pub fn set_dispute_bond_basis_points(env: Env, basis_points: u32) -> Result<(), Error> {
         extend_instance_ttl(&env);
@@ -5569,6 +5887,27 @@ impl EscrowContract {
         Self::collect_matches_by_state_paginated(&env, MatchState::Pending, offset, limit)
     }
 
+    /// Return a paginated page of matches awaiting oracle result submission.
+    ///
+    /// A match is "pending result" when the oracle has submitted a result but the
+    /// dispute window has not yet elapsed (state = `MatchState::PendingResult`).
+    /// Dashboards can call this view to surface unsettled matches without replaying
+    /// all emitted events.
+    ///
+    /// `offset` — number of pending-result matches to skip before collecting results.
+    /// `limit`  — maximum number of matches to return (0 returns an empty vec).
+    ///
+    /// Results are ordered by ascending match ID (insertion order into the
+    /// per-state index). The index is updated atomically whenever a match enters
+    /// or leaves the `PendingResult` state.
+    pub fn get_pending_results(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<Match>, Error> {
+        Self::collect_matches_by_state_paginated(&env, MatchState::PendingResult, offset, limit)
+    }
+
     /// Return all matches that are in Active state (fully funded).
     pub fn get_active_matches(env: Env) -> Result<soroban_sdk::Vec<Match>, Error> {
         Self::collect_matches_by_state(&env, MatchState::Active)
@@ -5821,6 +6160,12 @@ impl EscrowContract {
         rotation_state.set_temp(None);
         rotation_state.set_pending(None);
         Self::save_rotation_state(&env, rotation_state);
+        Self::record_oracle_rotation(
+            &env,
+            old_oracle.clone(),
+            new_oracle.clone(),
+            String::from_str(&env, "direct"),
+        );
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
             (old_oracle, new_oracle),
@@ -5877,6 +6222,12 @@ impl EscrowContract {
         rotation_state.set_temp(Some(temp));
         Self::save_rotation_state(&env, rotation_state);
 
+        Self::record_oracle_rotation(
+            &env,
+            old_oracle.clone(),
+            new_oracle.clone(),
+            String::from_str(&env, "temporary"),
+        );
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("rot_temp")),
             (old_oracle, new_oracle, duration_seconds),
@@ -6003,6 +6354,12 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Oracle, &new_oracle);
         env.storage().instance().remove(&DataKey::OracleRotation);
 
+        Self::record_oracle_rotation(
+            &env,
+            old_oracle.clone(),
+            new_oracle.clone(),
+            String::from_str(&env, "permanent"),
+        );
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
             (old_oracle, new_oracle),
@@ -6156,6 +6513,22 @@ impl EscrowContract {
                         let referrer = m.referrer.clone().ok_or(Error::InvalidState)?;
                         let client = token::Client::new(&env, &m.token);
                         client.transfer(&env.current_contract_address(), &referrer, &referral_fee);
+                        // Accumulate attributed stake volume for this referrer.
+                        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                        let prev_volume: i128 = env
+                            .storage()
+                            .persistent()
+                            .get(&ReferralKey::Volume(referrer.clone()))
+                            .unwrap_or(0i128);
+                        let new_volume = prev_volume.checked_add(pot).ok_or(Error::Overflow)?;
+                        env.storage()
+                            .persistent()
+                            .set(&ReferralKey::Volume(referrer.clone()), &new_volume);
+                        env.storage().persistent().extend_ttl(
+                            &ReferralKey::Volume(referrer),
+                            MATCH_TTL_LEDGERS,
+                            MATCH_TTL_LEDGERS,
+                        );
                     }
                     if protocol_fee > 0 {
                         let client = token::Client::new(&env, &m.token);
@@ -6221,6 +6594,22 @@ impl EscrowContract {
                         let referrer = m.referrer.clone().ok_or(Error::InvalidState)?;
                         let client = token::Client::new(&env, &m.token);
                         client.transfer(&env.current_contract_address(), &referrer, &referral_fee);
+                        // Accumulate attributed stake volume for this referrer.
+                        let pot = m.stake_amount.checked_mul(2).ok_or(Error::Overflow)?;
+                        let prev_volume: i128 = env
+                            .storage()
+                            .persistent()
+                            .get(&ReferralKey::Volume(referrer.clone()))
+                            .unwrap_or(0i128);
+                        let new_volume = prev_volume.checked_add(pot).ok_or(Error::Overflow)?;
+                        env.storage()
+                            .persistent()
+                            .set(&ReferralKey::Volume(referrer.clone()), &new_volume);
+                        env.storage().persistent().extend_ttl(
+                            &ReferralKey::Volume(referrer),
+                            MATCH_TTL_LEDGERS,
+                            MATCH_TTL_LEDGERS,
+                        );
                     }
                     if protocol_fee > 0 {
                         let client = token::Client::new(&env, &m.token);
@@ -7226,6 +7615,75 @@ impl EscrowContract {
             .ok_or(Error::Overflow)?
             / 10_000;
         Ok(referral_fee)
+    }
+
+    // ── Issue #1941: get_total_escrowed ──────────────────────────────────────
+
+    /// Return the sum of funds currently locked across all non-terminal matches.
+    ///
+    /// Iterates the `Active`, `PendingResult`, and `Paused` match index entries
+    /// and accumulates `stake_amount * depositor_count` for each. Terminal
+    /// matches (`Completed`, `Cancelled`) have already paid out and contribute
+    /// nothing.
+    ///
+    /// This view is intended for dashboards and risk monitoring.
+    pub fn get_total_escrowed(env: Env) -> Result<i128, Error> {
+        extend_instance_ttl(&env);
+        let mut total: i128 = 0;
+        for state in [MatchState::Active, MatchState::PendingResult, MatchState::Paused] {
+            let ids: soroban_sdk::Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&MatchIndexKey::MatchesByState(state))
+                .unwrap_or_else(|| soroban_sdk::vec![&env]);
+            for match_id in ids.iter() {
+                if let Some(m) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, Match>(&DataKey::Match(match_id))
+                {
+                    total = total
+                        .checked_add(Self::escrow_balance_of(&m))
+                        .ok_or(Error::Overflow)?;
+                }
+            }
+        }
+        Ok(total)
+    }
+
+    // ── Issue #1942: get_match_dispute ──────────────────────────────────────
+
+    /// Return the open dispute for a given match, if one exists.
+    ///
+    /// Returns `None` when no dispute has ever been raised for `match_id`.
+    /// This is a convenience wrapper over `get_dispute_by_match` using the
+    /// same underlying storage, introduced to avoid requiring callers to list
+    /// all disputes and filter client-side.
+    pub fn get_match_dispute(env: Env, match_id: u64) -> Option<Dispute> {
+        let dispute_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MatchDispute(match_id))?;
+        env.storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+    }
+
+    // ── Issue #1944: get_oracle_rotation_history ────────────────────────────
+
+    /// Return past oracle rotation entries, oldest first.
+    ///
+    /// Each entry records the `old_oracle`, `new_oracle`, ledger `timestamp`,
+    /// and rotation `kind` (`"direct"`, `"temporary"`, or `"permanent"`).
+    /// Returns an empty `Vec` when no rotations have been performed.
+    pub fn get_oracle_rotation_history(
+        env: Env,
+    ) -> soroban_sdk::Vec<OracleRotationEntry> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&OracleHistoryKey::RotationHistory)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
     }
 
     /// Compute the protocol fee to deduct from a winner's payout.

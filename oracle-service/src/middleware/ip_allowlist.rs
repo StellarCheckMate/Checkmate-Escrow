@@ -11,6 +11,20 @@
 //! If `ORACLE_ADMIN_ALLOWED_IPS` is unset or empty, the allowlist is empty
 //! and *all* requests are rejected — fail closed rather than fail open.
 //!
+//! ## Opt-in escape hatch
+//!
+//! To explicitly disable IP filtering (e.g. in a development environment where
+//! network-level controls are relied on instead), set the variable to the
+//! special value `"*"`:
+//!
+//! ```text
+//! ORACLE_ADMIN_ALLOWED_IPS=*
+//! ```
+//!
+//! This is intentionally distinct from "unset", so a staging deployment that
+//! accidentally omits the variable fails closed (denies all) rather than
+//! silently allowing all traffic.
+//!
 //! ## Usage
 //!
 //! ```rust,ignore
@@ -104,12 +118,17 @@ impl CidrRange {
 #[derive(Clone)]
 pub struct IpAllowlistState {
     ranges: Arc<Vec<CidrRange>>,
+    /// When `true` every IP is allowed, regardless of `ranges`.
+    /// Set only by the explicit `"*"` escape hatch in
+    /// `ORACLE_ADMIN_ALLOWED_IPS`.
+    allow_all: bool,
 }
 
 impl IpAllowlistState {
     pub fn new(ranges: Vec<CidrRange>) -> Self {
         Self {
             ranges: Arc::new(ranges),
+            allow_all: false,
         }
     }
 
@@ -121,11 +140,30 @@ impl IpAllowlistState {
     }
 
     /// Build the allowlist from a comma-separated CIDR list string.
+    ///
+    /// Passing `"*"` as the value activates the allow-all escape hatch,
+    /// permitting every IP.  Any other value is treated as a comma-separated
+    /// list of CIDR ranges.  An empty string or unset variable results in a
+    /// deny-all allowlist (fail closed).
+    ///
     /// Entries that fail to parse are logged and skipped rather than
     /// panicking, so a single typo doesn't take down the whole allowlist
     /// (it just makes that one range ineffective).
     pub fn from_str(raw: &str) -> Self {
-        let ranges = raw
+        let trimmed = raw.trim();
+        // Explicit opt-in escape hatch: allow all IPs.
+        if trimmed == "*" {
+            warn!(
+                "ORACLE_ADMIN_ALLOWED_IPS is set to \"*\" — IP filtering is disabled. \
+                 Ensure network-level controls are in place."
+            );
+            return Self {
+                ranges: Arc::new(vec![]),
+                allow_all: true,
+            };
+        }
+
+        let ranges = trimmed
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -137,11 +175,14 @@ impl IpAllowlistState {
                 }
             })
             .collect();
-        Self::new(ranges)
+        Self {
+            ranges: Arc::new(ranges),
+            allow_all: false,
+        }
     }
 
     pub fn is_allowed(&self, ip: &IpAddr) -> bool {
-        self.ranges.iter().any(|r| r.contains(ip))
+        self.allow_all || self.ranges.iter().any(|r| r.contains(ip))
     }
 }
 
@@ -269,5 +310,43 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── #1966 tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn unset_allowlist_denies_all_requests() {
+        // An empty string (unset env var) must deny every IP — fail closed.
+        let state = IpAllowlistState::from_str("");
+        assert!(
+            !state.is_allowed(&"127.0.0.1".parse().unwrap()),
+            "unset allowlist must deny loopback"
+        );
+        assert!(
+            !state.is_allowed(&"0.0.0.0".parse().unwrap()),
+            "unset allowlist must deny 0.0.0.0"
+        );
+        assert!(
+            !state.is_allowed(&"8.8.8.8".parse().unwrap()),
+            "unset allowlist must deny public IPs"
+        );
+    }
+
+    #[test]
+    fn wildcard_escape_hatch_allows_all_ips() {
+        // "*" is the explicit opt-in to allow-all.
+        let state = IpAllowlistState::from_str("*");
+        assert!(
+            state.is_allowed(&"127.0.0.1".parse().unwrap()),
+            "wildcard should allow loopback"
+        );
+        assert!(
+            state.is_allowed(&"8.8.8.8".parse().unwrap()),
+            "wildcard should allow public IPs"
+        );
+        assert!(
+            state.is_allowed(&"::1".parse().unwrap()),
+            "wildcard should allow IPv6"
+        );
     }
 }
