@@ -935,6 +935,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns the blacklist reason for `token`, or `None` if the token is not blacklisted.
+    ///
+    /// `add_token_to_blacklist` stores the reason on-chain for auditability, but
+    /// previously there was no view to read it back. This fills that gap so UIs
+    /// and monitoring tools can show why a token is blocked.
+    pub fn get_blacklist_reason(env: Env, token: Address) -> Option<String> {
+        env.storage()
+            .instance()
+            .get(&DataKey::BlacklistedToken(token))
+    }
+
     /// Returns `true` when `token` is on the blacklist.
     pub fn is_token_blacklisted(env: Env, token: Address) -> bool {
         env.storage()
@@ -1147,6 +1158,21 @@ impl EscrowContract {
         Ok(result)
     }
 
+    /// Returns the total count of currently frozen players.
+    ///
+    /// This is cheaper than calling `get_frozen_players` and counting the
+    /// result, because it reads the persistent list length without paginating
+    /// or returning the addresses themselves.
+    pub fn get_frozen_players_count(env: Env) -> u32 {
+        extend_instance_ttl(&env);
+        let all: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&PlayerFreezeKey::FrozenPlayers)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+        all.len()
+    }
+
     /// Internal helper — rejects `player` with `Error::ContractPaused` when
     /// frozen. Used by `create_match` (all variants) and `deposit`.
     fn require_player_not_frozen(env: &Env, player: &Address) -> Result<(), Error> {
@@ -1214,6 +1240,33 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::FeeTiers)
             .unwrap_or_else(|| soroban_sdk::vec![&env])
+    }
+
+    /// Return the `FeeTier` that applies to `stake_amount` without computing the fee.
+    ///
+    /// UIs can call this before a deposit to show the user which tier bracket
+    /// their stake falls into. Returns `None` when no fee tiers have been
+    /// configured. Matching logic is identical to `calculate_fee_by_tier`: the
+    /// first tier whose `max_stake >= stake_amount` wins, with the last tier as
+    /// the catch-all for stakes that exceed all explicit thresholds.
+    pub fn get_fee_tier_for_stake(env: Env, stake_amount: i128) -> Option<FeeTier> {
+        let tiers: soroban_sdk::Vec<FeeTier> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::FeeTiers)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        if tiers.is_empty() {
+            return None;
+        }
+
+        for tier in tiers.iter() {
+            if stake_amount <= tier.max_stake {
+                return Some(tier);
+            }
+        }
+        // stake exceeds all explicit thresholds — fall back to the last tier.
+        tiers.get(tiers.len().saturating_sub(1))
     }
 
     /// Calculate the fee in token units for a given `stake_amount` using the
@@ -3710,13 +3763,14 @@ impl EscrowContract {
         }
 
         let mut config = Self::get_config(&env);
+        let old_maximum_stake = config.maximum_stake;
         config.maximum_stake = amount;
         env.storage()
             .instance()
             .set(&DataKey::ProtocolConfig, &config);
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("max_stake")),
-            amount,
+            (old_maximum_stake, amount),
         );
         Ok(())
     }
