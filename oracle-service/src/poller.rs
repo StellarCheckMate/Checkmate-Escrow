@@ -250,14 +250,43 @@ impl Poller {
     }
 
     /// Run the polling loop forever, sleeping `interval_secs` between ticks.
+    ///
+    /// Only processes Lichess entries.  Chess.com entries are handled by the
+    /// independent `run_chess_com_loop` so that a slow Chess.com endpoint
+    /// cannot delay Lichess polling and vice versa (#1977).
     pub async fn run_loop(self, interval_secs: u64) {
         let interval = tokio::time::Duration::from_secs(interval_secs);
         loop {
-            if let Err(e) = self.tick().await {
-                error!("poller tick error: {}", e);
+            if let Err(e) = self.tick_lichess().await {
+                error!("lichess poller tick error: {}", e);
             }
             tokio::time::sleep(interval).await;
         }
+    }
+
+    /// Process only Lichess entries that are due for a retry.
+    ///
+    /// Symmetric counterpart to [`Poller::tick_chess_com`].  Used by
+    /// `run_loop` so that the Lichess and Chess.com poll loops are independent.
+    pub async fn tick_lichess(&self) -> Result<(), OracleServiceError> {
+        let due: Vec<_> = self
+            .inner
+            .queue
+            .due_entries()
+            .await?
+            .into_iter()
+            .filter(|e| e.platform == Platform::Lichess)
+            .collect();
+
+        let total_depth = self.inner.queue.load().await?.len();
+        metrics::set_queue_depth(total_depth);
+
+        if due.is_empty() {
+            return Ok(());
+        }
+        info!(count = due.len(), "lichess poller tick: processing due entries");
+        self.process_lichess_batch(due).await;
+        Ok(())
     }
 
     /// Run a Chess.com-specific polling loop that wakes every
@@ -379,6 +408,10 @@ impl Poller {
                 break;
             }
 
+            // Track whether any enqueue on this page returned a recoverable
+            // error so we can avoid advancing the cursor past a gap.
+            let mut page_had_enqueue_error = false;
+
             for m in page {
                 let has_result = self
                     .inner
@@ -438,6 +471,7 @@ impl Poller {
                             match_id = m.match_id,
                             "reconciliation failed to enqueue discovered match: {}", e
                         );
+                        page_had_enqueue_error = true;
                     }
                 }
             }
@@ -446,7 +480,18 @@ impl Poller {
 
             // Persist the cursor after each successfully processed page so a
             // restart can resume from here instead of offset 0.
-            if let Err(e) = self.inner.cursor.save(offset).await {
+            //
+            // We only advance the cursor when every enqueue on this page
+            // either succeeded or was a benign deduplicate (Ok(false)).  If
+            // any enqueue returned an Err the page had a gap; don't advance
+            // so the next cycle re-scans from this offset and fills it.
+            if page_had_enqueue_error {
+                warn!(
+                    offset,
+                    "reconciliation page had enqueue error(s); not advancing cursor so the \
+                     next cycle re-scans from this offset"
+                );
+            } else if let Err(e) = self.inner.cursor.save(offset).await {
                 // Non-fatal: log and continue — correctness is maintained because
                 // PendingQueue::enqueue is idempotent (already-queued matches are
                 // silently skipped on re-discovery).
