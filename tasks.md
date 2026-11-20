@@ -1,36 +1,19 @@
-
-4 matches
-#1937 Enhancement: add a get_frozen_players_count view
+#1941 Enhancement: add a get_total_escrowed global view
 Repo Avatar
 StellarCheckMate/Checkmate-Escrow
 Category: Escrow Contract - Enhancement
-Priority: Low
-Estimated Time: 15 minutes
+Priority: Medium
+Estimated Time: 1 hour
 
 Description:
-Counting frozen players currently requires pulling the full frozen list. A get_frozen_players_count view would return the count without the budget cost of the list.
+There is no global view of the total funds currently locked across all matches. A get_total_escrowed view would help dashboards and risk monitoring.
 
 Tasks:
 
-Add get_frozen_players_count() returning the count
-Add a test asserting the count matches the paginated list length
+Add get_total_escrowed() returning the sum of currently-locked funds
+Add a test asserting the total matches the sum of per-match escrow balances
 
-#1938 Enhancement: emit an event when set_maximum_stake changes
-Repo Avatar
-StellarCheckMate/Checkmate-Escrow
-Category: Escrow Contract - Enhancement
-Priority: Low
-Estimated Time: 20 minutes
-
-Description:
-set_maximum_stake changes config without emitting an event, so indexers cannot track stake-cap drift without polling get_protocol_config.
-
-Tasks:
-
-Emit an event with the old and new maximum stake
-Add a test asserting the event is emitted
-
-#1939 Enhancement: add a get_blacklist_reason view returning the reason for a blacklisted token
+#1942 Enhancement: add a get_match_dispute view
 Repo Avatar
 StellarCheckMate/Checkmate-Escrow
 Category: Escrow Contract - Enhancement
@@ -38,14 +21,14 @@ Priority: Low
 Estimated Time: 20 minutes
 
 Description:
-add_token_to_blacklist stores a reason string, but there is no view to read it back; clients can't show why a token is blacklisted.
+There is no view returning the dispute (if any) for a given match_id; clients must list all disputes and filter. A get_match_dispute view would simplify dispute-aware UIs.
 
 Tasks:
 
-Add get_blacklist_reason(token) returning the stored reason
-Add a test asserting the reason round-trips
+Add get_match_dispute(match_id) returning the open dispute or none
+Add a test asserting the view returns the expected dispute
 
-#1940 Enhancement: add a get_fee_tier_for_stake view returning the matched tier
+#1943 Enhancement: emit match/paused and match/resumed events
 Repo Avatar
 StellarCheckMate/Checkmate-Escrow
 Category: Escrow Contract - Enhancement
@@ -53,9 +36,25 @@ Priority: Low
 Estimated Time: 20 minutes
 
 Description:
-calculate_fee_by_tier returns the fee but not the matched tier; a get_fee_tier_for_stake view would let UIs show which tier applies before deposit.
+The match lifecycle is not fully indexable because pause/resume transitions emit no events. Adding match/paused and match/resumed events would close the gap.
 
 Tasks:
 
-Add get_fee_tier_for_stake(stake) returning the matched FeeTier
-Add a test asserting the returned tier matches the fee calculation
+Emit the events on pause_match/resume_match
+Update docs/architecture.md events table
+Add tests asserting the events are emitted
+
+#1944 Enhancement: add a get_oracle_rotation_history view
+Repo Avatar
+StellarCheckMate/Checkmate-Escrow
+Category: Escrow Contract - Enhancement
+Priority: Medium
+Estimated Time: 1 hour
+
+Description:
+Oracle rotations are applied without a queryable history, so operators cannot audit past temporary rotations. A get_oracle_rotation_history view would expose past rotations.
+
+Tasks:
+
+Add get_oracle_rotation_history() returning past rotation entries
+Add a test asserting the view returns recorded rotations

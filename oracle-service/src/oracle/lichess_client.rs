@@ -172,6 +172,12 @@ impl LichessClient {
             return Err(LichessError::HttpStatus { status });
         }
 
+        // Guard: reject non-JSON responses (e.g. captive-portal HTML) before
+        // attempting to deserialize.
+        if !is_json_content_type(resp.headers()) {
+            return Err(LichessError::InvalidResponse);
+        }
+
         let body: LichessGame = resp.json().await.map_err(LichessError::Http)?;
         game_result(&body)
     }
@@ -263,6 +269,12 @@ impl LichessClient {
         if !status.is_success() {
             return Err(LichessError::HttpStatus { status });
         }
+
+        // Guard: reject non-JSON/NDJSON responses (e.g. captive-portal HTML).
+        if !is_json_or_ndjson_content_type(resp.headers()) {
+            return Err(LichessError::InvalidResponse);
+        }
+
         resp.text().await.map_err(LichessError::Http)
     }
 
@@ -348,6 +360,11 @@ impl LichessClient {
             }
             if !status.is_success() {
                 return Err(LichessError::HttpStatus { status });
+            }
+
+            // Guard: reject non-JSON responses before attempting to deserialize.
+            if !is_json_content_type(resp.headers()) {
+                return Err(LichessError::InvalidResponse);
             }
 
             let body: Vec<LichessGameStatus> = resp.json().await.map_err(LichessError::Http)?;
@@ -499,4 +516,84 @@ struct LichessGame {
 struct LichessGameStatus {
     id: String,
     winner: Option<String>,
+}
+
+// ── Content-type guards ───────────────────────────────────────────────────────
+
+/// Return `true` when the response Content-Type indicates JSON.
+fn is_json_content_type(headers: &reqwest::header::HeaderMap) -> bool {
+    headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.trim().to_ascii_lowercase().starts_with("application/json"))
+        .unwrap_or(false)
+}
+
+/// Return `true` when the response Content-Type indicates JSON or NDJSON.
+///
+/// The batch export endpoint returns `application/x-ndjson`; the single-game
+/// and game-status endpoints return `application/json`.
+fn is_json_or_ndjson_content_type(headers: &reqwest::header::HeaderMap) -> bool {
+    headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| {
+            let ct = ct.trim().to_ascii_lowercase();
+            ct.starts_with("application/json") || ct.starts_with("application/x-ndjson")
+        })
+        .unwrap_or(false)
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn headers_with_ct(ct: &str) -> reqwest::header::HeaderMap {
+        let mut map = reqwest::header::HeaderMap::new();
+        map.insert(reqwest::header::CONTENT_TYPE, ct.parse().unwrap());
+        map
+    }
+
+    #[test]
+    fn json_content_type_accepted() {
+        assert!(is_json_content_type(&headers_with_ct("application/json")));
+        assert!(is_json_content_type(&headers_with_ct(
+            "application/json; charset=utf-8"
+        )));
+    }
+
+    #[test]
+    fn html_content_type_rejected_as_json() {
+        assert!(!is_json_content_type(&headers_with_ct(
+            "text/html; charset=utf-8"
+        )));
+    }
+
+    #[test]
+    fn missing_content_type_rejected() {
+        assert!(!is_json_content_type(&reqwest::header::HeaderMap::new()));
+        assert!(!is_json_or_ndjson_content_type(
+            &reqwest::header::HeaderMap::new()
+        ));
+    }
+
+    #[test]
+    fn ndjson_content_type_accepted_for_export() {
+        assert!(is_json_or_ndjson_content_type(&headers_with_ct(
+            "application/x-ndjson"
+        )));
+    }
+
+    #[test]
+    fn html_surfaces_as_invalid_response_not_panic() {
+        // is_json_content_type returns false for HTML, so the caller returns
+        // LichessError::InvalidResponse rather than attempting serde parsing.
+        let headers = headers_with_ct("text/html");
+        assert!(
+            !is_json_content_type(&headers),
+            "HTML response must be rejected before JSON parse"
+        );
+    }
 }
