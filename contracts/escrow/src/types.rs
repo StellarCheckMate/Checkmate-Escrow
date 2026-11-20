@@ -207,6 +207,13 @@ pub struct Match {
     /// the global `ProtocolConfig::vesting_duration_seconds` for this match's
     /// payouts; when `None`, the global config value is used.
     pub vesting_override_seconds: Option<u64>,
+    /// Cached count of players who have deposited their stake for this match
+    /// (0, 1, or 2). Incremented atomically on each successful deposit and
+    /// decremented on refund (cancel/expire). Using this counter avoids
+    /// re-deserialising the full `Match` struct just to count the two boolean
+    /// flags inside `get_depositor_count` — especially important on matches
+    /// with high call frequency.
+    pub depositor_count: u32,
 }
 
 #[contracttype]
