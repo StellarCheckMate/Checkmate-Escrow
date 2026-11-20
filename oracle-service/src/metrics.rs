@@ -271,4 +271,39 @@ mod tests {
             "Basic realm=\"metrics\""
         );
     }
+
+    /// When auth credentials are configured, an unauthenticated request
+    /// (missing Authorization header) must be rejected with 401.
+    #[test]
+    fn metrics_endpoint_rejects_unauthenticated_when_auth_configured() {
+        // Simulate what the metrics handler does: if credentials are set and
+        // the request carries no Authorization header, check_basic_auth returns
+        // false and the caller must return 401.
+        let headers = http::HeaderMap::new(); // no Authorization header
+        let authorized = check_basic_auth(&headers, "scraper", "s3cret");
+        assert!(
+            !authorized,
+            "unauthenticated request must be rejected when auth is configured"
+        );
+        // Verify the proper challenge response is built.
+        let resp = unauthorized_response();
+        assert_eq!(resp.status(), http::StatusCode::UNAUTHORIZED);
+        assert!(
+            resp.headers()
+                .get(http::header::WWW_AUTHENTICATE)
+                .is_some(),
+            "401 response must carry a WWW-Authenticate challenge"
+        );
+    }
+
+    /// When auth credentials are configured, a request with valid credentials
+    /// must be accepted.
+    #[test]
+    fn metrics_endpoint_accepts_valid_credentials_when_auth_configured() {
+        let headers = auth_header("scraper:s3cret");
+        assert!(
+            check_basic_auth(&headers, "scraper", "s3cret"),
+            "valid credentials must be accepted when auth is configured"
+        );
+    }
 }

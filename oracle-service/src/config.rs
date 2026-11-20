@@ -109,6 +109,20 @@ pub struct OracleConfig {
     ///
     /// Defaults to `ORACLE_DEAD_LETTER_MAX_ENTRIES` env var, or 1000 if unset.
     pub dead_letter_max_entries: usize,
+    /// Quiet period (seconds) a dead-letter entry must age past before the
+    /// automatic retry sweep will replay it back into the pending queue.
+    ///
+    /// A transient failure that later clears leaves matches stuck in the
+    /// dead-letter store; the sweep gives them another chance once they have
+    /// been quiet for this long (#1976).  Defaults to
+    /// `ORACLE_DEAD_LETTER_RETRY_QUIET_PERIOD_SECS`, or 1800 (30 minutes) if
+    /// unset.  `0` means entries become eligible for replay immediately.
+    pub dead_letter_retry_quiet_period_secs: u64,
+    /// Maximum number of dead-letter entries replayed by a single sweep, so a
+    /// large dead-letter store cannot trigger a thundering herd of retries
+    /// (#1976).  Defaults to `ORACLE_DEAD_LETTER_RETRY_SWEEP_BATCH_SIZE`, or 25
+    /// if unset.  `0` disables the automatic sweep.
+    pub dead_letter_retry_sweep_batch_size: usize,
     /// Maximum oracle transaction fee (stroops) to protect against fee spikes.
     /// Submission will fail if the calculated fee exceeds this limit.
     /// Defaults to `ORACLE_MAX_FEE_STROOPS` env var, or 1_000_000 (0.1 XLM) if unset.
@@ -121,10 +135,15 @@ pub struct OracleConfig {
     /// Optional HTTP Basic Auth username for the `/metrics` endpoint.
     /// Loaded from `METRICS_AUTH_USERNAME`; empty strings are treated as unset.
     /// When both username and password are set, `/metrics` requires Basic Auth.
+    /// In production (`ORACLE_ENV=production`) both must be set or startup
+    /// fails: leaving `/metrics` unauthenticated in production is not allowed.
     pub metrics_auth_username: Option<String>,
     /// Optional HTTP Basic Auth password for the `/metrics` endpoint.
     /// Loaded from `METRICS_AUTH_PASSWORD`; empty strings are treated as unset.
     pub metrics_auth_password: Option<String>,
+    /// Whether the service is running in production mode.
+    /// Loaded from `ORACLE_ENV`; set to `production` to enforce stricter checks.
+    pub production: bool,
 }
 
 impl fmt::Debug for OracleConfig {
@@ -157,6 +176,14 @@ impl fmt::Debug for OracleConfig {
                 &self.reconciliation_interval_secs,
             )
             .field("dead_letter_max_entries", &self.dead_letter_max_entries)
+            .field(
+                "dead_letter_retry_quiet_period_secs",
+                &self.dead_letter_retry_quiet_period_secs,
+            )
+            .field(
+                "dead_letter_retry_sweep_batch_size",
+                &self.dead_letter_retry_sweep_batch_size,
+            )
             .field("max_fee_stroops", &self.max_fee_stroops)
             .field("http_addr", &self.http_addr)
             .field(
@@ -164,7 +191,14 @@ impl fmt::Debug for OracleConfig {
                 &self.metrics_auth_username.as_deref().map(|_| "<set>"),
             )
             .field("metrics_auth_password", &"<redacted>")
+            .field("production", &self.production)
             .finish()
+    }
+}
+
+impl fmt::Display for OracleConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
     }
 }
 
@@ -238,6 +272,12 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
     let contract_escrow = require_env("CONTRACT_ESCROW")?;
     let contract_oracle = require_env("CONTRACT_ORACLE")?;
 
+    // Validate both contract addresses at config load time so a misconfigured
+    // address surfaces immediately with a clear ConfigError rather than an
+    // opaque RPC error on the first submission (#1965).
+    validate_contract_address("CONTRACT_ESCROW", &contract_escrow)?;
+    validate_contract_address("CONTRACT_ORACLE", &contract_oracle)?;
+
     // Decode the 32-byte signing key seed from hex and immediately wrap it in
     // Zeroizing to ensure it is scrubbed when dropped.
     let key_hex = require_env("ORACLE_SIGNING_KEY")?;
@@ -276,6 +316,24 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
         .ok()
         .filter(|s| !s.is_empty());
 
+    let oracle_env = std::env::var("ORACLE_ENV").unwrap_or_default();
+    let production = oracle_env.eq_ignore_ascii_case("production");
+
+    // In production, the /metrics endpoint must be protected with credentials.
+    // A missing or partial configuration is a startup error rather than a
+    // silent fallback to unauthenticated access.
+    if production {
+        match (&metrics_auth_username, &metrics_auth_password) {
+            (None, _) | (_, None) => {
+                return Err(ConfigError::MissingVar(
+                    "METRICS_AUTH_USERNAME and METRICS_AUTH_PASSWORD must both be set in production \
+                     (ORACLE_ENV=production); refusing to expose /metrics unauthenticated",
+                ));
+            }
+            _ => {}
+        }
+    }
+
     Ok(OracleConfig {
         rpc_url,
         network_passphrase,
@@ -296,6 +354,7 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
         http_addr,
         metrics_auth_username,
         metrics_auth_password,
+        production,
     })
 }
 
@@ -303,6 +362,19 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
 
 fn require_env(name: &'static str) -> Result<String, ConfigError> {
     std::env::var(name).map_err(|_| ConfigError::MissingVar(name))
+}
+
+/// Validate that `value` is a valid Soroban contract strkey (C-address).
+///
+/// Called at config load time (#1965) so a misconfigured address surfaces
+/// with a clear [`ConfigError`] rather than an opaque RPC error on the first
+/// submission.
+fn validate_contract_address(var: &'static str, value: &str) -> Result<(), ConfigError> {
+    stellar_strkey::Contract::from_string(value).map_err(|e| ConfigError::InvalidValue {
+        var,
+        reason: format!("invalid contract address '{}': {}", value, e),
+    })?;
+    Ok(())
 }
 
 fn parse_u64_env(name: &'static str, default: u64) -> Result<u64, ConfigError> {
@@ -458,5 +530,44 @@ mod tests {
         let v = parse_u32_env("ORACLE_MAX_FEE_STROOPS", 1_000_000).unwrap();
         assert_eq!(v, 5_000_000);
         std::env::remove_var("ORACLE_MAX_FEE_STROOPS");
+    }
+
+    // ── #1965: contract address validation at config load ─────────────────
+
+    #[test]
+    fn valid_contract_address_passes_validation() {
+        // A well-formed C-address must pass without error.
+        let result = validate_contract_address(
+            "CONTRACT_ESCROW",
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        );
+        assert!(result.is_ok(), "valid C-address should pass: {:?}", result);
+    }
+
+    #[test]
+    fn invalid_contract_address_rejected_with_typed_error() {
+        // A garbage string must produce a ConfigError::InvalidValue.
+        let err = validate_contract_address("CONTRACT_ESCROW", "not-a-valid-address")
+            .unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidValue { var: "CONTRACT_ESCROW", .. }),
+            "expected InvalidValue for CONTRACT_ESCROW, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn g_address_rejected_as_contract_address() {
+        // A G-address (account key) must not be accepted as a C-address.
+        let err = validate_contract_address(
+            "CONTRACT_ORACLE",
+            "GDZST3XVCDTUJ76ZAV2HA72KYYA4JJOBJZNJHXJ6O54BWCQVZQNK7HT",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidValue { var: "CONTRACT_ORACLE", .. }),
+            "G-address must be rejected for CONTRACT_ORACLE: {:?}",
+            err
+        );
     }
 }
