@@ -57,6 +57,10 @@ fn make_config(
         queue_dir: queue_dir.to_string(),
         reconciliation_interval_secs: 1,
         dead_letter_max_entries: 0,
+        max_fee_stroops: 1_000_000,
+        http_addr: "0.0.0.0:8000".to_string(),
+        metrics_auth_username: None,
+        metrics_auth_password: None,
     }
 }
 

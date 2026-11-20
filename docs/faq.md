@@ -31,27 +31,50 @@ Check `get_match_timeout()` to see the current timeout, and `get_match(match_id)
 
 No. Once a match transitions to `Active` (both players deposited), only the oracle submitting a result or the timeout expiring can end it. This prevents one player from backing out mid-game. A cancellation attempt returns [error code #5](error-codes.md#code-5-invalidstate).
 
-### 5. How long does a payout take?
+### 5. What happens if both players stop sending heartbeats and no one ever calls expire_match?
+
+When both players go silent — no heartbeats, no result, no expiry call — the escrowed funds do **not** disappear. The escrow holds them until one of three recovery paths executes:
+
+1. **Player-initiated rollback (within 24 hours of the last heartbeat)**
+   Either player can call `dispute_and_rollback_match(match_id, reason)` within 24 hours of the last recorded heartbeat. Both players receive full refunds and the match is cancelled.
+
+2. **Admin resolution (after 7 days of inactivity)**
+   If more than 7 days pass since the last heartbeat with no result submitted and no rollback, the admin can call `admin_resolve_stalled_match(match_id, resolution)`. The admin picks `Winner::Player1`, `Winner::Player2`, or `Winner::Draw` (full refunds). The match closes and funds are distributed.
+
+3. **Oracle submits a late result**
+   If the oracle comes back online before the Soroban ledger snapshot for the match has expired, it can still submit the result and trigger the payout normally. This path works as long as the match record is still live on-chain.
+
+**Who can recover the funds and when:**
+
+| Situation | Who acts | How |
+|-----------|----------|-----|
+| Within 24 h of last heartbeat | Either player | `dispute_and_rollback_match` |
+| 24 h to 7 days since last heartbeat | Oracle (if back online) | `submit_result` |
+| More than 7 days since last heartbeat | Admin | `admin_resolve_stalled_match` |
+
+**Funds are never permanently locked.** The 7-day admin resolution window is the hard backstop — even if both players disappear entirely, the admin can always recover and distribute the escrowed funds. See [question 10](#10-what-happens-if-the-oracle-goes-offline) for the full oracle-outage recovery flow and example timeline.
+
+### 6. How long does a payout take?
 
 Payouts settle in seconds once the oracle submits the result on-chain. Stellar's fast finality means the winner's account receives the funds within the block confirmation time (~5–6 seconds).
 
 ## Oracle & Results
 
-### 6. Why does the oracle trust model matter?
+### 7. Why does the oracle trust model matter?
 
 The oracle is a trusted intermediary that bridges off-chain game data (Lichess, Chess.com) to the on-chain contract. It verifies the game result and submits it. If the oracle is compromised or malicious, it could submit false results. This is unavoidable in the current design — the contract has no way to independently verify that a Lichess game happened or who won.
 
 **Mitigation**: The oracle service is run by the maintainers and operated transparently. Future versions may use decentralized oracle networks (e.g., Chainlink) or cryptographic game proofs to reduce trust.
 
-### 7. What if the oracle service is down when my game finishes?
+### 8. What if the oracle service is down when my game finishes?
 
 Resubmit the result once the oracle is back online. As long as the result is submitted within the Soroban TTL window (typically a few ledger slots, but kept generous via ledger snapshot retention), the payout will process. Avoid submitting results extremely late (weeks later) — the ledger snapshot needed for verification may be purged. See [error code #21](error-codes.md#code-21-snapshotnotfound).
 
-### 8. Can a player submit a result themselves?
+### 9. Can a player submit a result themselves?
 
 No. Only the configured oracle address can call `submit_result` (or `submit_result_with_oracle_record`). Players don't have authorization. This prevents disputes over who won — the oracle is the single source of truth.
 
-### 9. What happens if the oracle goes offline?
+### 10. What happens if the oracle goes offline?
 
 If the oracle service is unavailable when a match ends, players are protected by multiple recovery mechanisms depending on when the oracle fails:
 
@@ -130,7 +153,7 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match --match_id <ID>
 
 ## Testnet vs. Mainnet
 
-### 10. How do I test on testnet without real money?
+### 11. How do I test on testnet without real money?
 
 1. Use `stellar keys generate` to create a testnet account.
 2. Fund it with free testnet tokens via the [Stellar Testnet Faucet](https://laboratory.stellar.org/#account-creator?network=testnet).
@@ -139,7 +162,7 @@ stellar contract invoke --id $ESCROW_CONTRACT_ID -- get_match --match_id <ID>
 
 Testnet tokens have zero real value — no financial risk.
 
-### 11. What's the risk difference between testnet and mainnet?
+### 12. What's the risk difference between testnet and mainnet?
 
 - **Testnet**: Tokens are test-only. Contracts are frequently updated. Use for learning and integration testing.
 - **Mainnet**: Real tokens with real value. Contract code is audited and stable. Players risk actual funds. Always verify the contract address before sending real money.
@@ -148,11 +171,11 @@ Check `STELLAR_NETWORK` in `.env` to confirm which network you're on. Testnet RP
 
 ## Tokens & Allowlisting
 
-### 12. Which tokens can I use?
+### 13. Which tokens can I use?
 
 By default, any Stellar token address is accepted. However, once the admin calls `add_allowed_token` with at least one token, the contract **only** accepts tokens on the allowlist. Call `get_allowed_tokens()` to see which tokens are currently allowed.
 
-### 13. What if I try to create a match with a non-allowed token?
+### 14. What if I try to create a match with a non-allowed token?
 
 You'll get [error code #17](error-codes.md#code-17-tokennotallowed). Ask the admin to either:
 - Add your token via `add_allowed_token`, or
@@ -160,7 +183,7 @@ You'll get [error code #17](error-codes.md#code-17-tokennotallowed). Ask the adm
 
 ## Administration
 
-### 14. What can the admin do?
+### 15. What can the admin do?
 
 The admin can:
 - Add/remove allowed tokens
@@ -171,7 +194,7 @@ The admin can:
 
 The admin cannot directly cancel matches or refund stuck stakes — only `expire_match`, `cancel_match`, or player actions do that.
 
-### 15. How do I transfer admin rights safely?
+### 16. How do I transfer admin rights safely?
 
 Use a two-step process:
 1. Current admin calls `propose_admin(new_admin_address)`.
@@ -181,7 +204,7 @@ This prevents mistakes like typos in the new admin address. If the new admin rej
 
 ## Errors & Troubleshooting
 
-### 16. I got error #4 (Unauthorized). What now?
+### 17. I got error #4 (Unauthorized). What now?
 
 Either:
 1. You're signing with the wrong keypair (not the admin, oracle, or depositing player).

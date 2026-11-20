@@ -77,6 +77,11 @@ impl PendingEntry {
     ///
     /// Returns `true` if the entry has exhausted all retries and should be
     /// moved to the dead-letter store.
+    ///
+    /// Retry scheduling is **gated on `max_retries`**: once `attempts` reaches
+    /// the configured cap the entry is reported exhausted and **no further
+    /// retry is scheduled**, regardless of how many times this is called.  A
+    /// `max_retries` of `0` means "never retry" — the first failure exhausts.
     pub fn record_failure(
         &mut self,
         error: String,
@@ -86,8 +91,11 @@ impl PendingEntry {
         self.attempts += 1;
         self.last_error = Some(error);
 
+        // Gate: once the configured cap is reached, dead-letter immediately and
+        // never schedule another retry.  This is the only place `next_attempt_at`
+        // is advanced, so the cap can never be exceeded by a later code path.
         if self.attempts >= max_retries {
-            return true; // exhausted
+            return true; // exhausted — do not schedule a retry
         }
 
         // Exponential backoff: base * 2^(attempt-1), capped at 1 hour.
@@ -97,6 +105,14 @@ impl PendingEntry {
 
         self.next_attempt_at = Utc::now() + chrono::Duration::seconds(delay_secs as i64);
         false
+    }
+
+    /// Returns `true` once this entry has reached or exceeded `max_retries`
+    /// attempts and should be moved to the dead-letter store.  This is the
+    /// same gate used by [`PendingEntry::record_failure`], exposed so callers
+    /// can check it without advancing the schedule.
+    pub fn is_exhausted(&self, max_retries: u32) -> bool {
+        self.attempts >= max_retries
     }
 
     /// Returns true when this entry is eligible for a new attempt.
@@ -256,6 +272,68 @@ mod tests {
         entry.attempts = 4; // one below max
         let exhausted = entry.record_failure("final error".into(), 10, 5);
         assert!(exhausted, "should be exhausted at max_retries=5");
+    }
+
+    /// An entry is dead-lettered after exactly `max_retries` consecutive
+    /// failures, and a retry is scheduled for every attempt before that.
+    /// This exercises the full retry lifecycle (#1973): retries must never
+    /// exceed the configured cap.
+    #[tokio::test]
+    async fn record_failure_dead_letters_after_max_retries() {
+        let mut entry = PendingEntry::new(1, "abcd1234".into(), Platform::Lichess);
+        const MAX_RETRIES: u32 = 5;
+        const BASE_DELAY: u64 = 10;
+
+        let mut exhausted = false;
+        for attempt in 1..=MAX_RETRIES {
+            // Snapshot the scheduled retry time set by the previous iteration
+            // so we can assert it is left untouched once the entry is exhausted.
+            let scheduled_before = entry.next_attempt_at;
+            exhausted = entry.record_failure("transient".into(), BASE_DELAY, MAX_RETRIES);
+
+            if attempt < MAX_RETRIES {
+                assert!(
+                    !exhausted,
+                    "must not be dead-lettered before max_retries (attempt {attempt})"
+                );
+                assert_eq!(
+                    entry.attempts, attempt,
+                    "attempts should track the failure count"
+                );
+                assert!(
+                    entry.next_attempt_at > Utc::now(),
+                    "a retry must be scheduled for every attempt below the cap (attempt {attempt})"
+                );
+            } else {
+                assert!(
+                    exhausted,
+                    "must be dead-lettered after max_retries failures (attempt {attempt})"
+                );
+                assert_eq!(entry.attempts, MAX_RETRIES);
+                // Once exhausted, the previously-scheduled retry time must be
+                // left in place (no new retry is scheduled past the cap).
+                assert_eq!(
+                    entry.next_attempt_at, scheduled_before,
+                    "no retry may be scheduled once the cap is reached"
+                );
+            }
+        }
+        assert!(entry.is_exhausted(MAX_RETRIES));
+    }
+
+    /// A `max_retries` of 0 means "never retry": the very first failure
+    /// exhausts the entry and schedules no retry (#1973 edge case).
+    #[tokio::test]
+    async fn record_failure_zero_max_retries_exhausts_immediately() {
+        let mut entry = PendingEntry::new(1, "abcd1234".into(), Platform::Lichess);
+        let scheduled_before = entry.next_attempt_at;
+        let exhausted = entry.record_failure("err".into(), 10, 0);
+        assert!(exhausted, "max_retries=0 should dead-letter on first failure");
+        assert_eq!(entry.attempts, 1);
+        assert_eq!(
+            entry.next_attempt_at, scheduled_before,
+            "no retry must be scheduled when max_retries is 0"
+        );
     }
 
     #[tokio::test]

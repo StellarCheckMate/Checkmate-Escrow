@@ -99,6 +99,7 @@ async fn test_health_endpoint_returns_503_when_rpc_down() {
             dead_url.clone(),
             cfg.network_passphrase.clone(),
             &cfg.contract_escrow,
+            &cfg.contract_oracle,
             cfg.max_fee_stroops,
         )
         .expect("soroban client constructed"),
@@ -179,6 +180,7 @@ async fn test_health_endpoint_returns_200_when_rpc_up() {
             rpc_server.uri(),
             cfg.network_passphrase.clone(),
             &cfg.contract_escrow,
+            &cfg.contract_oracle,
             cfg.max_fee_stroops,
         )
         .expect("soroban client constructed"),
