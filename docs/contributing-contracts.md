@@ -174,6 +174,38 @@ Emitting events is the preferred way for external systems to observe contract ac
 - `test_match_record_expires_when_inactive` (for TTL behavior)
 - `test_active_index_refreshes_on_state_change`
 
+### Upgrade simulation tests
+
+Before opening a PR that changes contract logic, storage layout, or any public function signature, run the upgrade simulation tests:
+
+```bash
+cargo test -p escrow --test upgrade_simulation_tests -- --nocapture
+```
+
+These tests cover state preservation, storage-key stability, version monotonicity, and concurrent-match safety across a contract upgrade. A failure here means the upgrade path is broken and **must** be fixed before merging.
+
+If your change intentionally modifies the public ABI (adds, removes, or renames an exported function), you must also update the ABI snapshot baseline. See the procedure below.
+
+#### Updating the ABI snapshot
+
+The committed baseline lives in `contracts/escrow/contract-spec.json`. After an intentional ABI change:
+
+1. Build the escrow WASM for release:
+   ```bash
+   cd contracts/escrow
+   cargo build --target wasm32-unknown-unknown --release
+   ```
+2. Regenerate the baseline with the Stellar CLI:
+   ```bash
+   stellar contract inspect \
+     --wasm target/wasm32-unknown-unknown/release/escrow.wasm \
+     --output json > /tmp/current-spec-raw.json
+   ```
+3. Update `contracts/escrow/contract-spec.json` to reflect the new function list (see the script in `.github/workflows/abi-snapshot.yml` for the exact extraction logic).
+4. Commit the updated `contract-spec.json` alongside your contract change and note the ABI change explicitly in the PR description.
+
+The CI `abi-snapshot` workflow re-runs this check on every PR. If the workflow fails, either your ABI change was unintentional (revert it) or you forgot to update the baseline (follow the steps above).
+
 ## Review checklist for contract contributions
 
 Before opening a PR, make sure your change includes:
@@ -185,6 +217,7 @@ Before opening a PR, make sure your change includes:
 - [ ] typed `try_` error tests instead of `#[should_panic]`
 - [ ] clear documentation in `docs/` or code comments for new storage patterns
 - [ ] a short note in PR description describing any contract storage or TTL assumptions
+- [ ] upgrade simulation tests pass (`cargo test -p escrow --test upgrade_simulation_tests`) and ABI snapshot baseline updated if public functions changed
 
 ## Where to update this guide
 
