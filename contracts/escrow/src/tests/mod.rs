@@ -221,3 +221,7 @@ mod issue_1812;
 mod issue_1814;
 mod issue_1617;
 mod issue_1618;
+mod issue_1941;
+mod issue_1942;
+mod issue_1943;
+mod issue_1944;
