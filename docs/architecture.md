@@ -398,7 +398,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `accept_admin` | `()` | Called by the pending admin to complete a `propose_admin` transfer. |
 | `transfer_admin` | `(new_admin: Address)` | Admin-only. One-step admin transfer (no accept step), distinct from the `propose_admin`/`accept_admin` pair. |
 | `update_oracle` | `(new_oracle: Address)` | Admin-only. Rotates the trusted oracle address immediately and clears any outstanding temporary rotation or pending permanent-rotation proposals. Emits an `admin`/`oracle_up` event. |
-| `get_oracle` | `() -> Address` | Returns the stored oracle address. |
+| `get_oracle` | `() -> Result<Address, Error>` | **Canonical** oracle accessor (issue #1920). View function (no auth) returning the *effective* oracle — the base oracle set via `initialize`/`update_oracle`, or the active temporary rotation oracle. Returns `Error::Unauthorized` if uninitialized. |
 | `set_protocol_config` | `(config: ProtocolConfig)` | Admin-only. Sets vesting duration, cancellation fee, and treasury address (see `ProtocolConfig` below). |
 | `get_protocol_config` | `() -> ProtocolConfig` | Returns the current protocol configuration. |
 | `set_match_timeout` | `(seconds: u64)` | Admin-only. Sets the pending-match expiration timeout, in seconds. Must be within `[MIN_MATCH_TIMEOUT_SECONDS, MAX_MATCH_TIMEOUT_SECONDS]` = `[86,400, 7,776,000]` or returns `Error::InvalidTimeout`. See [Known Limitations](security.md#smart-contract-limitations). |
@@ -406,8 +406,8 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `set_maximum_stake` | `(amount: Option<i128>)` | Admin-only. Sets the maximum stake accepted by `create_match` and friends. `None` removes the cap. |
 | `set_minimum_stake` | `(amount: i128)` | Admin-only. Sets the minimum stake accepted by `create_match` and friends. |
 | `set_oracle` | `(oracle: Address)` | Admin-only. Alias for `update_oracle`. |
-| `get_oracle_address` | `() -> Result<Address, Error>` | View function; returns the currently configured oracle address without requiring authentication (unlike `get_oracle`). |
-| `admin_freeze_player` | `(player: Address, reason: String)` | Admin-only. Freezes a single player: they can no longer `create_match` (any variant) or `deposit`, while every other user is unaffected. The `reason` is stored on-chain for auditability. Does **not** block fund recovery (cancel/expire/claim still work) or oracle settlement of existing matches. Reuses `Error::ContractPaused` (the error enum is at its 50-variant XDR cap). See [Freeze Mechanism](security.md#freeze-mechanism). |
+| `get_oracle_address` | `() -> Result<Address, Error>` | **Deprecated** alias for `get_oracle` (issue #1920); delegates to it so both return the same value and the same `Error::Unauthorized` when uninitialized. New integrations should use `get_oracle`. |
+| `admin_freeze_player` | `(player: Address, reason: String)` | Admin-only. Freezes a single player: they can no longer `create_match` (any variant) or `deposit`, while every other user is unaffected. The `reason` is stored on-chain for auditability, and an `admin/freeze` event carrying `(player, admin)` is emitted so the freeze is attributable to the calling admin (issue #1917). Does **not** block fund recovery (cancel/expire/claim still work) or oracle settlement of existing matches. Reuses `Error::ContractPaused` (the error enum is at its 50-variant XDR cap). See [Freeze Mechanism](security.md#freeze-mechanism). |
 | `admin_unfreeze_player` | `(player: Address)` | Admin-only. Reverses `admin_freeze_player`, restoring the player's ability to create matches and deposit. |
 | `is_player_frozen` | `(player: Address) -> bool` | Returns whether `player` is currently frozen. |
 | `get_frozen_players` | `() -> Vec<Address>` | Returns all currently frozen player addresses. |
@@ -432,8 +432,8 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_match` | `(match_id: u64) -> Match` | Returns the current state of a match. |
 | `cancel_match` | `(match_id: u64, caller: Address)` | Cancels a `Pending` match and refunds any deposits (minus the configured cancellation fee, if any). |
 | `expire_match` | `(match_id: u64)` | Anyone may call once a `Pending` match's timeout has elapsed since `created_ledger`; cancels and refunds like `cancel_match`. |
-| `pause_match` | `(match_id: u64, caller: Address)` | Either player may pause an `Active` or `PendingResult` match. |
-| `resume_match` | `(match_id: u64, caller: Address)` | Either player may resume a `Paused` match, restoring its prior state and accumulating `total_pause_duration`. |
+| `pause_match` | `(match_id: u64, caller: Address)` | Either player may pause an `Active` or `PendingResult` match. Emits a `match/paused` event with payload `match_id`. |
+| `resume_match` | `(match_id: u64, caller: Address)` | Either player may resume a `Paused` match, restoring its prior state and accumulating `total_pause_duration`. Emits a `match/resumed` event with payload `match_id`. |
 | `heartbeat_match` | `(match_id: u64, player: Address) -> Result<(), Error>` | Either player refreshes `Match.last_heartbeat` to the current ledger timestamp on an `Active` match. Pure timestamp update — no token movement — used to keep `dispute_and_rollback_match`'s 24-hour window alive during long games. |
 | `dispute_and_rollback_match` | `(match_id: u64, disputer: Address, reason: String) -> Result<(), Error>` | Either player may roll back an `Active` match to `Cancelled` with a full refund (no cancellation fee) if called within `ROLLBACK_WINDOW_SECONDS` (24h) of `Match.last_heartbeat`. A player-friendly escape hatch for a stalled/disconnected opponent, distinct from the oracle-result dispute flow. |
 | `update_heartbeat` | `(match_id: u64, caller: Address) -> Result<(), Error>` | Public alias for `heartbeat_match`. Either player may call to refresh `Match.last_heartbeat` on an `Active` match; use this entry point for external callers. |
@@ -446,6 +446,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_escrow_balance` | `(match_id: u64) -> i128` | Returns the total escrowed balance for a match. |
 | `is_funded` | `(match_id: u64) -> bool` | Returns `true` when both players have deposited. Note: callers must check `match.state` to determine if a match is in progress, as `is_funded` remains `true` post-payout. |
 | `get_depositor_count` | `(match_id: u64) -> u32` | Returns how many of the two players (0, 1, or 2) have deposited. |
+| `get_total_escrowed` | `() -> Result<i128, Error>` | Returns the sum of funds currently locked across all non-terminal matches (`Active`, `PendingResult`, `Paused`). Useful for dashboards and risk monitoring. |
 | `claim_vested_payout` | `(match_id: u64, player: Address)` | For matches settled under a non-zero effective vesting duration (the match's `vesting_override_seconds` if set, otherwise `ProtocolConfig::vesting_duration_seconds`): releases `player`'s share once the vesting period (tracked via `vested_at`) has elapsed. Returns `Error::Overflow` on timestamp arithmetic overflow. |
 | `deposit_batch` | `(entries: Vec<(u64, Address)>) -> Result<Vec<Option<Error>>, Error>` | Batch version of `deposit`. Accepts a list of `(match_id, player)` pairs and processes each independently. Returns `Error::ContractPaused` immediately if the contract is paused; otherwise returns a `Vec` of outcomes (`None` = success, `Some(Error)` = that entry's failure) in input order. |
 #### Oracle, Payouts & Disputes
@@ -464,6 +465,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `get_dispute_period` | `(&Env) -> u32` | Returns the currently configured dispute period. |
 | `get_dispute` | `(dispute_id: u64) -> Dispute` | Returns the stored dispute record. |
 | `get_match_dispute_id` | `(match_id: u64) -> u64` | Returns the dispute ID associated with a match, if one has been raised. |
+| `get_match_dispute` | `(match_id: u64) -> Option<Dispute>` | Returns the open dispute for a given match, or `None` if no dispute has been raised. Simplifies dispute-aware UIs that previously had to list all disputes and filter. |
 | `get_dispute_details` | `(match_id: u64) -> Result<Dispute, Error>` | Returns the full `Dispute` record for the dispute associated with `match_id`. Convenience wrapper over `get_dispute` that looks up the dispute ID from `match_id` in one call. Returns `Error::DisputeNotFound` if no dispute exists for the match. || `mark_dispute_for_oracle_slash` | `(dispute_id: u64, slash_amount: i128) -> Result<(), Error>` | Admin-only. For a `ResolvedOverturned` dispute, emits an `oracle_slash_signal` event containing the oracle address and slash amount. An off-chain relay service automatically listens for this event and invokes the oracle contract's `slash_oracle` to execute the penalty. See [Oracle Slash Relay](oracle.md#oracle-slash-relay) for details. |
 | `set_dispute_bond_basis_points` | `(basis_points: u32) -> Result<(), Error>` | Admin-only. Sets the dispute bond requirement as basis points of match stake (1–10,000). |
 | `get_dispute_bond_basis_points` | `() -> u32` | Returns the current dispute bond basis points (default `DEFAULT_DISPUTE_BOND_BASIS_POINTS`). |
@@ -527,7 +529,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 |----------|-----------|-------------|
 | `add_stablecoin_issuer` | `(issuer: Address) -> Result<(), Error>` | Admin-only. Registers `issuer` as a stablecoin issuer; tokens matching a registered issuer pass `is_stablecoin`. Used to enforce `stablecoin_only_mode` in `ProtocolConfig`. |
 | `remove_stablecoin_issuer` | `(issuer: Address) -> Result<(), Error>` | Admin-only. Deregisters a stablecoin issuer. |
-| `is_stablecoin` | `(token: Address) -> bool` | Returns whether `token`'s issuer has been registered via `add_stablecoin_issuer`. |
+| `is_stablecoin` | `(token: Address) -> bool` | Returns whether `token` qualifies as a stablecoin: `true` if the token address itself is registered, or if its issuer (resolved from the SAC contract via a **budget-bounded** `try_invoke_contract` call) is registered via `add_stablecoin_issuer` (issue #1918). A non-compliant address returns `false` without hanging. |
 | `add_token_to_blacklist` | `(token: Address, reason: String) -> Result<(), Error>` | Admin-only. Permanently rejects `token` in `create_match`, even when the allowlist is not enforced. `reason` (max 256 bytes) is stored on-chain for auditability. |
 | `remove_token_from_blacklist` | `(token: Address) -> Result<(), Error>` | Admin-only. Removes `token` from the blacklist. |
 | `is_token_blacklisted` | `(token: Address) -> bool` | Returns whether `token` is currently blacklisted. |
@@ -548,6 +550,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `rotate_oracle_temporary` | `(old_oracle: Address, new_oracle: Address, duration_seconds: u64) -> Result<(), Error>` | Admin-only. Temporarily rotates the oracle to `new_oracle`; automatically reverts to `old_oracle` once `duration_seconds` elapses. Validates that `old_oracle` matches the current oracle before proceeding. |
 | `propose_oracle_rotation` | `(old_oracle: Address, new_oracle: Address) -> Result<(), Error>` | Admin-only. Proposes a permanent oracle rotation, to be finalized by a matching `rotate_oracle_permanent` call. Validates that `old_oracle` matches the current oracle at proposal time. |
 | `rotate_oracle_permanent` | `(old_oracle: Address, new_oracle: Address) -> Result<(), Error>` | Admin-only. Finalizes a permanent oracle rotation; requires a prior matching `propose_oracle_rotation` proposal. Validates that `proposal.old_oracle` still matches the current oracle (rejects if `update_oracle` was called in the interim). |
+| `get_oracle_rotation_history` | `() -> Vec<OracleRotationEntry>` | Returns all past oracle rotation entries, oldest first. Each entry records `old_oracle`, `new_oracle`, ledger `timestamp`, and rotation `kind` (`"direct"`, `"temporary"`, or `"permanent"`). Returns an empty `Vec` before any rotation is performed. Useful for auditing temporary and permanent oracle rotations. |
 
 **Oracle Rotation Notes:**
 - Both `rotate_oracle_temporary` and `rotate_oracle_permanent` validate that the `old_oracle` parameter matches the live oracle address at execution time. This prevents accidental reversion of oracle updates that occurred between proposal and execution.

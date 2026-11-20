@@ -213,6 +213,13 @@ pub struct Match {
     /// the global `ProtocolConfig::vesting_duration_seconds` for this match's
     /// payouts; when `None`, the global config value is used.
     pub vesting_override_seconds: Option<u64>,
+    /// Cached count of players who have deposited their stake for this match
+    /// (0, 1, or 2). Incremented atomically on each successful deposit and
+    /// decremented on refund (cancel/expire). Using this counter avoids
+    /// re-deserialising the full `Match` struct just to count the two boolean
+    /// flags inside `get_depositor_count` — especially important on matches
+    /// with high call frequency.
+    pub depositor_count: u32,
 }
 
 #[contracttype]
@@ -489,6 +496,36 @@ pub enum UpgradeKey {
     ConfirmedBy,
 }
 
+/// A single entry in the oracle rotation history log.
+///
+/// Recorded whenever the oracle address changes via `update_oracle`,
+/// `rotate_oracle_temporary`, or `rotate_oracle_permanent`, so that operators
+/// can audit past rotations via `get_oracle_rotation_history`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct OracleRotationEntry {
+    /// The oracle address that was active before this rotation.
+    pub old_oracle: Address,
+    /// The oracle address installed by this rotation.
+    pub new_oracle: Address,
+    /// Ledger timestamp (`env.ledger().timestamp()`) at the time of rotation.
+    pub timestamp: u64,
+    /// Kind of rotation: `"permanent"`, `"temporary"`, or `"direct"`.
+    pub kind: String,
+}
+
+/// Storage keys for oracle rotation history.
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// because `DataKey` is already at its 50-variant XDR cap.
+#[contracttype]
+pub enum OracleHistoryKey {
+    /// Persistent list of `OracleRotationEntry` values, oldest first.
+    RotationHistory,
+    /// Total number of rotation entries ever appended (monotonic counter).
+    RotationCount,
+}
+
 /// An oracle-verified ELO / platform rating for a player.
 ///
 /// Registered on-chain by the oracle via `register_player_rating` so that
@@ -522,6 +559,22 @@ pub enum PlayerEscrowKey {
     /// payout (winner/draw), and refund (cancel/expire) rather than recomputed
     /// by iterating all matches.
     Balance(Address),
+}
+
+/// Storage keys for per-referrer volume tracking.
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// because `DataKey` is at its 50-variant XDR cap.
+///
+/// `Volume(referrer)` accumulates the total stake attributed to a referrer
+/// across all matches that reach a winner payout (draw refunds excluded).
+/// Updated atomically inside `claim_vested_payout` when the winner collects
+/// their payout and a non-zero referral fee is due.
+#[contracttype]
+pub enum ReferralKey {
+    /// Total stake volume attributed to this referrer (sum of match `stake_amount`
+    /// × 2 for every winner-payout match where the referrer received a fee).
+    Volume(Address),
 }
 
 /// The lifecycle event that triggered a balance snapshot.
