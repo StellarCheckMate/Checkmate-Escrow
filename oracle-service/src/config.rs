@@ -196,6 +196,12 @@ impl fmt::Debug for OracleConfig {
     }
 }
 
+impl fmt::Display for OracleConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
 /// Errors that can occur while loading configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
