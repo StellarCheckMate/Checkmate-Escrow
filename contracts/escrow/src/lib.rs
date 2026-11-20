@@ -501,6 +501,19 @@ impl EscrowContract {
         let key = DataKey::PlayerPreferredToken(player);
         match token_address {
             Some(addr) => {
+                // Reject blacklisted tokens.
+                if Self::is_token_blacklisted(env.clone(), addr.clone()) {
+                    return Err(Error::TokenNotAllowed);
+                }
+                // Reject tokens that are not on the allowlist when enforcement is active.
+                let allowlist_enforced: bool = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::AllowlistEnforced)
+                    .unwrap_or(false);
+                if allowlist_enforced && !Self::is_token_allowed(env.clone(), addr.clone()) {
+                    return Err(Error::TokenNotAllowed);
+                }
                 env.storage().persistent().set(&key, &addr);
                 env.storage()
                     .persistent()
