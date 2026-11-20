@@ -518,6 +518,22 @@ pub enum PlayerEscrowKey {
     Balance(Address),
 }
 
+/// Storage keys for per-referrer volume tracking.
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// because `DataKey` is at its 50-variant XDR cap.
+///
+/// `Volume(referrer)` accumulates the total stake attributed to a referrer
+/// across all matches that reach a winner payout (draw refunds excluded).
+/// Updated atomically inside `claim_vested_payout` when the winner collects
+/// their payout and a non-zero referral fee is due.
+#[contracttype]
+pub enum ReferralKey {
+    /// Total stake volume attributed to this referrer (sum of match `stake_amount`
+    /// × 2 for every winner-payout match where the referrer received a fee).
+    Volume(Address),
+}
+
 /// The lifecycle event that triggered a balance snapshot.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
