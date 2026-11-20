@@ -398,7 +398,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `accept_admin` | `()` | Called by the pending admin to complete a `propose_admin` transfer. |
 | `transfer_admin` | `(new_admin: Address)` | Admin-only. One-step admin transfer (no accept step), distinct from the `propose_admin`/`accept_admin` pair. |
 | `update_oracle` | `(new_oracle: Address)` | Admin-only. Rotates the trusted oracle address immediately and clears any outstanding temporary rotation or pending permanent-rotation proposals. Emits an `admin`/`oracle_up` event. |
-| `get_oracle` | `() -> Address` | Returns the stored oracle address. |
+| `get_oracle` | `() -> Result<Address, Error>` | **Canonical** oracle accessor (issue #1920). View function (no auth) returning the *effective* oracle — the base oracle set via `initialize`/`update_oracle`, or the active temporary rotation oracle. Returns `Error::Unauthorized` if uninitialized. |
 | `set_protocol_config` | `(config: ProtocolConfig)` | Admin-only. Sets vesting duration, cancellation fee, and treasury address (see `ProtocolConfig` below). |
 | `get_protocol_config` | `() -> ProtocolConfig` | Returns the current protocol configuration. |
 | `set_match_timeout` | `(seconds: u64)` | Admin-only. Sets the pending-match expiration timeout, in seconds. Must be within `[MIN_MATCH_TIMEOUT_SECONDS, MAX_MATCH_TIMEOUT_SECONDS]` = `[86,400, 7,776,000]` or returns `Error::InvalidTimeout`. See [Known Limitations](security.md#smart-contract-limitations). |
@@ -406,8 +406,8 @@ This section lists the complete public function surface of `EscrowContract` (`co
 | `set_maximum_stake` | `(amount: Option<i128>)` | Admin-only. Sets the maximum stake accepted by `create_match` and friends. `None` removes the cap. |
 | `set_minimum_stake` | `(amount: i128)` | Admin-only. Sets the minimum stake accepted by `create_match` and friends. |
 | `set_oracle` | `(oracle: Address)` | Admin-only. Alias for `update_oracle`. |
-| `get_oracle_address` | `() -> Result<Address, Error>` | View function; returns the currently configured oracle address without requiring authentication (unlike `get_oracle`). |
-| `admin_freeze_player` | `(player: Address, reason: String)` | Admin-only. Freezes a single player: they can no longer `create_match` (any variant) or `deposit`, while every other user is unaffected. The `reason` is stored on-chain for auditability. Does **not** block fund recovery (cancel/expire/claim still work) or oracle settlement of existing matches. Reuses `Error::ContractPaused` (the error enum is at its 50-variant XDR cap). See [Freeze Mechanism](security.md#freeze-mechanism). |
+| `get_oracle_address` | `() -> Result<Address, Error>` | **Deprecated** alias for `get_oracle` (issue #1920); delegates to it so both return the same value and the same `Error::Unauthorized` when uninitialized. New integrations should use `get_oracle`. |
+| `admin_freeze_player` | `(player: Address, reason: String)` | Admin-only. Freezes a single player: they can no longer `create_match` (any variant) or `deposit`, while every other user is unaffected. The `reason` is stored on-chain for auditability, and an `admin/freeze` event carrying `(player, admin)` is emitted so the freeze is attributable to the calling admin (issue #1917). Does **not** block fund recovery (cancel/expire/claim still work) or oracle settlement of existing matches. Reuses `Error::ContractPaused` (the error enum is at its 50-variant XDR cap). See [Freeze Mechanism](security.md#freeze-mechanism). |
 | `admin_unfreeze_player` | `(player: Address)` | Admin-only. Reverses `admin_freeze_player`, restoring the player's ability to create matches and deposit. |
 | `is_player_frozen` | `(player: Address) -> bool` | Returns whether `player` is currently frozen. |
 | `get_frozen_players` | `() -> Vec<Address>` | Returns all currently frozen player addresses. |
@@ -527,7 +527,7 @@ This section lists the complete public function surface of `EscrowContract` (`co
 |----------|-----------|-------------|
 | `add_stablecoin_issuer` | `(issuer: Address) -> Result<(), Error>` | Admin-only. Registers `issuer` as a stablecoin issuer; tokens matching a registered issuer pass `is_stablecoin`. Used to enforce `stablecoin_only_mode` in `ProtocolConfig`. |
 | `remove_stablecoin_issuer` | `(issuer: Address) -> Result<(), Error>` | Admin-only. Deregisters a stablecoin issuer. |
-| `is_stablecoin` | `(token: Address) -> bool` | Returns whether `token`'s issuer has been registered via `add_stablecoin_issuer`. |
+| `is_stablecoin` | `(token: Address) -> bool` | Returns whether `token` qualifies as a stablecoin: `true` if the token address itself is registered, or if its issuer (resolved from the SAC contract via a **budget-bounded** `try_invoke_contract` call) is registered via `add_stablecoin_issuer` (issue #1918). A non-compliant address returns `false` without hanging. |
 | `add_token_to_blacklist` | `(token: Address, reason: String) -> Result<(), Error>` | Admin-only. Permanently rejects `token` in `create_match`, even when the allowlist is not enforced. `reason` (max 256 bytes) is stored on-chain for auditability. |
 | `remove_token_from_blacklist` | `(token: Address) -> Result<(), Error>` | Admin-only. Removes `token` from the blacklist. |
 | `is_token_blacklisted` | `(token: Address) -> bool` | Returns whether `token` is currently blacklisted. |

@@ -724,23 +724,69 @@ impl EscrowContract {
     /// A token is a stablecoin when its issuer (obtained from the SAC contract)
     /// has been registered via [`Self::add_stablecoin_issuer`].  Returns `false`
     /// when no issuers have been registered yet.
+    ///
+    /// Two paths are consulted:
+    /// 1. **Fast path** — the `token` address itself is registered (the common
+    ///    case for SAC tokens, whose address encodes the issuer). This is a pure
+    ///    storage read with no cross-contract call.
+    /// 2. **Issuer path** — resolve the token's issuer from the SAC contract and
+    ///    check the registry by that issuer. The issuer lookup is made via a
+    ///    **budget-bounded** `try_invoke_contract` call (issue #1918): a
+    ///    malicious or non-compliant token (one that is not a callable contract,
+    ///    or that does not expose `issuer`) returns `false` *without hanging*
+    ///    instead of stalling validation or panicking.
     pub fn is_stablecoin(env: Env, token: Address) -> bool {
         Self::check_is_stablecoin(&env, &token)
     }
 
     /// Internal helper for stablecoin check (avoids `env` ownership issues).
     fn check_is_stablecoin(env: &Env, token: &Address) -> bool {
-        // A token on Soroban is issued by an Address.
-        // We check whether the token address itself is registered as a stablecoin issuer,
-        // or whether there is a registered issuer for that token's issuer account.
-        // Since in Soroban the SAC (Stellar Asset Contract) address encodes the issuer,
-        // we treat the token address directly and check issuer registry by the token address.
-        // Clients are expected to call add_stablecoin_issuer with the token's contract address
-        // (for SAC tokens) or a known issuer Address.
-        env.storage()
+        // Fast path: the token address itself is registered as a stablecoin
+        // issuer. For SAC tokens the contract address encodes the issuer, so
+        // clients commonly register the token address directly. This avoids
+        // any cross-contract call on the hot path.
+        if env
+            .storage()
             .instance()
             .get(&DataKey::StablecoinIssuer(token.clone()))
             .unwrap_or(false)
+        {
+            return true;
+        }
+
+        // Issuer path: resolve the token's issuer via a budget-bounded
+        // cross-contract call and check the registry by issuer. A malicious
+        // or non-compliant token cannot stall this — `resolve_token_issuer`
+        // uses `try_invoke_contract`, which returns `None` for any address
+        // that is not a callable contract or does not expose `issuer`, rather
+        // than panicking (issue #1918).
+        match Self::resolve_token_issuer(env, token) {
+            Some(issuer) => env
+                .storage()
+                .instance()
+                .get(&DataKey::StablecoinIssuer(issuer))
+                .unwrap_or(false),
+            None => false,
+        }
+    }
+
+    /// Resolve a token's issuer from its SAC contract via a budget-bounded call.
+    ///
+    /// Returns `None` when `token` is not a callable contract or does not expose
+    /// an `issuer` function, so a non-compliant address yields `false` from
+    /// [`Self::check_is_stablecoin`] without hanging (issue #1918). The
+    /// `try_invoke_contract` envelope bounds the call: any host error (no such
+    /// contract, no such function, budget exceeded by a malicious token) maps to
+    /// `None` instead of aborting validation.
+    fn resolve_token_issuer(env: &Env, token: &Address) -> Option<Address> {
+        match env.try_invoke_contract::<Address, Error>(
+            token,
+            &Symbol::new(env, "issuer"),
+            soroban_sdk::vec![env],
+        ) {
+            Ok(Ok(issuer)) => Some(issuer),
+            _ => None,
+        }
     }
 
     /// Return the current allowlist as an ordered list.
@@ -1008,9 +1054,12 @@ impl EscrowContract {
             );
         }
 
+        // The freeze event carries the caller admin address so every freeze is
+        // attributable for audit (issue #1917): the payload is `(player, admin)`
+        // rather than the player alone.
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("freeze")),
-            player,
+            (player, admin),
         );
         Ok(())
     }
@@ -3384,24 +3433,34 @@ impl EscrowContract {
     }
 
     /// Return the oracle address currently configured on the contract (or active temporary rotation).
+    ///
+    /// This is the **canonical** oracle accessor (issue #1920). It is a view
+    /// function (no authentication) that returns the *effective* oracle — the
+    /// base oracle set via `initialize`/`update_oracle`, or the active temporary
+    /// rotation oracle when one is in effect. Off-chain clients, frontends, and
+    /// monitoring tools should use this single accessor to read oracle
+    /// configuration. `get_oracle_address` is a deprecated alias that delegates
+    /// here, so both now return the same value with the same error code.
+    ///
+    /// # Errors
+    /// Returns `Error::Unauthorized` if the contract has not been initialized.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         Self::effective_oracle(&env)
     }
 
-    /// Return the oracle address currently configured on the contract.
+    /// Deprecated alias for [`Self::get_oracle`] (issue #1920).
     ///
-    /// This is a view function that returns the oracle address without
-    /// requiring authentication. It is intended for off-chain clients,
-    /// frontends, and monitoring tools to verify oracle configuration
-    /// without reading raw contract storage.
+    /// `get_oracle` and `get_oracle_address` previously diverged — one returned
+    /// the effective oracle (with rotation) while the other returned only the
+    /// base oracle — which confused integrators that expected a single
+    /// canonical accessor. `get_oracle` is now canonical; this function is
+    /// retained for backward ABI compatibility but delegates to
+    /// [`Self::get_oracle`], so it returns the same value and the same
+    /// `Error::Unauthorized` error code as the canonical accessor.
     ///
-    /// # Errors
-    /// Returns `Error::Unauthorized` if the contract has not been initialized.
+    /// New integrations should call [`Self::get_oracle`] instead.
     pub fn get_oracle_address(env: Env) -> Result<Address, Error> {
-        env.storage()
-            .instance()
-            .get(&DataKey::Oracle)
-            .ok_or(Error::Unauthorized)
+        Self::effective_oracle(&env)
     }
 
     /// Return the current oracle rotation state for monitoring.

@@ -291,3 +291,47 @@ fn test_is_stablecoin_returns_false_for_unknown_token() {
     let unknown = Address::generate(&env);
     assert!(!client.is_stablecoin(&unknown));
 }
+
+/// Issue #1918: a non-compliant address (not a callable contract, or a contract
+/// that does not expose `issuer`) must make `is_stablecoin` return `false`
+/// **without hanging**. The issuer lookup is a budget-bounded `try_invoke_contract`
+/// call that yields `None` on any failure — no such contract, no such function,
+/// or a budget-exhausting malicious token — rather than stalling validation or
+/// panicking.
+#[test]
+fn test_is_stablecoin_non_compliant_address_returns_false_without_hanging() {
+    let (env, contract_id, _oracle, _p1, _p2, _token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // A freshly generated address is not a deployed contract: resolving its
+    // issuer must fail gracefully, so the call returns false and completes
+    // (rather than hanging the host on an unbounded `issuer()` invocation).
+    let non_compliant = Address::generate(&env);
+    assert!(
+        !client.is_stablecoin(&non_compliant),
+        "a non-compliant address must return false without hanging"
+    );
+
+    // Repeating the lookup must remain stable (no cached failure state) and
+    // still return false.
+    assert!(
+        !client.is_stablecoin(&non_compliant),
+        "a non-compliant address must return false on repeated calls"
+    );
+}
+
+/// Issue #1918: a registered token address is still recognised via the fast
+/// (storage) path, so no cross-contract `issuer()` call is needed — this keeps
+/// the common case bounded and confirms the fast path still wins.
+#[test]
+fn test_is_stablecoin_registered_token_skips_issuer_call() {
+    let (env, contract_id, _oracle, _p1, _p2, token, _admin) = setup();
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    assert!(!client.is_stablecoin(&token));
+    client.add_stablecoin_issuer(&token);
+    assert!(
+        client.is_stablecoin(&token),
+        "a token registered by address must be a stablecoin via the fast path"
+    );
+}
