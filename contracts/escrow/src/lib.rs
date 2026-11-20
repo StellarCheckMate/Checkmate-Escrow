@@ -1527,6 +1527,7 @@ impl EscrowContract {
             token_b: params.token_b,
             conversion_rate_ledger,
             paused_ledger: None,
+            paused_at_ledger: None,
             total_pause_duration: 0,
             referrer: params.referrer.clone(),
             last_heartbeat: env.ledger().timestamp(),
@@ -1535,6 +1536,8 @@ impl EscrowContract {
             activated_at: None,
             rollback_vote_player1: false,
             rollback_vote_player2: false,
+            vesting_override_seconds: params.vesting_override_seconds,
+            depositor_count: 0,
         };
 
         env.storage().persistent().set(&DataKey::Match(id), &m);
@@ -1922,6 +1925,9 @@ impl EscrowContract {
         } else {
             m.player2_deposited = true;
         }
+        // Increment the cached depositor counter. saturating_add guards against
+        // the theoretical overflow of a u32 (practically unreachable: 0→1 or 1→2).
+        m.depositor_count = m.depositor_count.saturating_add(1);
 
         // Update the player's escrow balance counter: add the stake amount
         Self::update_player_escrow_balance(&env, &player, m.stake_amount);
@@ -2459,6 +2465,8 @@ impl EscrowContract {
 
         Self::set_match_state(&env, &mut m, MatchState::Cancelled);
         m.completed_ledger = Some(env.ledger().sequence());
+        // All deposits have been refunded: reset the cached depositor counter to 0.
+        m.depositor_count = 0;
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -2669,6 +2677,8 @@ impl EscrowContract {
 
         Self::set_match_state(&env, &mut m, MatchState::Cancelled);
         m.completed_ledger = Some(env.ledger().sequence());
+        // All deposits have been refunded: reset the cached depositor counter to 0.
+        m.depositor_count = 0;
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -2800,6 +2810,8 @@ impl EscrowContract {
 
         Self::set_match_state(&env, &mut m, MatchState::Cancelled);
         m.completed_ledger = Some(env.ledger().sequence());
+        // All deposits have been refunded: reset the cached depositor counter to 0.
+        m.depositor_count = 0;
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -3012,6 +3024,8 @@ impl EscrowContract {
         // downstream code that reads `completed_ledger` sees a terminal time.
         Self::set_match_state(&env, &mut m, MatchState::Cancelled);
         m.completed_ledger = Some(env.ledger().sequence());
+        // All deposits have been refunded: reset the cached depositor counter to 0.
+        m.depositor_count = 0;
         env.storage()
             .persistent()
             .set(&DataKey::Match(match_id), &m);
@@ -3566,6 +3580,22 @@ impl EscrowContract {
             .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
     }
 
+    /// Map a raw completed-match count to a [`PlayerTier`].
+    ///
+    /// # Zero-match canonical tier
+    ///
+    /// When `completed_matches` is **0** this function returns
+    /// [`PlayerTier::Bronze`]. This is the single authoritative mapping used
+    /// by all callers — `tier_from_match_count`, `create_match`, and
+    /// `deposit` — so a new player's tier is consistent everywhere.
+    ///
+    /// Thresholds:
+    /// | Range | Tier     |
+    /// |-------|----------|
+    /// | 0–2   | Bronze   |
+    /// | 3–5   | Silver   |
+    /// | 6–9   | Gold     |
+    /// | 10+   | Platinum |
     fn tier_for_completed_matches(completed_matches: u32) -> PlayerTier {
         if completed_matches >= PLATINUM_MIN_COMPLETED_MATCHES {
             PlayerTier::Platinum
@@ -3642,6 +3672,21 @@ impl EscrowContract {
         Ok(Self::get_config(&env).match_timeout_seconds)
     }
 
+    /// Return the player tier based on their number of completed matches.
+    ///
+    /// # Zero-match tier
+    ///
+    /// A player with **zero** completed matches is always assigned
+    /// [`PlayerTier::Bronze`]. This is the canonical starting tier and is
+    /// guaranteed to be stable: every caller — `create_match`, `deposit`,
+    /// and any off-chain view — uses this same function so there is no
+    /// divergence in how a new player's tier is reported.
+    ///
+    /// Tier thresholds (completed matches):
+    /// - **Bronze** : 0 – 2
+    /// - **Silver** : 3 – 5
+    /// - **Gold**   : 6 – 9
+    /// - **Platinum**: 10+
     pub fn tier_from_match_count(env: Env, player: Address) -> PlayerTier {
         let completed_matches = Self::completed_match_count(&env, &player);
         Self::tier_for_completed_matches(completed_matches)
@@ -3693,7 +3738,19 @@ impl EscrowContract {
     }
 
     /// Set the maximum stake accepted by `create_match` and friends. Admin only.
-    /// `None` removes the cap (unlimited stakes).
+    ///
+    /// `None` removes the upper cap so any stake ≥ `minimum_stake` is accepted.
+    ///
+    /// When `amount` is `Some(max)`:
+    /// - `max` must be positive (> 0).
+    /// - `max` must be ≥ `minimum_stake` to keep the \[min, max\] range non-empty.
+    ///   Passing a cap below the current minimum stake is rejected with
+    ///   [`Error::InvalidAmount`] to prevent an inconsistent configuration
+    ///   where no stake would ever be valid.
+    ///
+    /// When `amount` is `None` the cap is removed unconditionally; the resulting
+    /// configuration is always consistent because an unlimited upper bound is ≥
+    /// any finite `minimum_stake`.
     pub fn set_maximum_stake(env: Env, amount: Option<i128>) -> Result<(), Error> {
         extend_instance_ttl(&env);
         let admin: Address = env
@@ -3703,14 +3760,22 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
+        let mut config = Self::get_config(&env);
+
         if let Some(max) = amount {
             if max <= 0 {
                 return Err(Error::InvalidAmount);
             }
+            // Validate that the new cap is not below the current minimum_stake.
+            // A maximum_stake < minimum_stake would make [minimum_stake, maximum_stake]
+            // an empty range, so no match could ever be created.
+            if max < config.stakes.minimum_stake {
+                return Err(Error::InvalidAmount);
+            }
         }
+        // amount == None always passes: unlimited upper bound ≥ any minimum_stake.
 
-        let mut config = Self::get_config(&env);
-        config.maximum_stake = amount;
+        config.stakes.maximum_stake = amount;
         env.storage()
             .instance()
             .set(&DataKey::ProtocolConfig, &config);
@@ -3839,14 +3904,33 @@ impl EscrowContract {
 
     /// Check whether both players have deposited their stakes.
     ///
-    /// This returns `true` as long as both `player1_deposited` and `player2_deposited` flags
-    /// are set, regardless of match state. Specifically, it remains `true` after payout
-    /// (when state transitions to `Completed`) because the deposit flags are never cleared.
+    /// Returns `true` once both `player1_deposited` and `player2_deposited` flags
+    /// are set, and **keeps returning `true` after payout** because the deposit
+    /// flags are never cleared.
+    ///
+    /// # Semantics
+    ///
+    /// `is_funded` answers the historical question: *"Did both players ever put
+    /// funds into this match?"*  It does **not** tell you whether the contract
+    /// still holds those funds right now.
+    ///
+    /// - Returns `true` after the match has completed (state = `Completed`) even
+    ///   though funds have already been paid out.
+    /// - Returns `true` after the match is cancelled if both players had deposited
+    ///   before the cancellation.
+    ///
+    /// # When to use each function
+    ///
+    /// | Question | Function |
+    /// |---|---|
+    /// | Did both players ever deposit? | `is_funded` |
+    /// | Does the contract currently hold escrowed funds? | `is_currently_escrowed` |
+    /// | Is the match in a specific lifecycle stage? | check `match.state` |
     ///
     /// # Warning
-    /// Do not use this function to determine if a match is in progress — check `match.state` instead.
+    /// Do not use this function to determine if a match is in progress — check
+    /// `match.state` instead.
     ///
-    /// This indicates historical deposit status, not current escrowed funds.
     /// To check if funds are currently held in escrow, use [`is_currently_escrowed`].
     pub fn is_funded(env: Env, match_id: u64) -> Result<bool, Error> {
         let m: Match = env
@@ -3939,13 +4023,18 @@ impl EscrowContract {
     }
 
     /// Return the number of players who have deposited for a match (0, 1, or 2).
+    ///
+    /// Uses the `depositor_count` field cached directly on the [`Match`] struct,
+    /// which is incremented atomically on each successful deposit and reset to 0
+    /// when the match is cancelled or expires.  This avoids re-deserialising the
+    /// full match to re-derive the count from the two boolean flags on every call.
     pub fn get_depositor_count(env: Env, match_id: u64) -> Result<u32, Error> {
         let m: Match = env
             .storage()
             .persistent()
             .get(&DataKey::Match(match_id))
             .ok_or(Error::MatchNotFound)?;
-        Ok(Self::depositor_count(&m) as u32)
+        Ok(m.depositor_count)
     }
 
     /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
@@ -3959,9 +4048,35 @@ impl EscrowContract {
     }
 
     /// Return `true` only if funds are currently held in escrow for this
-    /// match, i.e. it is funded AND not yet Completed or Cancelled.
+    /// match, i.e. the match is funded AND it has not yet reached a terminal
+    /// state (`Completed` or `Cancelled`).
     ///
-    /// Unlike [`Self::is_funded`], this reflects the *current* balance state
+    /// # Semantics
+    ///
+    /// `is_currently_escrowed` answers the present-tense question: *"Is the
+    /// contract holding these funds right now?"*
+    ///
+    /// - Returns `false` once the match reaches `Completed` (funds paid out)
+    ///   even though [`is_funded`] still returns `true` for the same match.
+    /// - Returns `false` once the match is `Cancelled` (funds refunded).
+    /// - Returns `false` while only one player has deposited (the single
+    ///   deposit is still held, but `is_funded` is also `false` at that point).
+    ///
+    /// # Relationship to `is_funded`
+    ///
+    /// Both functions return `true` during the **funded-but-not-released**
+    /// window (state = `Active` or `PendingResult`, both players deposited).
+    /// They diverge after the match reaches a terminal state:
+    ///
+    /// | Match state | `is_funded` | `is_currently_escrowed` |
+    /// |---|---|---|
+    /// | Pending (0 deposits) | `false` | `false` |
+    /// | Pending (1 deposit)  | `false` | `false` |
+    /// | Active / PendingResult | `true` | **`true`** |
+    /// | Completed            | `true` | **`false`** |
+    /// | Cancelled (both deposited) | `true` | **`false`** |
+    ///
+    /// Unlike [`is_funded`], this reflects the *current* balance state
     /// rather than historical deposit flags.
     pub fn is_currently_escrowed(env: Env, match_id: u64) -> Result<bool, Error> {
         let m: Match = env
