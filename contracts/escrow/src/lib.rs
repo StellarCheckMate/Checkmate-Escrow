@@ -91,6 +91,16 @@ pub const VOTING_PERIOD_LEDGERS: u32 = 17_280;
 /// back a stake after claiming the opponent disconnected. 24 hours.
 pub const ROLLBACK_WINDOW_SECONDS: u64 = 24 * 60 * 60; // 86_400
 
+/// Minimum heartbeat interval: the liveness window the heartbeat/rollback
+/// mechanism spans (equal to [`ROLLBACK_WINDOW_SECONDS`]). A match expiration
+/// timeout shorter than this window is inconsistent — the match could expire
+/// before a player's heartbeat/rollback window has even elapsed — so
+/// [`EscrowContract::set_match_timeout`] rejects any timeout below it
+/// (issue #1928). Expressed in terms of [`ROLLBACK_WINDOW_SECONDS`] so the two
+/// stay linked by construction instead of drifting apart as independent
+/// literals.
+pub const MIN_HEARTBEAT_INTERVAL_SECONDS: u64 = ROLLBACK_WINDOW_SECONDS;
+
 /// Maximum duration (in ledgers) that a match may stay in `Paused` state
 /// before the oracle is permitted to settle it as if it were `Active`, and
 /// before the admin recovery path accepts it. At ~5 s/ledger this is 24 hours.
@@ -778,8 +788,21 @@ impl EscrowContract {
     }
 
     /// Return the current allowlist as an ordered list.
+    ///
+    /// DEPRECATED: use [`Self::get_allowed_tokens_paginated`] instead.
+    ///
+    /// This unbounded accessor returns the full allowlist with no limit and
+    /// risks exhausting the ledger instruction budget on a large allowlist
+    /// (issue #1926). It now delegates to the paginated getter with a hard cap
+    /// of [`MAX_UNBOUNDED_TOKEN_RESULTS`] so legacy callers stay within budget;
+    /// any allowlist larger than the cap is silently truncated. New code
+    /// should page through the list directly.
     pub fn get_allowed_tokens(env: Env) -> Result<soroban_sdk::Vec<Address>, Error> {
-        Ok(Self::get_allowed_token_list(&env))
+        Ok(Self::get_allowed_tokens_paginated(
+            env,
+            0,
+            MAX_UNBOUNDED_TOKEN_RESULTS,
+        ))
     }
 
     /// Return a paginated slice of the allowlist.
@@ -988,11 +1011,58 @@ impl EscrowContract {
     }
 
     /// Returns all blacklisted token addresses.
+    ///
+    /// DEPRECATED: prefer `get_blacklist_paginated`. On a large blacklist this
+    /// unbounded accessor can exhaust the ledger instruction budget (issue
+    /// #1925); callers that may encounter a large list should page through it
+    /// instead.
     pub fn get_blacklist(env: Env) -> soroban_sdk::Vec<Address> {
-        env.storage()
+        Self::get_blacklist_list(&env)
+    }
+
+    /// Return a paginated slice of the blacklist.
+    ///
+    /// Mirrors the allowlist pagination signature ([`Self::get_allowed_tokens_paginated`]):
+    /// `offset` is the number of entries to skip and `limit` caps the page
+    /// size. An `offset` past the end returns an empty page and a `limit` of
+    /// `0` returns nothing. Use this instead of the unbounded
+    /// [`Self::get_blacklist`] when the blacklist may be large, so the read
+    /// stays within the ledger instruction budget (issue #1925).
+    pub fn get_blacklist_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Address> {
+        let all = Self::get_blacklist_list(&env);
+        let mut result = soroban_sdk::vec![&env];
+        let total = all.len();
+        let start = offset.min(total);
+        let end = (start.saturating_add(limit)).min(total);
+        for i in start..end {
+            result.push_back(all.get(i).unwrap());
+        }
+        result
+    }
+
+    /// Internal helper returning the full blacklist, extending its TTL on read
+    /// so a long-lived blacklist entry never silently expires. Shared by
+    /// [`Self::get_blacklist`] and [`Self::get_blacklist_paginated`] to keep a
+    /// single source of truth for the blacklist read (issue #1925).
+    fn get_blacklist_list(env: &Env) -> soroban_sdk::Vec<Address> {
+        if let Some(list) = env
+            .storage()
             .persistent()
             .get(&DataKey::BlacklistedTokens)
-            .unwrap_or_else(|| soroban_sdk::vec![&env])
+        {
+            env.storage().persistent().extend_ttl(
+                &DataKey::BlacklistedTokens,
+                MATCH_TTL_LEDGERS,
+                MATCH_TTL_LEDGERS,
+            );
+            list
+        } else {
+            soroban_sdk::vec![env]
+        }
     }
 
     /// Return a paginated slice of the blacklist.
@@ -3170,8 +3240,10 @@ impl EscrowContract {
     /// Update the heartbeat for a match — player only.
     ///
     /// Alias for `heartbeat_match` with the parameter order specified in issue #1343.
+    /// Both entrypoints are thin wrappers over the single internal
+    /// [`Self::apply_heartbeat`] implementation so they cannot drift (issue #1927).
     pub fn update_heartbeat(env: Env, match_id: u64, caller: Address) -> Result<(), Error> {
-        Self::heartbeat_match(env, match_id, caller)
+        Self::apply_heartbeat(&env, match_id, &caller)
     }
 
     // ── Heartbeat (refreshes `last_heartbeat` to keep the rollback window alive) ──
@@ -3204,7 +3276,15 @@ impl EscrowContract {
     ///   last_heartbeat)` so off-chain indexers / front-ends can observe the
     ///   rolling window without having to re-read the full match state.
     pub fn heartbeat_match(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
-        extend_instance_ttl(&env);
+        Self::apply_heartbeat(&env, match_id, &player)
+    }
+
+    /// Single internal implementation of the match heartbeat refresh, shared by
+    /// the [`Self::update_heartbeat`] and [`Self::heartbeat_match`] public
+    /// entrypoints (issue #1927). Keeping the liveness update in one place
+    /// prevents the two entrypoints from drifting apart in behaviour.
+    fn apply_heartbeat(env: &Env, match_id: u64, player: &Address) -> Result<(), Error> {
+        extend_instance_ttl(env);
 
         player.require_auth();
 
@@ -3216,8 +3296,8 @@ impl EscrowContract {
 
         // Player-only access. Either side may invoke; signalling intent that
         // the game is still progressing counts equally from either party.
-        let is_p1 = player == m.player1;
-        let is_p2 = player == m.player2;
+        let is_p1 = *player == m.player1;
+        let is_p2 = *player == m.player2;
         if !is_p1 && !is_p2 {
             // Intentionally no extend_ttl / storage touch on rejection: an
             // unauthorized caller must not be able to indefinitely keep a
@@ -3252,8 +3332,8 @@ impl EscrowContract {
         );
 
         env.events().publish(
-            (Symbol::new(&env, "match"), symbol_short!("heartbeat")),
-            (match_id, player, now),
+            (Symbol::new(env, "match"), symbol_short!("heartbeat")),
+            (match_id, player.clone(), now),
         );
 
         Ok(())
@@ -3825,6 +3905,15 @@ impl EscrowContract {
         admin.require_auth();
 
         if !(MIN_MATCH_TIMEOUT_SECONDS..=MAX_MATCH_TIMEOUT_SECONDS).contains(&seconds) {
+            return Err(Error::InvalidTimeout);
+        }
+
+        // A timeout shorter than the minimum heartbeat interval is inconsistent
+        // with the heartbeat/rollback window: the match could expire before a
+        // player's liveness window has even elapsed. Reject it even when the
+        // value falls inside the generic [MIN, MAX] range above, so the two
+        // bounds cannot drift independently (issue #1928).
+        if seconds < MIN_HEARTBEAT_INTERVAL_SECONDS {
             return Err(Error::InvalidTimeout);
         }
 
