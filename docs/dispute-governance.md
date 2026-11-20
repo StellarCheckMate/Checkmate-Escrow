@@ -77,23 +77,45 @@ For voter to be eligible:
 - Resolution fails if `total_votes < quorum_threshold`
 - Explicit error: `QuorumNotMet` (not silent upheld)
 
+**Where it is configured**:
+
+| Parameter | Storage key | Default | Setter | Getter |
+|---|---|---|---|---|
+| `QuorumBasisPoints` | `DataKey::QuorumBasisPoints` (Instance scope) | **2000** (20%) | `set_quorum_basis_points(basis_points: u32)` — admin only | `get_quorum_basis_points() -> u32` |
+
+The default of 2000 means at least **20%** of the total dispute snapshot weight must
+participate before `resolve_dispute_by_vote` can finalize the outcome. This is encoded
+as basis points so the admin can tune it without a contract upgrade:
+
+```
+quorum_threshold = snapshot_total_weight * quorum_basis_points / 10_000
+```
+
+**Passing vs. failing vote examples**:
+
+```
+Scenario: snapshot_total_weight = 1000 tokens
+          quorum_basis_points    = 2000 (20%)
+          quorum_threshold       = 1000 * 2000 / 10_000 = 200 tokens
+
+─── FAILING votes (QuorumNotMet — resolve_dispute_by_vote returns error) ───────
+
+  50 yes,  50 no  → total =  100 < 200  ❌  QuorumNotMet
+ 120 yes,   0 no  → total =  120 < 200  ❌  QuorumNotMet
+ 199 yes,   0 no  → total =  199 < 200  ❌  QuorumNotMet
+
+─── PASSING votes (quorum met — outcome determined by yes vs. no) ──────────────
+
+ 120 yes,  80 no  → total =  200 ≥ 200  ✓  Overturned  (yes > no)
+ 100 yes, 100 no  → total =  200 ≥ 200  ✓  Upheld      (no ≥ yes → original result stands)
+  90 yes, 110 no  → total =  200 ≥ 200  ✓  Upheld
+ 200 yes,   0 no  → total =  200 ≥ 200  ✓  Overturned
+```
+
 **Parameters**:
 - `QuorumBasisPoints`: Admin-configurable, default = 2000 (20%)
 - Setter: `set_quorum_basis_points(basis_points: u32)`
 - Getter: `get_quorum_basis_points() -> u32`
-
-**Example**:
-```
-Snapshot total weight: 1000 tokens
-Quorum basis points: 2000 (20%)
-Quorum threshold: 1000 * 2000 / 10_000 = 200 tokens
-
-Resolution outcomes:
-- 50 votes yes, 50 votes no (total 100): QuorumNotMet → pending
-- 120 votes yes, 0 votes no (total 120): QuorumNotMet → pending
-- 120 votes yes, 80 votes no (total 200): Quorum met, yes > no → Overturned
-- 90 votes yes, 110 votes no (total 200): Quorum met, no >= yes → Upheld
-```
 
 ### 4. Automatic Oracle Slashing Signal
 
