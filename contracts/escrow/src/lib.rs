@@ -4847,6 +4847,19 @@ impl EscrowContract {
             return Err(Error::AlreadyVoted);
         }
 
+        // Exclude the disputed oracle from voting on its own result (#1911).
+        // The oracle whose result is being disputed is stored under
+        // `DisputeOracle(dispute_id)` at dispute-creation time.
+        if let Some(disputed_oracle) = env
+            .storage()
+            .persistent()
+            .get::<_, Address>(&DataKey::DisputeOracle(dispute_id))
+        {
+            if voter == disputed_oracle {
+                return Err(Error::Unauthorized);
+            }
+        }
+
         let m: Match = env
             .storage()
             .persistent()
