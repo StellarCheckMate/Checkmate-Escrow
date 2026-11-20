@@ -108,7 +108,7 @@ fn test_all_creation_variants_share_validation_rules() {
         for invalid_case in invalid_cases {
             let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
             let client = EscrowContractClient::new(&env, &contract_id);
-            client.register_bracket(&admin, &1, &admin);
+            client.register_bracket(&admin, &1, &admin, &soroban_sdk::vec![&env]);
 
             let mut stake = 100;
             let mut game_id = String::from_str(&env, "abcd1234");
@@ -177,7 +177,7 @@ fn test_all_creation_variants_share_validation_rules() {
 fn test_tournament_registration_and_round_persistence() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.register_bracket(&admin, &9, &admin);
+    client.register_bracket(&admin, &9, &admin, &soroban_sdk::vec![&env]);
 
     let match_id = client.create_match_tournament(
         &9,
@@ -199,8 +199,8 @@ fn test_tournament_registration_and_round_persistence() {
 fn test_bracket_match_index_filters_many_matches_by_bracket() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.register_bracket(&admin, &9, &admin);
-    client.register_bracket(&admin, &10, &admin);
+    client.register_bracket(&admin, &9, &admin, &soroban_sdk::vec![&env]);
+    client.register_bracket(&admin, &10, &admin, &soroban_sdk::vec![&env]);
 
     for index in 0..20 {
         let bracket_id = if index % 2 == 0 { 9 } else { 10 };
@@ -250,7 +250,7 @@ fn test_tournament_match_requires_registered_bracket() {
 fn test_tournament_match_requires_organizer_authorization() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.register_bracket(&admin, &9, &admin);
+    client.register_bracket(&admin, &9, &admin, &soroban_sdk::vec![&env]);
     let game_id = String::from_str(&env, "auth1234");
     env.mock_auths(&[MockAuth {
         address: &player1,
@@ -549,7 +549,7 @@ fn test_create_match_tournament_with_frozen_player_rejected() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.register_bracket(&admin, &7, &admin);
+    client.register_bracket(&admin, &7, &admin, &soroban_sdk::vec![&env]);
     client.admin_freeze_player(&player1, &String::from_str(&env, "frozen"));
 
     let result = client.try_create_match_tournament(

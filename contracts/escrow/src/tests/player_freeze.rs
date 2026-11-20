@@ -246,7 +246,7 @@ fn test_create_match_tournament_rejects_frozen_player1() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.register_bracket(&admin, &1, &admin);
+    client.register_bracket(&admin, &1, &admin, &soroban_sdk::vec![&env]);
     client.admin_freeze_player(&player1, &reason(&env, "cheating"));
 
     let result = client.try_create_match_tournament(
@@ -267,7 +267,7 @@ fn test_create_match_tournament_rejects_frozen_player2() {
     let (env, contract_id, _oracle, player1, player2, token, admin) = setup();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.register_bracket(&admin, &1, &admin);
+    client.register_bracket(&admin, &1, &admin, &soroban_sdk::vec![&env]);
     client.admin_freeze_player(&player2, &reason(&env, "cheating"));
 
     let result = client.try_create_match_tournament(

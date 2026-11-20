@@ -405,6 +405,9 @@ pub enum MatchIndexKey {
 #[contracttype]
 pub enum BracketKey {
     Organizer(u64),
+    /// Registered player list for a bracket. Stored as `Vec<Address>` and
+    /// validated at registration time to contain only pairwise-distinct entries.
+    Players(u64),
 }
 
 /// Storage keys for multi-oracle consensus deadlock tracking.

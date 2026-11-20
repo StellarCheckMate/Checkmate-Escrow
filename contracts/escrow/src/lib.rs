@@ -333,6 +333,14 @@ impl EscrowContract {
     }
 
     /// Update the protocol configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidAddress`] when `fee_recipient` or `treasury`
+    /// equal the contract's own address.  Also returns `InvalidAddress` when
+    /// `fee_recipient` matches the oracle address: routing collected fees to
+    /// the oracle account is almost certainly a misconfiguration and would
+    /// expose the oracle operator to unintended custody of protocol funds.
     pub fn set_protocol_config(env: Env, config: ProtocolConfig) -> Result<(), Error> {
         extend_instance_ttl(&env);
         let admin: Address = env
@@ -387,6 +395,20 @@ impl EscrowContract {
             return Err(Error::InvalidAddress);
         }
         if config.fees.fee_recipient == contract_address {
+            return Err(Error::InvalidAddress);
+        }
+
+        // Reject a fee_recipient that equals the oracle address. The oracle is
+        // an operational key pair managed by the oracle service and should never
+        // double as a fee treasury. Accepting it here would silently route all
+        // protocol fees to the oracle operator, which is a misconfiguration that
+        // could go unnoticed until a large volume of fees accumulates.
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::Unauthorized)?;
+        if config.fees.fee_recipient == oracle {
             return Err(Error::InvalidAddress);
         }
 
@@ -490,6 +512,13 @@ impl EscrowContract {
     /// and `token_b` fields (set via `create_match_with_conversion`).
     ///
     /// Pass `None` to clear the preference and revert to the match stake token.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TokenNotAllowed`] when `token_address` is on the
+    /// blacklist or when the allowlist is enforced and the token is not on it.
+    /// A blacklisted or disallowed token cannot be pinned as a preferred payout
+    /// token because the contract would refuse to pay out in it anyway.
     pub fn set_preferred_payout_token(
         env: Env,
         player: Address,
@@ -501,6 +530,35 @@ impl EscrowContract {
         let key = DataKey::PlayerPreferredToken(player);
         match token_address {
             Some(addr) => {
+                // Reject tokens that are blacklisted.
+                if Self::is_token_blacklisted(env.clone(), addr.clone()) {
+                    return Err(Error::TokenNotAllowed);
+                }
+
+                // Reject tokens not on the allowlist when the allowlist is enforced.
+                let allowlist_enforced: bool = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::AllowlistEnforced)
+                    .unwrap_or(false);
+                if allowlist_enforced && !Self::is_token_allowed(env.clone(), addr.clone()) {
+                    return Err(Error::TokenNotAllowed);
+                }
+
+                // Reject tokens that do not pass the stablecoin check when
+                // stablecoin-only mode is active.
+                let config_opt: Option<ProtocolConfig> = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::ProtocolConfig);
+                if let Some(ref cfg) = config_opt {
+                    if cfg.stakes.stablecoin_only_mode
+                        && !Self::check_is_stablecoin(&env, &addr)
+                    {
+                        return Err(Error::TokenNotAllowed);
+                    }
+                }
+
                 env.storage().persistent().set(&key, &addr);
                 env.storage()
                     .persistent()
@@ -1661,11 +1719,22 @@ impl EscrowContract {
     }
 
     /// Register a bracket and its organiser. Only the admin may register IDs.
+    ///
+    /// `players` is the list of participants assigned to this bracket. All
+    /// entries must be pairwise distinct — a single address may not occupy
+    /// more than one slot, because that would allow one player to both sides
+    /// of a match and collect the payout regardless of the outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidPlayers`] when `players` contains a duplicate
+    /// address.
     pub fn register_bracket(
         env: Env,
         admin: Address,
         bracket_id: u64,
         organizer: Address,
+        players: soroban_sdk::Vec<Address>,
     ) -> Result<(), Error> {
         extend_instance_ttl(&env);
         admin.require_auth();
@@ -1678,6 +1747,18 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
+        // Validate that all players are pairwise distinct. An O(n²) scan is
+        // acceptable because tournament brackets have a bounded, small number
+        // of participants (typically 2–64), so the total comparisons are low.
+        let n = players.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if players.get(i).unwrap() == players.get(j).unwrap() {
+                    return Err(Error::InvalidPlayers);
+                }
+            }
+        }
+
         let key = BracketKey::Organizer(bracket_id);
         if env.storage().persistent().has(&key) {
             return Err(Error::AlreadyExists);
@@ -1686,6 +1767,14 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .extend_ttl(&key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
+        // Persist the player list so bracket queries can enumerate participants.
+        let players_key = BracketKey::Players(bracket_id);
+        env.storage().persistent().set(&players_key, &players);
+        env.storage()
+            .persistent()
+            .extend_ttl(&players_key, MATCH_TTL_LEDGERS, MATCH_TTL_LEDGERS);
+
         env.events().publish(
             (Symbol::new(&env, "match"), Symbol::new(&env, "bracket_registered")),
             (bracket_id, organizer),

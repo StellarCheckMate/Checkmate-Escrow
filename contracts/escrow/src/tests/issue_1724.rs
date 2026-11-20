@@ -74,7 +74,7 @@ fn test_1724_create_match_tournament_rejects_same_player() {
     let client = EscrowContractClient::new(&env, &contract_id);
 
     // Register a bracket so the tournament call does not fail on bracket auth.
-    client.register_bracket(&admin, &1, &admin);
+    client.register_bracket(&admin, &1, &admin, &soroban_sdk::vec![&env]);
 
     let result = client.try_create_match_tournament(
         &player1,
