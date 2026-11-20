@@ -45,10 +45,10 @@ use soroban_sdk::{
 };
 use types::{
     BalanceAtTimestamp, BalanceSnapshot, BracketKey, DataKey, Dispute, DisputeBondTier,
-    DisputeState, FeeTier, Match, MatchState, OracleRotationState, PendingAdminProposal,
-    PendingOracleRotation, Platform, PlatformStats, PlayerBalanceSnapshot, PlayerFreezeKey,
-    PlayerRating, PlayerRatingKey, PlayerStats, PlayerTier, ProtocolConfig, SnapshotReason,
-    TempOracleRotation, TokenSymbolCacheKey, UpgradeKey, Winner,
+    DisputeState, FeeTier, Match, MatchIndexKey, MatchState, OracleHistoryKey, OracleRotationEntry,
+    OracleRotationState, PendingAdminProposal, PendingOracleRotation, Platform, PlatformStats,
+    PlayerBalanceSnapshot, PlayerFreezeKey, PlayerRating, PlayerRatingKey, PlayerStats, PlayerTier,
+    ProtocolConfig, SnapshotReason, TempOracleRotation, TokenSymbolCacheKey, UpgradeKey, Winner,
 };
 
 /// ~30 days at 5s/ledger. Used as the default TTL and expiration threshold.
@@ -3410,6 +3410,29 @@ impl EscrowContract {
         }
     }
 
+    /// Append a rotation entry to the persistent rotation history log.
+    fn record_oracle_rotation(env: &Env, old_oracle: Address, new_oracle: Address, kind: String) {
+        let mut history: soroban_sdk::Vec<OracleRotationEntry> = env
+            .storage()
+            .persistent()
+            .get(&OracleHistoryKey::RotationHistory)
+            .unwrap_or_else(|| soroban_sdk::vec![env]);
+        history.push_back(OracleRotationEntry {
+            old_oracle,
+            new_oracle,
+            timestamp: env.ledger().timestamp(),
+            kind,
+        });
+        env.storage()
+            .persistent()
+            .set(&OracleHistoryKey::RotationHistory, &history);
+        env.storage().persistent().extend_ttl(
+            &OracleHistoryKey::RotationHistory,
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+    }
+
     fn effective_oracle(env: &Env) -> Result<Address, Error> {
         let base_oracle: Address = env
             .storage()
@@ -5754,6 +5777,12 @@ impl EscrowContract {
         rotation_state.set_temp(None);
         rotation_state.set_pending(None);
         Self::save_rotation_state(&env, rotation_state);
+        Self::record_oracle_rotation(
+            &env,
+            old_oracle.clone(),
+            new_oracle.clone(),
+            String::from_str(&env, "direct"),
+        );
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
             (old_oracle, new_oracle),
@@ -5810,6 +5839,12 @@ impl EscrowContract {
         rotation_state.set_temp(Some(temp));
         Self::save_rotation_state(&env, rotation_state);
 
+        Self::record_oracle_rotation(
+            &env,
+            old_oracle.clone(),
+            new_oracle.clone(),
+            String::from_str(&env, "temporary"),
+        );
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("rot_temp")),
             (old_oracle, new_oracle, duration_seconds),
@@ -5936,6 +5971,12 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Oracle, &new_oracle);
         env.storage().instance().remove(&DataKey::OracleRotation);
 
+        Self::record_oracle_rotation(
+            &env,
+            old_oracle.clone(),
+            new_oracle.clone(),
+            String::from_str(&env, "permanent"),
+        );
         env.events().publish(
             (Symbol::new(&env, "admin"), symbol_short!("oracle_up")),
             (old_oracle, new_oracle),
@@ -7159,6 +7200,75 @@ impl EscrowContract {
             .ok_or(Error::Overflow)?
             / 10_000;
         Ok(referral_fee)
+    }
+
+    // ── Issue #1941: get_total_escrowed ──────────────────────────────────────
+
+    /// Return the sum of funds currently locked across all non-terminal matches.
+    ///
+    /// Iterates the `Active`, `PendingResult`, and `Paused` match index entries
+    /// and accumulates `stake_amount * depositor_count` for each. Terminal
+    /// matches (`Completed`, `Cancelled`) have already paid out and contribute
+    /// nothing.
+    ///
+    /// This view is intended for dashboards and risk monitoring.
+    pub fn get_total_escrowed(env: Env) -> Result<i128, Error> {
+        extend_instance_ttl(&env);
+        let mut total: i128 = 0;
+        for state in [MatchState::Active, MatchState::PendingResult, MatchState::Paused] {
+            let ids: soroban_sdk::Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&MatchIndexKey::MatchesByState(state))
+                .unwrap_or_else(|| soroban_sdk::vec![&env]);
+            for match_id in ids.iter() {
+                if let Some(m) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, Match>(&DataKey::Match(match_id))
+                {
+                    total = total
+                        .checked_add(Self::escrow_balance_of(&m))
+                        .ok_or(Error::Overflow)?;
+                }
+            }
+        }
+        Ok(total)
+    }
+
+    // ── Issue #1942: get_match_dispute ──────────────────────────────────────
+
+    /// Return the open dispute for a given match, if one exists.
+    ///
+    /// Returns `None` when no dispute has ever been raised for `match_id`.
+    /// This is a convenience wrapper over `get_dispute_by_match` using the
+    /// same underlying storage, introduced to avoid requiring callers to list
+    /// all disputes and filter client-side.
+    pub fn get_match_dispute(env: Env, match_id: u64) -> Option<Dispute> {
+        let dispute_id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::MatchDispute(match_id))?;
+        env.storage()
+            .persistent()
+            .get(&DataKey::Dispute(dispute_id))
+    }
+
+    // ── Issue #1944: get_oracle_rotation_history ────────────────────────────
+
+    /// Return past oracle rotation entries, oldest first.
+    ///
+    /// Each entry records the `old_oracle`, `new_oracle`, ledger `timestamp`,
+    /// and rotation `kind` (`"direct"`, `"temporary"`, or `"permanent"`).
+    /// Returns an empty `Vec` when no rotations have been performed.
+    pub fn get_oracle_rotation_history(
+        env: Env,
+    ) -> soroban_sdk::Vec<OracleRotationEntry> {
+        extend_instance_ttl(&env);
+        env.storage()
+            .persistent()
+            .get(&OracleHistoryKey::RotationHistory)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
     }
 
     /// Compute the protocol fee to deduct from a winner's payout.
