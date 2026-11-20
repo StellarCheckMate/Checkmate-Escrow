@@ -1226,27 +1226,15 @@ impl EscrowContract {
     /// number of entries returned and is silently clamped to 100 to bound the
     /// response size. This prevents unbounded reads from the frozen-player
     /// vector as the list grows.
+    ///
+    /// # Deprecation
+    ///
+    /// **Deprecated** — use [`Self::admin_list_frozen_players`] instead.
+    /// This unauthenticated variant duplicates the paginated accessor and
+    /// will be removed in a future release. It is retained only for
+    /// backwards compatibility with existing off-chain tooling.
     pub fn get_frozen_players(env: Env, offset: u32, limit: u32) -> soroban_sdk::Vec<Address> {
-        extend_instance_ttl(&env);
-        let all: soroban_sdk::Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&PlayerFreezeKey::FrozenPlayers)
-            .unwrap_or_else(|| soroban_sdk::vec![&env]);
-
-        let capped_limit = if limit > 100 { 100 } else { limit };
-        let mut result = soroban_sdk::vec![&env];
-        let mut count: u32 = 0;
-        for player in all.iter() {
-            if count >= offset + capped_limit {
-                break;
-            }
-            if count >= offset {
-                result.push_back(player);
-            }
-            count += 1;
-        }
-        result
+        Self::frozen_players_page(&env, offset, limit)
     }
 
     /// Lists currently frozen players with pagination — admin only.
@@ -1271,14 +1259,24 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
+        Ok(Self::frozen_players_page(&env, offset, limit))
+    }
+
+    /// Shared pagination helper for frozen-player list reads.
+    ///
+    /// Both [`Self::get_frozen_players`] (deprecated) and
+    /// [`Self::admin_list_frozen_players`] delegate here so the pagination
+    /// logic lives in exactly one place.
+    fn frozen_players_page(env: &Env, offset: u32, limit: u32) -> soroban_sdk::Vec<Address> {
+        extend_instance_ttl(env);
         let all: soroban_sdk::Vec<Address> = env
             .storage()
             .persistent()
             .get(&PlayerFreezeKey::FrozenPlayers)
-            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+            .unwrap_or_else(|| soroban_sdk::vec![env]);
 
         let capped_limit = if limit > 100 { 100 } else { limit };
-        let mut result = soroban_sdk::vec![&env];
+        let mut result = soroban_sdk::vec![env];
         let mut count: u32 = 0;
         for player in all.iter() {
             if count >= offset + capped_limit {
@@ -1289,7 +1287,7 @@ impl EscrowContract {
             }
             count += 1;
         }
-        Ok(result)
+        result
     }
 
     /// Returns the total count of currently frozen players.
@@ -1413,6 +1411,12 @@ impl EscrowContract {
 
     /// Internal helper — resolves the basis-point rate for `stake_amount` and
     /// computes the fee.
+    ///
+    /// Stakes at or below zero are treated as if they equal the first tier's
+    /// upper bound: they resolve to the lowest tier's fee rather than
+    /// producing a confusing zero or error result.  Any stake that exceeds
+    /// every explicit `max_stake` threshold continues to fall through to the
+    /// last (highest) tier.
     fn compute_tiered_fee(env: &Env, stake_amount: i128) -> Result<i128, Error> {
         let tiers: soroban_sdk::Vec<FeeTier> = env
             .storage()
@@ -1424,11 +1428,21 @@ impl EscrowContract {
             return Ok(0);
         }
 
-        // Find the first tier whose max_stake >= stake_amount.
+        // Stakes below the first tier's lower bound (i.e. any non-positive
+        // value) default to the lowest tier's fee rather than erroring.
+        let effective_stake = if stake_amount <= 0 {
+            // Use the first tier's max_stake as the effective value so the
+            // loop resolves to the first tier immediately.
+            tiers.get(0).map(|t| t.max_stake).unwrap_or(1)
+        } else {
+            stake_amount
+        };
+
+        // Find the first tier whose max_stake >= effective_stake.
         let mut selected_bps: u32 = 0;
         let mut found = false;
         for tier in tiers.iter() {
-            if stake_amount <= tier.max_stake {
+            if effective_stake <= tier.max_stake {
                 selected_bps = tier.fee_basis_points;
                 found = true;
                 break;
@@ -2755,7 +2769,7 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("paused")),
-            match_id,
+            (match_id, caller),
         );
 
         Ok(())
@@ -2805,7 +2819,7 @@ impl EscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "match"), symbol_short!("resumed")),
-            match_id,
+            (match_id, caller),
         );
 
         Ok(())
