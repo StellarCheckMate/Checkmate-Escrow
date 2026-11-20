@@ -37,6 +37,8 @@ async fn test_contract_health_check_with_valid_contract() {
         mock_server.uri(),
         "Test SDF Network ; September 2015".to_string(),
         "CCJMDYMB4O3WJW5QCECQEQFPVYXD3MZRXZWQAVKQZVQXOYTM6WXHZ24P",
+        "CCJMDYMB4O3WJW5QCECQEQFPVYXD3MZRXZWQAVKQZVQXOYTM6WXHZ24P",
+        1_000_000,
     )
     .expect("should construct client");
 
@@ -68,6 +70,8 @@ async fn test_contract_health_check_with_empty_entries() {
         mock_server.uri(),
         "Test SDF Network ; September 2015".to_string(),
         "CCJMDYMB4O3WJW5QCECQEQFPVYXD3MZRXZWQAVKQZVQXOYTM6WXHZ24P",
+        "CCJMDYMB4O3WJW5QCECQEQFPVYXD3MZRXZWQAVKQZVQXOYTM6WXHZ24P",
+        1_000_000,
     )
     .expect("should construct client");
 
@@ -101,6 +105,8 @@ async fn test_contract_health_check_with_rpc_error() {
         mock_server.uri(),
         "Test SDF Network ; September 2015".to_string(),
         "CCJMDYMB4O3WJW5QCECQEQFPVYXD3MZRXZWQAVKQZVQXOYTM6WXHZ24P",
+        "CCJMDYMB4O3WJW5QCECQEQFPVYXD3MZRXZWQAVKQZVQXOYTM6WXHZ24P",
+        1_000_000,
     )
     .expect("should construct client");
 
@@ -134,6 +140,8 @@ async fn test_contract_health_check_builds_valid_ledger_key() {
         mock_server.uri(),
         "Test SDF Network ; September 2015".to_string(),
         "CCJMDYMB4O3WJW5QCECQEQFPVYXD3MZRXZWQAVKQZVQXOYTM6WXHZ24P",
+        "CCJMDYMB4O3WJW5QCECQEQFPVYXD3MZRXZWQAVKQZVQXOYTM6WXHZ24P",
+        1_000_000,
     )
     .expect("should construct client");
 

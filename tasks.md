@@ -1,59 +1,60 @@
-#1909 Security: create_match does not reject a players vector with duplicate addresses
+#1941 Enhancement: add a get_total_escrowed global view
 Repo Avatar
 StellarCheckMate/Checkmate-Escrow
-Category: Escrow Contract - Security
-Priority: Low
-Estimated Time: 20 minutes
-
-Description:
-create_match accepts a players vector and does not check for duplicate addresses, allowing a player to occupy both sides of a match (self-play).
-
-Tasks:
-
-Reject matches where the two players are the same address
-Add a test asserting duplicate players are rejected
-
-#1910 Security: dispute_oracle_result does not bound the number of disputes per match
-Repo Avatar
-StellarCheckMate/Checkmate-Escrow
-Category: Escrow Contract - Security
+Category: Escrow Contract - Enhancement
 Priority: Medium
 Estimated Time: 1 hour
 
 Description:
-dispute_oracle_result can be called repeatedly for the same match with no cap on open disputes, enabling a caller to grief the oracle and burn dispute-period budget.
+There is no global view of the total funds currently locked across all matches. A get_total_escrowed view would help dashboards and risk monitoring.
 
 Tasks:
 
-Enforce at most one open dispute per match (or a small bounded count)
-Add a test asserting a second open dispute is rejected
+Add get_total_escrowed() returning the sum of currently-locked funds
+Add a test asserting the total matches the sum of per-match escrow balances
 
-#1911 Security: vote_on_dispute does not exclude the disputed oracle from voting
+#1942 Enhancement: add a get_match_dispute view
 Repo Avatar
 StellarCheckMate/Checkmate-Escrow
-Category: Escrow Contract - Security
+Category: Escrow Contract - Enhancement
 Priority: Low
 Estimated Time: 20 minutes
 
 Description:
-vote_on_dispute does not prevent the oracle whose result is being disputed from casting a vote on its own outcome, biasing the resolution.
+There is no view returning the dispute (if any) for a given match_id; clients must list all disputes and filter. A get_match_dispute view would simplify dispute-aware UIs.
 
 Tasks:
 
-Exclude the disputed oracle/operator from voting on their own result
-Add a test asserting the disputed oracle cannot vote
+Add get_match_dispute(match_id) returning the open dispute or none
+Add a test asserting the view returns the expected dispute
 
-#1912 Security: dispute_and_rollback_match does not emit an event naming the rollback initiator
+#1943 Enhancement: emit match/paused and match/resumed events
 Repo Avatar
 StellarCheckMate/Checkmate-Escrow
-Category: Escrow Contract - Security
+Category: Escrow Contract - Enhancement
 Priority: Low
-Estimated Time: 15 minutes
+Estimated Time: 20 minutes
 
 Description:
-dispute_and_rollback_match rolls back a match without emitting an event naming who initiated the rollback, so rollbacks are not attributable for audit.
+The match lifecycle is not fully indexable because pause/resume transitions emit no events. Adding match/paused and match/resumed events would close the gap.
 
 Tasks:
 
-Emit a match/rollback event naming the caller
-Add a test asserting the event is emitted with the caller
+Emit the events on pause_match/resume_match
+Update docs/architecture.md events table
+Add tests asserting the events are emitted
+
+#1944 Enhancement: add a get_oracle_rotation_history view
+Repo Avatar
+StellarCheckMate/Checkmate-Escrow
+Category: Escrow Contract - Enhancement
+Priority: Medium
+Estimated Time: 1 hour
+
+Description:
+Oracle rotations are applied without a queryable history, so operators cannot audit past temporary rotations. A get_oracle_rotation_history view would expose past rotations.
+
+Tasks:
+
+Add get_oracle_rotation_history() returning past rotation entries
+Add a test asserting the view returns recorded rotations

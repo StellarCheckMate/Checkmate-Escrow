@@ -37,6 +37,8 @@
 //! (default: `./oracle-queue`).
 
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use oracle_service::submission_log::SubmissionLog;
 
@@ -175,7 +177,7 @@ async fn main() {
     let output_path = parse_output(&args);
     match output_path {
         Some(path) => {
-            if let Err(e) = std::fs::write(&path, &csv) {
+            if let Err(e) = write_csv_restricted(&path, &csv) {
                 eprintln!("Error writing to {}: {}", path, e);
                 std::process::exit(1);
             }
@@ -209,4 +211,56 @@ fn print_usage() {
          Environment variables:\n\
            ORACLE_QUEUE_DIR   directory containing queue/log files (default: ./oracle-queue)"
     );
+}
+
+/// Write `content` to `path` with restrictive (0600) file permissions.
+///
+/// On Unix the file is created with `mode 0600` so that only the owning
+/// user can read it.  On other platforms the file is created normally and
+/// the caller should take OS-appropriate steps to restrict access.
+fn write_csv_restricted(path: &str, content: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(content.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, content)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1968 — the output file must be created with mode 0600 so that
+    /// settlement data is not readable by other users on a shared host.
+    #[cfg(unix)]
+    #[test]
+    fn output_file_has_restrictive_permissions() {
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("test.csv");
+        let path_str = path.to_str().unwrap();
+
+        write_csv_restricted(path_str, "match_id,game_id\n1,abc\n")
+            .expect("write should succeed");
+
+        let meta = std::fs::metadata(path_str).expect("metadata");
+        // mode() returns the full mode bits; mask to the permission bits.
+        let perm_bits = meta.mode() & 0o777;
+        assert_eq!(
+            perm_bits, 0o600,
+            "expected file mode 0600, got {:o}",
+            perm_bits
+        );
+    }
 }

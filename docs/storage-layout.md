@@ -44,6 +44,8 @@ flowchart TD
         Allowlist["AllowedToken / AllowlistEnforced"]
         ConsensusCfg["ApprovedOracles / RequiredOracleConfirmations"]
         DisputeCfg["DisputePeriod / QuorumBasisPoints"]
+        Blacklist["BlacklistedToken(addr) / BlacklistedTokens"]
+        StablecoinReg["StablecoinIssuer(addr) / StablecoinIssuerCount"]
     end
 
     subgraph MatchData["Per-match data (Persistent)"]
@@ -155,12 +157,62 @@ Reading the diagram:
 
 | DataKey variant | Value type | Storage scope | TTL behaviour | Description |
 |---|---|---|---|---|
-| `AllowedToken(Address)` | `bool` | Instance | Bumped on every invocation | Presence flag for an allowlisted token address. |
+| `AllowedToken(Address)` | `bool` | Instance | Bumped on every invocation | Presence flag for an allowlisted token address. Set to `true` by `add_allowed_token`; removed by `remove_allowed_token`. |
 | `AllowedTokenCount` | `u32` | Instance | Bumped on every invocation | Total count of allowlisted tokens. Used to determine whether the allowlist is enforced. |
 | `AllowlistEnforced` | `bool` | Instance | Bumped on every invocation | `true` when at least one token has been added via `add_allowed_token`. New matches are restricted to listed tokens only. |
-| `AllowedTokens` | `Vec<Address>` | Instance | Bumped on every invocation | Cached list of all allowlisted token addresses (for enumeration). |
-| `BlacklistedToken(Address)` | `bool` | Instance | Bumped on every invocation | Presence flag for a token that is explicitly blocked from new matches. |
-| `BlacklistedTokens` | `Vec<Address>` | Instance | Bumped on every invocation | Cached list of all blacklisted token addresses. |
+| `AllowedTokens` | `Vec<Address>` | Persistent | Extended to `MATCH_TTL_LEDGERS` on write | Ordered list of all allowlisted token addresses. Used by `get_allowed_tokens` and `get_allowed_tokens_paginated` for enumeration. |
+
+### Token Blacklist
+
+The blacklist is a separate, higher-priority block list. A token that appears on the blacklist is **always** rejected in `create_match`, even when it is simultaneously on the allowlist. Blacklisted tokens cannot participate in any new match until explicitly removed by an admin.
+
+| DataKey variant | Value type | Storage scope | TTL behaviour | Description |
+|---|---|---|---|---|
+| `BlacklistedToken(Address)` | `String` (reason, ≤ 256 bytes) | Instance | Bumped on every invocation | Maps a blacklisted token address to the admin-supplied reason string. The key's presence is used by `is_token_blacklisted` for O(1) lookup. Set by `add_token_to_blacklist`; removed by `remove_token_from_blacklist`. |
+| `BlacklistedTokens` | `Vec<Address>` | Persistent | Extended to `MATCH_TTL_LEDGERS` on write | Ordered list of all currently blacklisted token addresses. Used by `get_blacklist` and `get_blacklist_paginated` for enumeration. Maintained in sync with `BlacklistedToken(Address)` entries. |
+
+**Value structure for `BlacklistedToken(Address)`**:
+
+```
+key:   DataKey::BlacklistedToken(token_address)
+value: soroban_sdk::String — UTF-8 reason text supplied by the admin, 1–256 bytes.
+                             Non-empty check is enforced at write time.
+```
+
+**Value structure for `BlacklistedTokens`**:
+
+```
+key:   DataKey::BlacklistedTokens
+value: Vec<Address> — append-only ordered list; entries are removed when
+                      remove_token_from_blacklist is called.
+                      Length mirrors the number of active BlacklistedToken entries.
+```
+
+### Stablecoin Issuer Registry
+
+When `stablecoin_only_mode` is enabled in `ProtocolConfig`, `create_match` rejects any token whose contract address is not registered via `add_stablecoin_issuer`. On Stellar, the SAC (Stellar Asset Contract) encodes the issuer account into the contract address, so registering the SAC address is equivalent to registering the issuer.
+
+| DataKey variant | Value type | Storage scope | TTL behaviour | Description |
+|---|---|---|---|---|
+| `StablecoinIssuer(Address)` | `bool` | Instance | Bumped on every invocation | Presence flag (`true`) for a registered stablecoin issuer/token address. Set by `add_stablecoin_issuer`; removed by `remove_stablecoin_issuer`. Used by `is_stablecoin` for O(1) lookup. |
+| `StablecoinIssuerCount` | `u32` | Instance | Bumped on every invocation | Running count of registered stablecoin issuers. Incremented on add, decremented on remove. |
+
+**Value structure for `StablecoinIssuer(Address)`**:
+
+```
+key:   DataKey::StablecoinIssuer(issuer_or_sac_address)
+value: bool — always `true` when present; absence means not registered.
+             The contract address is treated as the issuer identifier for SAC tokens.
+```
+
+**Relationship between allowlist and stablecoin registry**:
+
+```
+create_match token check order:
+  1. Blacklist check  — if BlacklistedToken(token) exists → reject (TokenNotAllowed)
+  2. Allowlist check  — if AllowlistEnforced AND AllowedToken(token) absent → reject (TokenNotAllowed)
+  3. Stablecoin check — if stablecoin_only_mode AND StablecoinIssuer(token) absent → reject (NotStablecoin)
+```
 
 ### Balance Snapshots
 
@@ -211,8 +263,6 @@ Reading the diagram:
 |---|---|---|---|---|
 | `FeeTiers` | `Vec<FeeTier>` | Instance | Bumped on every invocation | Ordered list of fee tier definitions used by `calculate_fee_by_tier`. |
 | `ReferralShareBasisPoints` | `u32` | Instance | Bumped on every invocation | Referral payout share in basis points. |
-| `StablecoinIssuer(Address)` | `bool` | Instance | Bumped on every invocation | Presence flag for a registered stablecoin issuer address. |
-| `StablecoinIssuerCount` | `u32` | Instance | Bumped on every invocation | Total count of registered stablecoin issuers. |
 | `PlayerPreferredToken(Address)` | `Address` | Persistent | Extended on write | Player's preferred token, set explicitly by the player for convenience on new match creation. |
 | `Stats` | `PlatformStats` | Instance | Bumped on every invocation | Platform-wide aggregated statistics: total matches created, total volume, total payouts. |
 
