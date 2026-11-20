@@ -266,6 +266,12 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
     let contract_escrow = require_env("CONTRACT_ESCROW")?;
     let contract_oracle = require_env("CONTRACT_ORACLE")?;
 
+    // Validate both contract addresses at config load time so a misconfigured
+    // address surfaces immediately with a clear ConfigError rather than an
+    // opaque RPC error on the first submission (#1965).
+    validate_contract_address("CONTRACT_ESCROW", &contract_escrow)?;
+    validate_contract_address("CONTRACT_ORACLE", &contract_oracle)?;
+
     // Decode the 32-byte signing key seed from hex and immediately wrap it in
     // Zeroizing to ensure it is scrubbed when dropped.
     let key_hex = require_env("ORACLE_SIGNING_KEY")?;
@@ -350,6 +356,19 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
 
 fn require_env(name: &'static str) -> Result<String, ConfigError> {
     std::env::var(name).map_err(|_| ConfigError::MissingVar(name))
+}
+
+/// Validate that `value` is a valid Soroban contract strkey (C-address).
+///
+/// Called at config load time (#1965) so a misconfigured address surfaces
+/// with a clear [`ConfigError`] rather than an opaque RPC error on the first
+/// submission.
+fn validate_contract_address(var: &'static str, value: &str) -> Result<(), ConfigError> {
+    stellar_strkey::Contract::from_string(value).map_err(|e| ConfigError::InvalidValue {
+        var,
+        reason: format!("invalid contract address '{}': {}", value, e),
+    })?;
+    Ok(())
 }
 
 fn parse_u64_env(name: &'static str, default: u64) -> Result<u64, ConfigError> {
@@ -505,5 +524,44 @@ mod tests {
         let v = parse_u32_env("ORACLE_MAX_FEE_STROOPS", 1_000_000).unwrap();
         assert_eq!(v, 5_000_000);
         std::env::remove_var("ORACLE_MAX_FEE_STROOPS");
+    }
+
+    // ── #1965: contract address validation at config load ─────────────────
+
+    #[test]
+    fn valid_contract_address_passes_validation() {
+        // A well-formed C-address must pass without error.
+        let result = validate_contract_address(
+            "CONTRACT_ESCROW",
+            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        );
+        assert!(result.is_ok(), "valid C-address should pass: {:?}", result);
+    }
+
+    #[test]
+    fn invalid_contract_address_rejected_with_typed_error() {
+        // A garbage string must produce a ConfigError::InvalidValue.
+        let err = validate_contract_address("CONTRACT_ESCROW", "not-a-valid-address")
+            .unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidValue { var: "CONTRACT_ESCROW", .. }),
+            "expected InvalidValue for CONTRACT_ESCROW, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn g_address_rejected_as_contract_address() {
+        // A G-address (account key) must not be accepted as a C-address.
+        let err = validate_contract_address(
+            "CONTRACT_ORACLE",
+            "GDZST3XVCDTUJ76ZAV2HA72KYYA4JJOBJZNJHXJ6O54BWCQVZQNK7HT",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ConfigError::InvalidValue { var: "CONTRACT_ORACLE", .. }),
+            "G-address must be rejected for CONTRACT_ORACLE: {:?}",
+            err
+        );
     }
 }

@@ -56,6 +56,8 @@ fn make_config(rpc_url: &str, queue_dir: &str) -> OracleConfig {
         dead_letter_max_entries: 0,
         max_fee_stroops: 1_000_000,
         http_addr: "127.0.0.1:0".to_string(),
+        metrics_auth_username: None,
+        metrics_auth_password: None,
     }
 }
 

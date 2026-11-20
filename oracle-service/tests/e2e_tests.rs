@@ -121,6 +121,10 @@ impl E2EConfig {
             queue_dir,
             reconciliation_interval_secs: 5,
             dead_letter_max_entries: 0,
+            max_fee_stroops: 1_000_000,
+            http_addr: "0.0.0.0:8000".to_string(),
+            metrics_auth_username: None,
+            metrics_auth_password: None,
         }
     }
 }
@@ -209,6 +213,7 @@ async fn e2e_soroban_client_constructs_from_testnet_config() {
         oracle_cfg.rpc_url.clone(),
         oracle_cfg.network_passphrase.clone(),
         &oracle_cfg.contract_escrow,
+        &oracle_cfg.contract_oracle,
         oracle_cfg.max_fee_stroops,
     );
     assert!(
