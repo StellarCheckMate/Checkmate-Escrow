@@ -162,6 +162,19 @@ const CHESS_COM_GAME_ID_MAX_LEN: u32 = 12;
 /// matches/tests; admins can raise it with `set_minimum_stake`.
 pub const DEFAULT_MINIMUM_STAKE: i128 = 1;
 
+/// Fixed scale factor for conversion rates: a rate is `token_b`-per-`token_a`
+/// multiplied by this factor, matching the oracle's fixed 7-decimal price
+/// convention (`1:1 == 10_000_000`).  Payouts divide by this constant to undo
+/// the scaling.
+pub const CONVERSION_RATE_SCALE: i128 = 10_000_000;
+
+/// Upper bound on a conversion rate's scale (#1915 fix).  The rate is scaled
+/// by `CONVERSION_RATE_SCALE` (1e7); a value above this bound indicates a
+/// misplaced decimal relative to the oracle's price scale and would shift a
+/// payout by orders of magnitude, so it is rejected at match creation before
+/// the oracle is consulted.  The bound allows token ratios up to ~1e8:1.
+pub const MAX_CONVERSION_RATE: i128 = 1_000_000_000_000_000;
+
 /// Completed-match thresholds for unlocking progressively higher stake bands.
 const SILVER_MIN_COMPLETED_MATCHES: u32 = 3;
 const GOLD_MIN_COMPLETED_MATCHES: u32 = 6;
@@ -1032,7 +1045,10 @@ impl EscrowContract {
                     Symbol::new(&env, "admin"),
                     Symbol::new(&env, "tok_unblacklist"),
                 ),
-                token,
+                // #1914 fix: name the caller (admin) alongside the removed
+                // token so blacklist removals carry an on-chain audit trail
+                // of who performed them, matching `add_token_to_blacklist`.
+                (token, admin),
             );
         }
         Ok(())
@@ -1385,8 +1401,14 @@ impl EscrowContract {
             .ok_or(Error::Unauthorized)?;
         admin.require_auth();
 
-        // Validate ordering: each tier's max_stake must be strictly greater
-        // than the previous tier's max_stake.
+        // #1913 fix: reject tiers whose stake ranges overlap.  Each tier covers
+        // the half-open stake range (prev_max, max_stake]; for the fee schedule
+        // to be unambiguous every stake amount must map to exactly one tier,
+        // which requires each tier's `max_stake` to be strictly greater than
+        // the previous tier's `max_stake`.  A non-ascending or duplicate
+        // `max_stake` makes two tiers' ranges overlap (or collapses one range
+        // to empty), making fee selection ambiguous, so the schedule is
+        // rejected.
         let mut prev_max: i128 = -1;
         for tier in tiers.iter() {
             if tier.max_stake <= prev_max {
@@ -1735,6 +1757,15 @@ impl EscrowContract {
         let conversion_rate_ledger = if let (Some(token_b), Some(rate)) =
             (&params.token_b, params.conversion_rate)
         {
+            // #1915 fix: validate the conversion-rate scale before consulting
+            // the oracle.  Rates are scaled by `CONVERSION_RATE_SCALE` (1e7) to
+            // match the oracle's fixed 7-decimal price convention; a rate above
+            // `MAX_CONVERSION_RATE` indicates a misplaced decimal that would
+            // shift the payout by orders of magnitude, so reject it up front.
+            if rate > MAX_CONVERSION_RATE {
+                return Err(Error::ConversionRateOutOfBounds);
+            }
+
             let oracle_address: Address = env
                 .storage()
                 .instance()
@@ -2267,6 +2298,61 @@ impl EscrowContract {
         }
 
         Self::settle_result(&env, match_id, winner, confidence)
+    }
+
+    /// Record a depositor's agreement to settle the match as a draw.
+    ///
+    /// `submit_draw` only settles once BOTH depositors have called this
+    /// function (#1916 fix), so a single party cannot force a draw payout.
+    /// The first caller only records their own agreement and returns
+    /// `Ok(())`; settlement happens on the later `submit_draw` call once the
+    /// oracle confirms the draw and both agreements are present.
+    ///
+    /// - `player` must `require_auth` and be `Match.player1` or
+    ///   `Match.player2`.
+    /// - The match must be `Active`; agreement is only meaningful while the
+    ///   game is still in progress.
+    pub fn agree_to_draw(env: Env, match_id: u64, player: Address) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        player.require_auth();
+
+        let mut m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+
+        let is_p1 = player == m.player1;
+        let is_p2 = player == m.player2;
+        if !is_p1 && !is_p2 {
+            return Err(Error::Unauthorized);
+        }
+
+        // Agreement is only meaningful while the match is still in progress.
+        if m.state != MatchState::Active {
+            return Err(Error::InvalidState);
+        }
+
+        if is_p1 {
+            m.draw_agreement_player1 = true;
+        } else {
+            m.draw_agreement_player2 = true;
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Match(match_id), &m);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Match(match_id),
+            MATCH_TTL_LEDGERS,
+            MATCH_TTL_LEDGERS,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "match"), symbol_short!("draw_vote")),
+            (match_id, player),
+        );
+        Ok(())
     }
 
     /// Submit a draw result — oracle only. This is a convenience wrapper

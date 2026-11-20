@@ -78,7 +78,10 @@ fn test_player_balance_snapshot_on_draw() {
     client.deposit(&match_id, &player1);
     client.deposit(&match_id, &player2);
 
-    client.submit_draw(&match_id, &oracle);
+    // #1916: both depositors must agree to the draw before it can settle.
+    client.agree_to_draw(&match_id, &player1);
+    client.agree_to_draw(&match_id, &player2);
+    client.submit_draw(&match_id, &oracle, &None);
 
     let player1_history = client.get_balance_snaps_paginated(&player1, &0, &100);
     assert!(

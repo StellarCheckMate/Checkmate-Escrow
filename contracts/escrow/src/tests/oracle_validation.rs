@@ -28,11 +28,15 @@ fn test_submit_result_with_valid_winner() {
 
 #[test]
 fn test_submit_result_with_draw() {
-    let (env, contract_id, oracle, _player1, _player2, _token, _admin, match_id) =
+    let (env, contract_id, oracle, player1, player2, _token, _admin, match_id) =
         setup_with_funded_match();
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_submit_draw(&match_id, &oracle);
+    // #1916: both depositors must agree to the draw before the oracle can
+    // submit it.
+    client.agree_to_draw(&match_id, &player1);
+    client.agree_to_draw(&match_id, &player2);
+    let result = client.try_submit_draw(&match_id, &oracle, &None);
     assert!(result.is_ok(), "oracle can submit draw result");
 }
 

@@ -200,6 +200,12 @@ pub struct Match {
     /// executes (#1517 fix: mutual-consent rollback).
     pub rollback_vote_player1: bool,
     pub rollback_vote_player2: bool,
+    /// Records which player has agreed to a draw via `agree_to_draw`.
+    /// `submit_draw` requires both flags to be set before it settles, so a
+    /// single party (or the oracle alone) cannot force a draw payout
+    /// (#1916 fix: mutual-consent draw settlement).
+    pub draw_agreement_player1: bool,
+    pub draw_agreement_player2: bool,
     /// Tournament round for bracket matches.
     pub round: Option<u32>,
     /// Optional per-match vesting duration override, in seconds, agreed upon
