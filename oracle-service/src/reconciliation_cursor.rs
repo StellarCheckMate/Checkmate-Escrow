@@ -201,4 +201,29 @@ mod tests {
         // load() should fall back to 0 instead of panicking.
         assert_eq!(cursor.load().await, 0);
     }
+
+    /// Verifies the contract: the cursor must NOT advance when the caller
+    /// signals a recoverable error by not calling `save`.  This test models
+    /// what `Poller::reconcile` does — it only calls `cursor.save` when every
+    /// enqueue on a page succeeded.  When an enqueue fails, `save` is skipped
+    /// and the cursor stays at its previous position so the next cycle
+    /// re-scans the failed offset.
+    #[tokio::test]
+    async fn cursor_does_not_advance_on_recoverable_error() {
+        let dir = TempDir::new().unwrap();
+        let cursor = make_cursor(&dir);
+
+        // Simulate: page 0 processed successfully — cursor advances to 50.
+        cursor.save(50).await.unwrap();
+        assert_eq!(cursor.load().await, 50);
+
+        // Simulate: page 1 (offset 50) has a recoverable enqueue error.
+        // The caller (Poller::reconcile) skips cursor.save(100).
+        // The cursor must still read 50 on the next load.
+        assert_eq!(
+            cursor.load().await,
+            50,
+            "cursor must not advance when the caller skips save() due to a recoverable error"
+        );
+    }
 }

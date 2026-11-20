@@ -483,6 +483,36 @@ pub enum UpgradeKey {
     ConfirmedBy,
 }
 
+/// A single entry in the oracle rotation history log.
+///
+/// Recorded whenever the oracle address changes via `update_oracle`,
+/// `rotate_oracle_temporary`, or `rotate_oracle_permanent`, so that operators
+/// can audit past rotations via `get_oracle_rotation_history`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct OracleRotationEntry {
+    /// The oracle address that was active before this rotation.
+    pub old_oracle: Address,
+    /// The oracle address installed by this rotation.
+    pub new_oracle: Address,
+    /// Ledger timestamp (`env.ledger().timestamp()`) at the time of rotation.
+    pub timestamp: u64,
+    /// Kind of rotation: `"permanent"`, `"temporary"`, or `"direct"`.
+    pub kind: String,
+}
+
+/// Storage keys for oracle rotation history.
+///
+/// Kept as a separate `#[contracttype]` enum rather than added to `DataKey`
+/// because `DataKey` is already at its 50-variant XDR cap.
+#[contracttype]
+pub enum OracleHistoryKey {
+    /// Persistent list of `OracleRotationEntry` values, oldest first.
+    RotationHistory,
+    /// Total number of rotation entries ever appended (monotonic counter).
+    RotationCount,
+}
+
 /// An oracle-verified ELO / platform rating for a player.
 ///
 /// Registered on-chain by the oracle via `register_player_rating` so that
