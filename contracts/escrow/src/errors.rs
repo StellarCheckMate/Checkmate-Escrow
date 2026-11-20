@@ -101,4 +101,8 @@ pub enum Error {
     /// before an admin can unilaterally recover funds.  This prevents a
     /// compromised admin key from immediately draining any active escrow.
     RecoveryTimelockNotElapsed = 59,
+    /// `submit_draw` was called before both depositors agreed to the draw via
+    /// `agree_to_draw`. A single party (or the oracle alone) cannot force a
+    /// draw payout (#1916 fix: mutual-consent draw settlement).
+    DrawAgreementRequired = 60,
 }
