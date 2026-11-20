@@ -87,13 +87,7 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 /// returned. When unset, the endpoint stays open for backward compatibility.
 async fn metrics_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(auth) = state.metrics_auth.as_ref() {
-        let authorized = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .map(|value| metrics::check_basic_auth(value, &auth.username, &auth.password))
-            .unwrap_or(false);
-
-        if !authorized {
+        if !metrics::check_basic_auth(&headers, &auth.username, &auth.password) {
             return (
                 StatusCode::UNAUTHORIZED,
                 [(header::WWW_AUTHENTICATE, "Basic realm=\"metrics\"")],
@@ -171,8 +165,9 @@ async fn main() {
     let http_addr = cfg.http_addr.clone();
 
     // ── Optional Basic Auth for /metrics ──────────────────────────────────
-    // Both vars must be set for auth to be enabled; a partial configuration
-    // is treated as disabled (with a warning) to avoid locking out scrapers.
+    // Both vars must be set for auth to be enabled.  In production (ORACLE_ENV=production)
+    // the config loader already rejects a partial or missing configuration, so
+    // we never reach here with credentials unset in that environment.
     let metrics_auth = match (
         cfg.metrics_auth_username.clone(),
         cfg.metrics_auth_password.clone(),
@@ -182,12 +177,23 @@ async fn main() {
             Some(Arc::new(MetricsAuth { username, password }))
         }
         (None, None) => {
-            info!("metrics endpoint authentication disabled");
+            if cfg.production {
+                // Should have been caught by config::load(), but be safe.
+                error!(
+                    "ORACLE_ENV=production requires METRICS_AUTH_USERNAME and \
+                     METRICS_AUTH_PASSWORD; refusing to start with /metrics unauthenticated"
+                );
+                std::process::exit(1);
+            }
+            warn!(
+                "metrics endpoint authentication is disabled; \
+                 set METRICS_AUTH_USERNAME and METRICS_AUTH_PASSWORD to protect /metrics"
+            );
             None
         }
         _ => {
             warn!(
-                "only one of ORACLE_METRICS_AUTH_USERNAME / ORACLE_METRICS_AUTH_PASSWORD is set; \
+                "only one of METRICS_AUTH_USERNAME / METRICS_AUTH_PASSWORD is set; \
                  metrics endpoint authentication disabled"
             );
             None

@@ -121,10 +121,15 @@ pub struct OracleConfig {
     /// Optional HTTP Basic Auth username for the `/metrics` endpoint.
     /// Loaded from `METRICS_AUTH_USERNAME`; empty strings are treated as unset.
     /// When both username and password are set, `/metrics` requires Basic Auth.
+    /// In production (`ORACLE_ENV=production`) both must be set or startup
+    /// fails: leaving `/metrics` unauthenticated in production is not allowed.
     pub metrics_auth_username: Option<String>,
     /// Optional HTTP Basic Auth password for the `/metrics` endpoint.
     /// Loaded from `METRICS_AUTH_PASSWORD`; empty strings are treated as unset.
     pub metrics_auth_password: Option<String>,
+    /// Whether the service is running in production mode.
+    /// Loaded from `ORACLE_ENV`; set to `production` to enforce stricter checks.
+    pub production: bool,
 }
 
 impl fmt::Debug for OracleConfig {
@@ -164,6 +169,7 @@ impl fmt::Debug for OracleConfig {
                 &self.metrics_auth_username.as_deref().map(|_| "<set>"),
             )
             .field("metrics_auth_password", &"<redacted>")
+            .field("production", &self.production)
             .finish()
     }
 }
@@ -276,6 +282,24 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
         .ok()
         .filter(|s| !s.is_empty());
 
+    let oracle_env = std::env::var("ORACLE_ENV").unwrap_or_default();
+    let production = oracle_env.eq_ignore_ascii_case("production");
+
+    // In production, the /metrics endpoint must be protected with credentials.
+    // A missing or partial configuration is a startup error rather than a
+    // silent fallback to unauthenticated access.
+    if production {
+        match (&metrics_auth_username, &metrics_auth_password) {
+            (None, _) | (_, None) => {
+                return Err(ConfigError::MissingVar(
+                    "METRICS_AUTH_USERNAME and METRICS_AUTH_PASSWORD must both be set in production \
+                     (ORACLE_ENV=production); refusing to expose /metrics unauthenticated",
+                ));
+            }
+            _ => {}
+        }
+    }
+
     Ok(OracleConfig {
         rpc_url,
         network_passphrase,
@@ -296,6 +320,7 @@ pub fn load() -> Result<OracleConfig, ConfigError> {
         http_addr,
         metrics_auth_username,
         metrics_auth_password,
+        production,
     })
 }
 

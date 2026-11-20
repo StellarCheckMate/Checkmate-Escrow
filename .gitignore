@@ -61,3 +61,6 @@ reports/
 # src/ with placeholder files), never a workspace member in Cargo.toml, and had
 # no tests or docs. It has been removed; ignore it so it isn't re-added.
 contracts/predict-iq/
+
+# Task tracking files — not part of the source tree
+tasks.md

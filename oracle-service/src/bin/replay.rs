@@ -7,11 +7,12 @@
 //!
 //! ```text
 //! oracle-replay --list                         # list all dead-letter entries
-//! oracle-replay --match-id <ID>                # replay a single match
-//! oracle-replay --all                          # replay all dead-letter entries
-//! oracle-replay --all --dry-run                # preview without writing
-//! oracle-replay --all --max-retries <N>        # re-enqueue only entries with total_attempts < N
-//! oracle-replay --match-id <ID> --dry-run      # preview single-match replay
+//! oracle-replay --match-id <ID>                # dry-run preview for a single match
+//! oracle-replay --match-id <ID> --confirm      # replay a single match (writes to queue)
+//! oracle-replay --all                          # dry-run preview for all entries
+//! oracle-replay --all --confirm                # replay all dead-letter entries (writes to queue)
+//! oracle-replay --all --max-retries <N>        # preview only entries with total_attempts < N
+//! oracle-replay --all --confirm --max-retries <N>  # re-enqueue only entries with total_attempts < N
 //! ```
 //!
 //! ## Flags
@@ -19,10 +20,13 @@
 //! | Flag                   | Description                                                         |
 //! |------------------------|---------------------------------------------------------------------|
 //! | `--list`               | Print a summary table of all dead-letter entries.                   |
-//! | `--all`                | Re-enqueue every entry in the dead-letter store.                    |
-//! | `--match-id <ID>`      | Re-enqueue a single entry by match ID.                              |
-//! | `--dry-run`            | Print what *would* happen without writing to the queue or removing  |
-//! |                        | entries from the dead-letter store.                                 |
+//! | `--all`                | Re-enqueue every entry in the dead-letter store (requires          |
+//! |                        | `--confirm` to actually write; without it, performs a dry-run).    |
+//! | `--match-id <ID>`      | Re-enqueue a single entry by match ID (requires `--confirm` to     |
+//! |                        | actually write; without it, performs a dry-run).                   |
+//! | `--confirm`            | Required to write any changes. Without this flag the tool logs     |
+//! |                        | what *would* happen but makes no changes.  This prevents a stray  |
+//! |                        | invocation from double-settling already-submitted matches.         |
 //! | `--max-retries <N>`    | Skip entries whose `total_attempts` is ≥ N (i.e. too many failed   |
 //! |                        | attempts to be worth replaying automatically).                      |
 //!
@@ -73,11 +77,17 @@ async fn main() {
     let store = DeadLetterStore::new(&dir, 0);
     let queue = PendingQueue::new(&dir);
 
-    let dry_run = args.iter().any(|a| a == "--dry-run");
+    // `--confirm` is required before any writes are made.  Without it the tool
+    // runs in dry-run mode regardless of other flags.  This prevents a stray
+    // invocation from double-settling matches that were already submitted.
+    let confirmed = args.iter().any(|a| a == "--confirm");
+    // Preserve backward-compat: an explicit `--dry-run` also activates dry-run
+    // mode (useful in scripts that build on top of this tool).
+    let dry_run = !confirmed || args.iter().any(|a| a == "--dry-run");
     let max_retries = parse_max_retries(&args);
 
     if dry_run {
-        println!("[dry-run] No changes will be written.");
+        println!("[dry-run] No changes will be written. Pass --confirm to submit.");
     }
 
     // ── --list ────────────────────────────────────────────────────────────
@@ -243,15 +253,16 @@ async fn main() {
          \n\
          Usage:\n\
          \n\
-         oracle-replay --list                         list dead-letter entries\n\
-         oracle-replay --match-id <ID>                re-enqueue a specific match\n\
-         oracle-replay --all                          re-enqueue all dead-letter entries\n\
-         oracle-replay --all --dry-run                preview without writing\n\
-         oracle-replay --all --max-retries <N>        skip entries with attempts >= N\n\
-         oracle-replay --match-id <ID> --dry-run      preview single-match replay\n\
+         oracle-replay --list                              list dead-letter entries\n\
+         oracle-replay --match-id <ID>                     preview re-enqueue for a specific match\n\
+         oracle-replay --match-id <ID> --confirm           re-enqueue a specific match (writes)\n\
+         oracle-replay --all                               preview re-enqueue for all entries\n\
+         oracle-replay --all --confirm                     re-enqueue all dead-letter entries (writes)\n\
+         oracle-replay --all --confirm --max-retries <N>   skip entries with attempts >= N\n\
          \n\
          Flags:\n\
-         --dry-run          print what would happen without writing any changes\n\
+         --confirm          required to write any changes (default is dry-run)\n\
+         --dry-run          explicit dry-run; equivalent to omitting --confirm\n\
          --max-retries <N>  skip entries whose total_attempts is >= N\n\
          \n\
          Environment variables:\n\

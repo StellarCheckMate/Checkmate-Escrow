@@ -380,6 +380,10 @@ impl Poller {
                 break;
             }
 
+            // Track whether any enqueue on this page returned a recoverable
+            // error so we can avoid advancing the cursor past a gap.
+            let mut page_had_enqueue_error = false;
+
             for m in page {
                 let has_result = self
                     .inner
@@ -439,6 +443,7 @@ impl Poller {
                             match_id = m.match_id,
                             "reconciliation failed to enqueue discovered match: {}", e
                         );
+                        page_had_enqueue_error = true;
                     }
                 }
             }
@@ -447,7 +452,18 @@ impl Poller {
 
             // Persist the cursor after each successfully processed page so a
             // restart can resume from here instead of offset 0.
-            if let Err(e) = self.inner.cursor.save(offset).await {
+            //
+            // We only advance the cursor when every enqueue on this page
+            // either succeeded or was a benign deduplicate (Ok(false)).  If
+            // any enqueue returned an Err the page had a gap; don't advance
+            // so the next cycle re-scans from this offset and fills it.
+            if page_had_enqueue_error {
+                warn!(
+                    offset,
+                    "reconciliation page had enqueue error(s); not advancing cursor so the \
+                     next cycle re-scans from this offset"
+                );
+            } else if let Err(e) = self.inner.cursor.save(offset).await {
                 // Non-fatal: log and continue — correctness is maintained because
                 // PendingQueue::enqueue is idempotent (already-queued matches are
                 // silently skipped on re-discovery).
