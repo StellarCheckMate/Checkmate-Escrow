@@ -168,6 +168,12 @@ impl fmt::Debug for OracleConfig {
     }
 }
 
+impl fmt::Display for OracleConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
 /// Errors that can occur while loading configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -458,5 +464,71 @@ mod tests {
         let v = parse_u32_env("ORACLE_MAX_FEE_STROOPS", 1_000_000).unwrap();
         assert_eq!(v, 5_000_000);
         std::env::remove_var("ORACLE_MAX_FEE_STROOPS");
+    }
+
+    #[test]
+    fn debug_and_display_redact_secrets() {
+        use zeroize::Zeroizing;
+
+        let cfg = OracleConfig {
+            rpc_url: "https://soroban-testnet.stellar.org".to_string(),
+            network_passphrase: "Test SDF Network ; September 2015".to_string(),
+            contract_escrow: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4".to_string(),
+            contract_oracle: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4".to_string(),
+            oracle_signing_key: Zeroizing::new([0u8; 32]),
+            oracle_address: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF".to_string(),
+            lichess_api_token: Some("lip_supersecrettoken".to_string()),
+            chessdotcom_api_key: Some("chesssecret999".to_string()),
+            poll_interval_secs: 30,
+            chessdotcom_poll_interval_secs: 60,
+            max_retries: 5,
+            retry_base_delay_secs: 10,
+            queue_dir: "./oracle-queue".to_string(),
+            reconciliation_interval_secs: 60,
+            dead_letter_max_entries: 1000,
+            max_fee_stroops: 1_000_000,
+            http_addr: "0.0.0.0:8000".to_string(),
+            metrics_auth_username: Some("prometheus".to_string()),
+            metrics_auth_password: Some("hunter2".to_string()),
+        };
+
+        let debug_output = format!("{:?}", cfg);
+        let display_output = format!("{}", cfg);
+
+        // Secret values must never appear in either format
+        assert!(
+            !debug_output.contains("lip_supersecrettoken"),
+            "lichess_api_token leaked in Debug: {debug_output}"
+        );
+        assert!(
+            !debug_output.contains("chesssecret999"),
+            "chessdotcom_api_key leaked in Debug: {debug_output}"
+        );
+        assert!(
+            !debug_output.contains("hunter2"),
+            "metrics_auth_password leaked in Debug: {debug_output}"
+        );
+        assert!(
+            !display_output.contains("lip_supersecrettoken"),
+            "lichess_api_token leaked in Display: {display_output}"
+        );
+        assert!(
+            !display_output.contains("chesssecret999"),
+            "chessdotcom_api_key leaked in Display: {display_output}"
+        );
+        assert!(
+            !display_output.contains("hunter2"),
+            "metrics_auth_password leaked in Display: {display_output}"
+        );
+
+        // Redaction markers must be present so we know the fields are shown as masked
+        assert!(
+            debug_output.contains("<redacted>"),
+            "expected '<redacted>' marker in Debug output"
+        );
+        assert!(
+            debug_output.contains("<set>"),
+            "expected '<set>' marker for optional secrets in Debug output"
+        );
     }
 }
