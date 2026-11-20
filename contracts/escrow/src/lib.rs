@@ -950,6 +950,37 @@ impl EscrowContract {
             .unwrap_or_else(|| soroban_sdk::vec![&env])
     }
 
+    /// Returns a paginated slice of the blacklist.
+    ///
+    /// `offset` — number of entries to skip (0-based).
+    /// `limit`  — maximum number of entries to return; silently clamped to 100
+    ///            to match the allowlist pagination signature and bound the
+    ///            response size.
+    ///
+    /// #1936: mirrors `get_allowed_tokens_paginated` so the blacklist is safe
+    /// to query at scale without unbounded reads.
+    pub fn get_blacklist_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Address> {
+        let all: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::BlacklistedTokens)
+            .unwrap_or_else(|| soroban_sdk::vec![&env]);
+
+        let capped_limit = if limit > 100 { 100 } else { limit };
+        let mut result = soroban_sdk::vec![&env];
+        let total = all.len();
+        let start = offset.min(total);
+        let end = (start.saturating_add(capped_limit)).min(total);
+        for i in start..end {
+            result.push_back(all.get(i).unwrap());
+        }
+        result
+    }
+
     // ── Player Freeze ────────────────────────────────────────────────────────
 
     /// Freeze a player — admin only.
@@ -2037,7 +2068,16 @@ impl EscrowContract {
             return Err(Error::Unauthorized);
         }
 
-        Self::settle_result(&env, match_id, Winner::Draw, confidence)
+        Self::settle_result(&env, match_id, Winner::Draw, confidence)?;
+
+        // #1933: emit a dedicated draw event so indexers don't have to infer
+        // draws from balance changes alone.
+        env.events().publish(
+            (Symbol::new(&env, "match"), Symbol::new(&env, "draw")),
+            (match_id, Winner::Draw),
+        );
+
+        Ok(())
     }
 
     /// Core result-settlement logic shared by `submit_result` and
@@ -3948,6 +3988,34 @@ impl EscrowContract {
         Ok(Self::depositor_count(&m) as u32)
     }
 
+    /// Return the depositor addresses for a match.
+    ///
+    /// Returns a `Vec` containing the address of each player who has deposited
+    /// their stake. The list is empty when no deposits have been made, holds
+    /// one address when only one player has deposited, and holds two addresses
+    /// (player1 first, player2 second) when both have deposited.
+    ///
+    /// #1935: lets wallet UIs query depositors directly instead of
+    /// reconstructing the list from events.
+    pub fn get_match_depositors(
+        env: Env,
+        match_id: u64,
+    ) -> Result<soroban_sdk::Vec<Address>, Error> {
+        let m: Match = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Match(match_id))
+            .ok_or(Error::MatchNotFound)?;
+        let mut depositors: soroban_sdk::Vec<Address> = soroban_sdk::vec![&env];
+        if m.player1_deposited {
+            depositors.push_back(m.player1.clone());
+        }
+        if m.player2_deposited {
+            depositors.push_back(m.player2.clone());
+        }
+        Ok(depositors)
+    }
+
     /// Return the total escrowed balance for a match (0, 1x, or 2x stake).
     pub fn get_escrow_balance(env: Env, match_id: u64) -> Result<i128, Error> {
         let m: Match = env
@@ -4741,6 +4809,56 @@ impl EscrowContract {
             .persistent()
             .get(&DataKey::MatchDispute(match_id))
             .ok_or(Error::DisputeNotFound)
+    }
+
+    /// Return a paginated list of open (Active) disputes.
+    ///
+    /// `offset` — number of open disputes to skip before collecting results.
+    /// `limit`  — maximum number of disputes to return; silently clamped to
+    ///            100 to bound the response size.
+    ///
+    /// Iterates the full dispute history once to find Active entries.  Callers
+    /// requiring a specific page should supply the `offset` / `limit` pair
+    /// rather than fetching everything and slicing off-chain.
+    ///
+    /// #1934: provides a dedicated view so indexers and dashboards can surface
+    /// open disputes without iterating all matches.
+    pub fn get_pending_disputes(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> soroban_sdk::Vec<Dispute> {
+        let total: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DisputeCount)
+            .unwrap_or(0);
+
+        let capped_limit = if limit > 100 { 100 } else { limit };
+        let mut result: soroban_sdk::Vec<Dispute> = soroban_sdk::vec![&env];
+        // Counts of Active disputes seen so far (for offset/limit accounting).
+        let mut active_seen: u32 = 0;
+
+        for dispute_id in 0..total {
+            let dispute: Option<Dispute> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Dispute(dispute_id));
+            if let Some(d) = dispute {
+                if d.state == DisputeState::Active {
+                    if active_seen >= offset && result.len() < capped_limit {
+                        result.push_back(d);
+                    }
+                    active_seen = active_seen.saturating_add(1);
+                    if active_seen >= offset.saturating_add(capped_limit)
+                        && result.len() >= capped_limit
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        result
     }
 
     /// Set the dispute bond requirement in basis points of match stake. Admin only.
