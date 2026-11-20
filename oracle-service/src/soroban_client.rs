@@ -57,6 +57,46 @@ pub struct SorobanClient {
     max_fee_stroops: u32,
 }
 
+// ── Retry-After parsing for HTTP 429 backoff (issue #1975) ────────────────────
+
+/// Parse an HTTP `Retry-After` header value into a wait duration.
+///
+/// Supports both forms defined by RFC 7231 / RFC 9110:
+/// - delta-seconds (a non-negative integer), e.g. `"120"`; and
+/// - an HTTP-date in RFC 2822 / IMF-fixdate form, e.g.
+///   `"Wed, 21 Oct 2015 07:28:00 GMT"`.
+///
+/// Returns `None` when the value is absent, empty, or cannot be parsed.  An
+/// HTTP-date in the past is treated as "retry now" and yields a zero wait.
+fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    // Delta-seconds form (the common case for rate limiting).
+    if let Ok(secs) = value.parse::<u64>() {
+        return Some(Duration::from_secs(secs));
+    }
+
+    // HTTP-date form: compute the remaining seconds to the absolute deadline.
+    if let Ok(date) = chrono::DateTime::parse_from_rfc2822(value) {
+        let delta_secs = date.timestamp() - chrono::Utc::now().timestamp();
+        return Some(Duration::from_secs(delta_secs.max(0) as u64));
+    }
+
+    None
+}
+
+/// Backoff to apply after an HTTP 429.
+///
+/// Uses the server's `Retry-After` header when it is present and parseable,
+/// otherwise falls back to `default`.  The result is capped at `cap` so a
+/// misbehaving server cannot stall the pipeline with an absurd delay.
+fn rpc_retry_backoff(header: Option<&str>, default: Duration, cap: Duration) -> Duration {
+    std::cmp::min(parse_retry_after(header).unwrap_or(default), cap)
+}
+
 impl SorobanClient {
     /// Construct a client from config values.
     ///
@@ -281,6 +321,17 @@ impl SorobanClient {
 
     // ── RPC helpers ───────────────────────────────────────────────────────────
 
+    /// Maximum number of times a JSON-RPC call is retried after an HTTP 429
+    /// before giving up.  The total number of attempts is `MAX_RPC_RETRIES + 1`.
+    const MAX_RPC_RETRIES: u32 = 3;
+
+    /// Backoff used when a 429 carries no usable `Retry-After` header.
+    const DEFAULT_RPC_BACKOFF: Duration = Duration::from_secs(5);
+
+    /// Upper bound on a single `Retry-After`-driven sleep, so a server that
+    /// asks us to wait an hour cannot stall the pipeline for that long.
+    const MAX_RPC_RETRY_AFTER: Duration = Duration::from_secs(60);
+
     async fn rpc_call(&self, method: &str, params: Value) -> Result<Value, OracleServiceError> {
         let body = json!({
             "jsonrpc": "2.0",
@@ -289,31 +340,68 @@ impl SorobanClient {
             "params": params,
         });
 
-        let resp = self
-            .http
-            .post(&self.rpc_url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| OracleServiceError::Transport(e.to_string()))?;
+        // Bounded retry loop for HTTP 429.  On a rate limit we back off for the
+        // server's `Retry-After` (parsed and capped) rather than a fixed delay,
+        // so we never retry sooner than the server asked us to (issue #1975).
+        let mut last_status = reqwest::StatusCode::TOO_MANY_REQUESTS;
+        for attempt in 0..=Self::MAX_RPC_RETRIES {
+            let resp = self
+                .http
+                .post(&self.rpc_url)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| OracleServiceError::Transport(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            return Err(OracleServiceError::RpcError(format!(
-                "HTTP {} from RPC",
-                resp.status()
-            )));
+            let status = resp.status();
+            last_status = status;
+
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                && attempt < Self::MAX_RPC_RETRIES
+            {
+                let backoff = rpc_retry_backoff(
+                    resp
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok()),
+                    Self::DEFAULT_RPC_BACKOFF,
+                    Self::MAX_RPC_RETRY_AFTER,
+                );
+                tracing::warn!(
+                    rpc_method = method,
+                    attempt,
+                    retry_after_secs = backoff.as_secs(),
+                    "RPC returned 429; backing off per Retry-After before retrying"
+                );
+                tokio::time::sleep(backoff).await;
+                continue;
+            }
+
+            if !status.is_success() {
+                return Err(OracleServiceError::RpcError(format!(
+                    "HTTP {} from RPC",
+                    status
+                )));
+            }
+
+            let json: Value = resp
+                .json()
+                .await
+                .map_err(|e| OracleServiceError::Transport(e.to_string()))?;
+
+            if let Some(err) = json.get("error") {
+                return Err(OracleServiceError::RpcError(err.to_string()));
+            }
+
+            return Ok(json["result"].clone());
         }
 
-        let json: Value = resp
-            .json()
-            .await
-            .map_err(|e| OracleServiceError::Transport(e.to_string()))?;
-
-        if let Some(err) = json.get("error") {
-            return Err(OracleServiceError::RpcError(err.to_string()));
-        }
-
-        Ok(json["result"].clone())
+        // Every attempt was rate-limited; give up with the last status seen.
+        Err(OracleServiceError::RpcError(format!(
+            "HTTP {} from RPC after {} retries (rate limited)",
+            last_status,
+            Self::MAX_RPC_RETRIES
+        )))
     }
 
     async fn get_account_sequence(&self, address: &str) -> Result<i64, OracleServiceError> {
@@ -872,4 +960,68 @@ mod tests {
     #[test]
     fn decode_active_matches_empty_vec() {
         let val = ScVal::Vec(Some(ScVec(VecM::default())));
-        let matches = decode_active_matches(&val).expect("decode should succeed
+        let matches = decode_active_matches(&val).expect("decode should succeed");
+        assert!(matches.is_empty());
+    }
+
+    // ── Retry-After / 429 backoff parsing tests (issue #1975) ──────────────
+
+    #[test]
+    fn parse_retry_after_delta_seconds() {
+        assert_eq!(parse_retry_after(Some("0")), Some(Duration::ZERO));
+        assert_eq!(parse_retry_after(Some("1")), Some(Duration::from_secs(1)));
+        assert_eq!(parse_retry_after(Some("120")), Some(Duration::from_secs(120)));
+    }
+
+    #[test]
+    fn parse_retry_after_absent_or_invalid_is_none() {
+        assert_eq!(parse_retry_after(None), None);
+        assert_eq!(parse_retry_after(Some("")), None);
+        assert_eq!(parse_retry_after(Some("   ")), None);
+        assert_eq!(parse_retry_after(Some("not-a-number")), None);
+    }
+
+    /// An HTTP-date in the past means "retry now" → zero wait.
+    #[test]
+    fn parse_retry_after_http_date_past_is_zero() {
+        // Wed, 21 Oct 2015 07:28:00 +0000 is a fixed past instant.
+        assert_eq!(
+            parse_retry_after(Some("Wed, 21 Oct 2015 07:28:00 +0000")),
+            Some(Duration::ZERO)
+        );
+    }
+
+    /// The backoff after a 429 must use the `Retry-After` header value when it
+    /// is present, fall back to a default when absent, and never exceed a cap
+    /// (issue #1975).
+    #[test]
+    fn rpc_retry_backoff_uses_header_value_when_present() {
+        let default = Duration::from_secs(5);
+        let cap = Duration::from_secs(60);
+
+        // Header present and parseable: the header value wins.
+        assert_eq!(
+            rpc_retry_backoff(Some("120"), default, cap),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            rpc_retry_backoff(Some("7"), default, cap),
+            Duration::from_secs(7)
+        );
+
+        // Header absent: fall back to the default.
+        assert_eq!(rpc_retry_backoff(None, default, cap), default);
+
+        // Header unparseable: fall back to the default.
+        assert_eq!(rpc_retry_backoff(Some("garbage"), default, cap), default);
+
+        // Header larger than the cap: clamped to the cap.
+        assert_eq!(rpc_retry_backoff(Some("3600"), default, cap), cap);
+
+        // Header shorter than the default: respected verbatim, never inflated.
+        assert_eq!(
+            rpc_retry_backoff(Some("1"), default, cap),
+            Duration::from_secs(1)
+        );
+    }
+}

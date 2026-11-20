@@ -31,7 +31,7 @@ use tracing::error;
 
 use crate::metrics;
 use crate::oracle::errors::OracleServiceError;
-use crate::queue::PendingEntry;
+use crate::queue::{PendingEntry, PendingQueue};
 
 /// A record in the dead-letter store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +165,74 @@ impl DeadLetterStore {
         metrics::set_dead_letter_count(entries.len());
         Ok(())
     }
+
+    /// Automatically re-enqueue dead-letter entries that have been quiet for at
+    /// least `quiet_period`, giving them another chance after a transient
+    /// failure may have cleared (#1976).
+    ///
+    /// At most `max_batch` entries are replayed per call, so a large
+    /// dead-letter store cannot trigger a thundering herd of simultaneous
+    /// retries.  Each replayed entry is re-enqueued into `queue` as a **fresh**
+    /// pending entry (retry schedule reset to zero) and removed from the
+    /// dead-letter store; if the underlying failure persists it will work
+    /// through the normal retry schedule and be dead-lettered again.
+    ///
+    /// Entries are replayed oldest-first, so the longest-stuck matches get the
+    /// first retry slot.  Returns the number of entries re-enqueued.
+    pub async fn sweep_for_retry(
+        &self,
+        queue: &PendingQueue,
+        quiet_period: chrono::Duration,
+        max_batch: usize,
+    ) -> Result<usize, OracleServiceError> {
+        if max_batch == 0 {
+            return Ok(0);
+        }
+        let cutoff = Utc::now() - quiet_period;
+
+        let mut entries = self.load().await?;
+        // Oldest-first so the longest-stuck entries are retried first.
+        entries.sort_by_key(|e| e.dead_lettered_at);
+
+        let mut replayed = 0usize;
+        let mut remaining: Vec<DeadLetterEntry> = Vec::with_capacity(entries.len());
+        for dl in entries {
+            let past_quiet = dl.dead_lettered_at <= cutoff;
+            if past_quiet && replayed < max_batch {
+                // Re-enqueue as a fresh entry so the retry schedule starts over.
+                match queue
+                    .enqueue(dl.entry.match_id, dl.entry.game_id.clone(), dl.entry.platform)
+                    .await
+                {
+                    Ok(_) => {
+                        replayed += 1;
+                        // `enqueue` returns Ok(false) when the match is already
+                        // queued — that still means it is being handled, so it
+                        // is safe to drop from the dead-letter store.
+                        continue;
+                    }
+                    Err(e) => {
+                        // On I/O failure, keep the entry in the dead-letter
+                        // store rather than losing it; surface the error.
+                        error!(
+                            match_id = dl.entry.match_id,
+                            "dead-letter sweep: failed to re-enqueue: {}", e
+                        );
+                        remaining.push(dl);
+                        continue;
+                    }
+                }
+            }
+            // Not past the quiet period, or the batch is full: keep it.
+            remaining.push(dl);
+        }
+
+        if replayed > 0 {
+            self.save(&remaining).await?;
+            metrics::set_dead_letter_count(remaining.len());
+        }
+        Ok(replayed)
+    }
 }
 
 #[cfg(test)]
@@ -295,5 +363,117 @@ mod tests {
             10,
             "all 10 entries should be retained when limit is 0"
         );
+    }
+
+    // ── Automatic retry sweep (issue #1976) ──────────────────────────────────
+
+    /// Back-date every dead-letter entry by `age` so each appears past the
+    /// quiet period.
+    async fn backdate_all(store: &DeadLetterStore, age: chrono::Duration) {
+        let mut entries = store.load().await.unwrap();
+        let past = Utc::now() - age;
+        for e in entries.iter_mut() {
+            e.dead_lettered_at = past;
+        }
+        store.save(&entries).await.unwrap();
+    }
+
+    /// A dead-letter entry past the quiet period is automatically retried:
+    /// re-enqueued into the pending queue as a fresh entry and removed from
+    /// the dead-letter store (#1976).
+    #[tokio::test]
+    async fn sweep_retries_entry_past_quiet_period() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        let queue = PendingQueue::new(dir.path().to_str().unwrap());
+
+        store.push(make_entry(1)).await.unwrap();
+        backdate_all(&store, chrono::Duration::seconds(3600)).await;
+
+        let replayed = store
+            .sweep_for_retry(&queue, chrono::Duration::seconds(1800), 10)
+            .await
+            .unwrap();
+        assert_eq!(replayed, 1);
+
+        // Removed from the dead-letter store...
+        assert!(store.load().await.unwrap().is_empty());
+        // ...and re-enqueued as a fresh entry (retry schedule reset to zero).
+        let pending = queue.load().await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].match_id, 1);
+        assert_eq!(
+            pending[0].attempts, 0,
+            "replayed entry must start with a fresh retry schedule"
+        );
+    }
+
+    /// An entry within the quiet period is left alone — it is too soon to
+    /// retry (#1976).
+    #[tokio::test]
+    async fn sweep_leaves_entry_within_quiet_period() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        let queue = PendingQueue::new(dir.path().to_str().unwrap());
+
+        // dead_lettered_at = now (just dead-lettered).
+        store.push(make_entry(2)).await.unwrap();
+
+        let replayed = store
+            .sweep_for_retry(&queue, chrono::Duration::seconds(1800), 10)
+            .await
+            .unwrap();
+        assert_eq!(replayed, 0, "entry within quiet period must not be retried");
+        assert_eq!(
+            store.load().await.unwrap().len(),
+            1,
+            "entry should remain in the dead-letter store"
+        );
+        assert!(queue.load().await.unwrap().is_empty());
+    }
+
+    /// The sweep is bounded: at most `max_batch` entries are replayed per call,
+    /// so a large dead-letter store cannot trigger a thundering herd (#1976).
+    #[tokio::test]
+    async fn sweep_is_bounded_by_max_batch() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        let queue = PendingQueue::new(dir.path().to_str().unwrap());
+
+        for id in 1..=3 {
+            store.push(make_entry(id)).await.unwrap();
+        }
+        backdate_all(&store, chrono::Duration::seconds(3600)).await;
+
+        let replayed = store
+            .sweep_for_retry(&queue, chrono::Duration::seconds(1800), 2)
+            .await
+            .unwrap();
+        assert_eq!(replayed, 2);
+        assert_eq!(
+            store.load().await.unwrap().len(),
+            1,
+            "one entry should remain because the batch is bounded"
+        );
+        assert_eq!(queue.load().await.unwrap().len(), 2);
+    }
+
+    /// `max_batch == 0` disables the sweep entirely (#1976).
+    #[tokio::test]
+    async fn sweep_disabled_when_max_batch_is_zero() {
+        let dir = TempDir::new().unwrap();
+        let store = make_store(&dir);
+        let queue = PendingQueue::new(dir.path().to_str().unwrap());
+
+        store.push(make_entry(3)).await.unwrap();
+        backdate_all(&store, chrono::Duration::seconds(3600)).await;
+
+        let replayed = store
+            .sweep_for_retry(&queue, chrono::Duration::seconds(1800), 0)
+            .await
+            .unwrap();
+        assert_eq!(replayed, 0);
+        assert_eq!(store.load().await.unwrap().len(), 1);
+        assert!(queue.load().await.unwrap().is_empty());
     }
 }
