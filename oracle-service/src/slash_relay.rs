@@ -282,4 +282,70 @@ mod tests {
         );
         assert_eq!(relay.processed_count().await, 0);
     }
+
+    /// Issue #1986: Test that repeated slash signals for the same match/dispute are deduplicated.
+    #[tokio::test]
+    async fn test_slash_relay_deduplicates_repeated_slash_for_same_match() {
+        let signing_key = SigningKey::from_bytes(&[55u8; 32]);
+        let trusted_pubkey = signing_key.verifying_key().to_bytes();
+        let relay = SlashRelay::new(trusted_pubkey);
+
+        let match_dispute_id = 42u64;
+        let oracle_addr = "GAORACLEADDRESSFORTESTING123456789";
+        let slash_amount = 5_000_000i128;
+
+        let signal = signed_signal(&signing_key, match_dispute_id, oracle_addr, slash_amount);
+
+        // First arrival: processed
+        let res1 = relay.mark_as_processed(signal.clone()).await;
+        assert!(res1.is_ok(), "first slash signal submission must succeed");
+        assert!(relay.is_already_processed(&signal).await);
+        assert_eq!(relay.processed_count().await, 1);
+
+        // Repeated arrival 1: duplicate signal for the same match
+        let res2 = relay.mark_as_processed(signal.clone()).await;
+        assert!(res2.is_ok(), "re-processing must succeed idempotently");
+        assert_eq!(
+            relay.processed_count().await,
+            1,
+            "repeated slash signal for same match must be deduplicated"
+        );
+
+        // Repeated arrival 2: third submission of the identical slash signal
+        let res3 = relay.mark_as_processed(signal.clone()).await;
+        assert!(res3.is_ok());
+        assert_eq!(
+            relay.processed_count().await,
+            1,
+            "relay processed count must remain 1 after repeated slash arrivals"
+        );
+    }
+
+    /// Issue #1986: Test that distinct slash signals are both relayed.
+    #[tokio::test]
+    async fn test_slash_relay_relays_distinct_slashes() {
+        let signing_key = SigningKey::from_bytes(&[77u8; 32]);
+        let trusted_pubkey = signing_key.verifying_key().to_bytes();
+        let relay = SlashRelay::new(trusted_pubkey);
+
+        let signal_match_1 = signed_signal(&signing_key, 101, "GAORACLE1", 1_000_000);
+        let signal_match_2 = signed_signal(&signing_key, 102, "GAORACLE2", 2_000_000);
+
+        relay.mark_as_processed(signal_match_1.clone()).await.unwrap();
+        relay.mark_as_processed(signal_match_2.clone()).await.unwrap();
+
+        assert!(
+            relay.is_already_processed(&signal_match_1).await,
+            "first distinct slash must be marked as processed"
+        );
+        assert!(
+            relay.is_already_processed(&signal_match_2).await,
+            "second distinct slash must be marked as processed"
+        );
+        assert_eq!(
+            relay.processed_count().await,
+            2,
+            "both distinct slashes must be relayed and tracked"
+        );
+    }
 }

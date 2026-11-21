@@ -253,6 +253,68 @@ async fn test_waf_blocks_long_uri() {
     );
 }
 
+/// A request with an SQL-injection-style payload in the URI must be blocked with 400.
+#[tokio::test]
+async fn test_waf_blocks_sqli_payload() {
+    let base = spawn_waf_only_server(WafState::new()).await;
+    let client = reqwest::Client::new();
+
+    let sqli_payloads = [
+        "/ping?id=1'%20OR%20'1'='1",
+        "/ping?name=admin'%20or%201=1--",
+        "/ping?q=UNION%20SELECT%20*%20FROM%20users",
+        "/ping?q=1;%20DROP%20TABLE%20matches--",
+    ];
+
+    for (idx, payload) in sqli_payloads.iter().enumerate() {
+        let resp = client
+            .get(format!("{}{}", base, payload))
+            .header("x-forwarded-for", format!("10.3.1.{}", idx + 1))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status().as_u16(),
+            400,
+            "WAF must return 400 for SQLi payload {}, got {}",
+            payload,
+            resp.status().as_u16()
+        );
+    }
+}
+
+/// Benign requests with valid queries and paths must be allowed through the WAF.
+#[tokio::test]
+async fn test_waf_allows_benign_request() {
+    let base = spawn_waf_only_server(WafState::new()).await;
+    let client = reqwest::Client::new();
+
+    let benign_paths = [
+        "/ping",
+        "/ping?game_id=lichess_abc123",
+        "/ping?match_id=42&platform=chesscom",
+        "/ping?limit=50&offset=0",
+    ];
+
+    for (idx, path) in benign_paths.iter().enumerate() {
+        let resp = client
+            .get(format!("{}{}", base, path))
+            .header("x-forwarded-for", format!("10.3.2.{}", idx + 1))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "WAF must allow benign request {}, got {}",
+            path,
+            resp.status().as_u16()
+        );
+    }
+}
+
 /// Rapid burst from one IP (>20 req/s) should be blocked by WAF with 429.
 #[tokio::test]
 async fn test_waf_blocks_burst() {
