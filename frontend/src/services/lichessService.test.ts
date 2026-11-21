@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { fetchRecentLichessGames, formatGameLabel } from './lichessService';
+import { fetchRecentLichessGames, formatGameLabel, InvalidLichessTokenError } from './lichessService';
 
 const NDJSON_RESPONSE = [
   JSON.stringify({
@@ -51,9 +51,21 @@ describe('lichessService', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  test('throws InvalidLichessTokenError when the Lichess API responds with a 401', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      statusText: 'Unauthorized',
+    }) as unknown as typeof fetch;
+
+    await expect(fetchRecentLichessGames('TestPlayer')).rejects.toThrow(InvalidLichessTokenError);
+    await expect(fetchRecentLichessGames('TestPlayer')).rejects.toThrow('Invalid Lichess API token');
+  });
+
   test('throws when the Lichess API responds with an error', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
+      status: 404,
       statusText: 'Not Found',
     }) as unknown as typeof fetch;
 
