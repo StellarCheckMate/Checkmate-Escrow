@@ -30,7 +30,7 @@ use deadpool_postgres::{
 use tokio_postgres::NoTls;
 
 use crate::models::{
-    AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters,
+    AnalyticsOverview, DisputeInfo, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters,
     TokenAnalytics, Winner,
 };
 use crate::transactions::{TransactionHistoryFilters, TransactionRecord, TransactionType};
@@ -238,6 +238,21 @@ impl Database {
             );
 
             CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
+
+            -- Materialized disputes table for fast GET /disputes lookups.
+            CREATE TABLE IF NOT EXISTS disputes (
+                dispute_id       BIGINT      PRIMARY KEY,
+                match_id         BIGINT      NOT NULL,
+                disputer         TEXT        NOT NULL,
+                status           TEXT        NOT NULL DEFAULT 'open',
+                evidence_hash    TEXT,
+                dispute_bond     TEXT,
+                created_ledger   INTEGER     NOT NULL,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_disputes_status   ON disputes(status);
+            CREATE INDEX IF NOT EXISTS idx_disputes_match_id ON disputes(match_id);
 
             -- Leader-election table.
             -- The single row (instance_id='__leader__') acts as a distributed
@@ -1425,6 +1440,212 @@ impl Database {
             match_history,
             total: match_count,
         })
+    }
+
+    /// Insert or update an open dispute into the `disputes` table.
+    pub async fn insert_dispute(&self, dispute: &DisputeInfo) -> Result<()> {
+        let conn = self
+            .write_pool
+            .get()
+            .await
+            .map_err(|e| anyhow!("Write pool error: {}", e))?;
+
+        let params: [&(dyn tokio_postgres::types::ToSql + Sync); 8] = [
+            &(dispute.dispute_id as i64),
+            &(dispute.match_id as i64),
+            &dispute.disputer,
+            &dispute.status,
+            &dispute.evidence_hash,
+            &dispute.dispute_bond,
+            &(dispute.created_ledger as i32),
+            &dispute.created_at,
+        ];
+
+        conn.execute(
+            "INSERT INTO disputes (dispute_id, match_id, disputer, status, evidence_hash, dispute_bond, created_ledger, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, NOW()))
+             ON CONFLICT (dispute_id) DO UPDATE SET
+                 match_id = EXCLUDED.match_id,
+                 disputer = EXCLUDED.disputer,
+                 status = EXCLUDED.status,
+                 evidence_hash = EXCLUDED.evidence_hash,
+                 dispute_bond = EXCLUDED.dispute_bond,
+                 created_ledger = EXCLUDED.created_ledger,
+                 created_at = EXCLUDED.created_at",
+            &params,
+        )
+        .await
+        .map_err(|e| anyhow!("insert_dispute failed: {}", e))?;
+
+        Ok(())
+    }
+
+    /// List open disputes with pagination.
+    pub async fn get_open_disputes(&self, limit: i64, offset: i64) -> Result<Vec<DisputeInfo>> {
+        let conn = self
+            .read_pool
+            .get()
+            .await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
+
+        let rows = conn
+            .query(
+                "SELECT dispute_id, match_id, disputer, status, evidence_hash, dispute_bond, created_ledger, created_at
+                 FROM disputes
+                 WHERE status = 'open' OR status = 'active'
+                 ORDER BY dispute_id ASC
+                 LIMIT $1 OFFSET $2",
+                &[&limit, &offset],
+            )
+            .await
+            .map_err(|e| anyhow!("get_open_disputes failed: {}", e))?;
+
+        let mut disputes = Vec::with_capacity(rows.len());
+        for row in rows {
+            let dispute_id: i64 = row.get(0);
+            let match_id: i64 = row.get(1);
+            let created_ledger: i32 = row.get(6);
+            disputes.push(DisputeInfo {
+                dispute_id: dispute_id as u64,
+                match_id: match_id as u64,
+                disputer: row.get(2),
+                status: row.get(3),
+                evidence_hash: row.get(4),
+                dispute_bond: row.get(5),
+                created_ledger: created_ledger as u32,
+                created_at: row.get(7),
+            });
+        }
+
+        // If no disputes in the materialized table, fall back to querying events table
+        if disputes.is_empty() {
+            let event_rows = conn
+                .query(
+                    "SELECT id, ledger_sequence, match_id, player1, player2, stake_amount, token, timestamp
+                     FROM events
+                     WHERE (event_type ILIKE '%dispute%created%' OR (event_type ILIKE '%dispute%' AND event_type NOT ILIKE '%resolved%'))
+                       AND reorg_invalidated_at IS NULL
+                       AND match_id NOT IN (
+                           SELECT match_id FROM events WHERE event_type ILIKE '%dispute%resolved%' AND reorg_invalidated_at IS NULL
+                       )
+                     ORDER BY ledger_sequence ASC
+                     LIMIT $1 OFFSET $2",
+                    &[&limit, &offset],
+                )
+                .await
+                .map_err(|e| anyhow!("get_open_disputes events fallback failed: {}", e))?;
+
+            for (idx, row) in event_rows.iter().enumerate() {
+                let ledger: i32 = row.get(1);
+                let m_id: i64 = row.get(2);
+                let disputer: Option<String> = row.get(3);
+                disputes.push(DisputeInfo {
+                    dispute_id: (offset as usize + idx + 1) as u64,
+                    match_id: m_id as u64,
+                    disputer: disputer.unwrap_or_else(|| "unknown".to_string()),
+                    status: "open".to_string(),
+                    evidence_hash: None,
+                    dispute_bond: row.get(5),
+                    created_ledger: ledger as u32,
+                    created_at: row.get(7),
+                });
+            }
+        }
+
+        Ok(disputes)
+    }
+
+    /// Return the list of depositor addresses for a match.
+    ///
+    /// Returns `Ok(None)` if the match does not exist.
+    /// Returns `Ok(Some(vec))` where `vec` contains the distinct depositor addresses.
+    pub async fn get_match_depositors(&self, match_id: u64) -> Result<Option<Vec<String>>> {
+        let conn = self
+            .read_pool
+            .get()
+            .await
+            .map_err(|e| anyhow!("Read pool error: {}", e))?;
+
+        // First check if the match exists in the matches table
+        let match_exists_row = conn
+            .query_opt(
+                "SELECT player1, player2, status FROM matches WHERE match_id = $1",
+                &[&(match_id as i64)],
+            )
+            .await
+            .map_err(|e| anyhow!("get_match_depositors match lookup failed: {}", e))?;
+
+        let (m_player1, m_player2, m_status) = if let Some(row) = match_exists_row {
+            (
+                row.get::<_, Option<String>>(0),
+                row.get::<_, Option<String>>(1),
+                row.get::<_, Option<String>>(2),
+            )
+        } else {
+            // Check if there are any events for this match
+            let event_count_row = conn
+                .query_one(
+                    "SELECT COUNT(*) FROM events WHERE match_id = $1 AND reorg_invalidated_at IS NULL",
+                    &[&(match_id as i64)],
+                )
+                .await
+                .map_err(|e| anyhow!("get_match_depositors event check failed: {}", e))?;
+            let count: i64 = event_count_row.get(0);
+            if count == 0 {
+                return Ok(None);
+            }
+            (None, None, None)
+        };
+
+        // Query deposit events for this match
+        let rows = conn
+            .query(
+                "SELECT player1
+                 FROM events
+                 WHERE match_id = $1
+                   AND (event_type ILIKE '%deposit%' OR event_type ILIKE '%funded%')
+                   AND player1 IS NOT NULL
+                   AND reorg_invalidated_at IS NULL
+                 ORDER BY ledger_sequence ASC, event_index_in_txn ASC NULLS LAST",
+                &[&(match_id as i64)],
+            )
+            .await
+            .map_err(|e| anyhow!("get_match_depositors failed: {}", e))?;
+
+        let mut depositors: Vec<String> = Vec::new();
+        for row in rows {
+            let player: Option<String> = row.get(0);
+            if let Some(p) = player {
+                if !p.is_empty() && !depositors.contains(&p) {
+                    depositors.push(p);
+                }
+            }
+        }
+
+        if !depositors.is_empty() {
+            return Ok(Some(depositors));
+        }
+
+        // If no explicit deposit events found, but match is active or completed, both players have deposited
+        if let Some(ref status) = m_status {
+            let status_low = status.to_ascii_lowercase();
+            if status_low == "active" || status_low == "completed" {
+                let mut fallback = Vec::new();
+                if let Some(p1) = m_player1 {
+                    if !p1.is_empty() {
+                        fallback.push(p1);
+                    }
+                }
+                if let Some(p2) = m_player2 {
+                    if !p2.is_empty() && !fallback.contains(&p2) {
+                        fallback.push(p2);
+                    }
+                }
+                return Ok(Some(fallback));
+            }
+        }
+
+        Ok(Some(Vec::new()))
     }
 }
 

@@ -27,6 +27,10 @@ use deadpool_postgres::Pool;
 use tokio::time::{interval, Duration};
 use tracing::{info, warn};
 
+/// Deterministic advisory lock key for the event-indexer leader slot.
+/// Value is arbitrary but must be consistent across all instances ("evtidx" in ASCII).
+pub const LOCK_KEY: i64 = 0x65_76_74_69_64_78;
+
 /// A non-`Send` guard that holds the leader lease while it is in scope.
 /// Drop the guard (or let the `LeaderElection` task cancel) to release.
 pub struct LeaderGuard;
@@ -87,6 +91,19 @@ impl LeaderElection {
         let now = Utc::now();
         let held_until = now + chrono::Duration::seconds(self.ttl_secs as i64);
 
+        // Acquire the PostgreSQL session-level advisory lock first.
+        // `pg_try_advisory_lock` is non-blocking: returns false if another
+        // session already holds the lock.
+        let lock_row = conn
+            .query_one("SELECT pg_try_advisory_lock($1)", &[&LOCK_KEY])
+            .await
+            .map_err(|e| anyhow!("advisory lock failed: {}", e))?;
+        let got_advisory: bool = lock_row.get(0);
+
+        if !got_advisory {
+            return Ok(false);
+        }
+
         // Try to claim or renew the row-level lease.
         // The UPDATE only fires when `held_until < NOW()` (expired) OR
         // `instance_id` matches our own ID (renewal).
@@ -118,7 +135,7 @@ impl LeaderElection {
         Ok(we_are_leader)
     }
 
-    /// Explicitly release the row-level lease by deleting the leader row.
+    /// Explicitly release the advisory lock and delete the leader row.
     pub async fn release(&mut self) {
         if !self.is_leader {
             return;
@@ -131,7 +148,10 @@ impl LeaderElection {
                         &[],
                     )
                     .await;
-                info!(instance_id = %self.instance_id, "Leader lease released");
+                let _ = conn
+                    .execute("SELECT pg_advisory_unlock($1)", &[&LOCK_KEY])
+                    .await;
+                info!(instance_id = %self.instance_id, "Leader lease and advisory lock released");
             }
             Err(e) => {
                 warn!("Failed to release leader lease (pool error): {}", e);
@@ -161,4 +181,47 @@ impl LeaderElection {
             }
         })
     }
+}
+
+/// Panic/shutdown handler: automatically release advisory lock and lease on drop.
+impl Drop for LeaderElection {
+    fn drop(&mut self) {
+        if self.is_leader {
+            self.is_leader = false;
+            let pool = self.pool.clone();
+            let instance_id = self.instance_id.clone();
+            // In a panic or unexpected drop, asynchronously release the advisory lock and lease
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    if let Ok(conn) = pool.get().await {
+                        let _ = conn
+                            .execute(
+                                "DELETE FROM leader_state WHERE instance_id = '__leader__'",
+                                &[],
+                            )
+                            .await;
+                        let _ = conn
+                            .execute("SELECT pg_advisory_unlock($1)", &[&LOCK_KEY])
+                            .await;
+                        info!(instance_id = %instance_id, "Leader advisory lock released in drop/panic handler");
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// Explicitly release the advisory lock and leader state for a pool.
+pub async fn release_advisory_lock(pool: &Pool) -> Result<()> {
+    let conn = pool
+        .get()
+        .await
+        .map_err(|e| anyhow!("Failed to get connection to release advisory lock: {}", e))?;
+    let _ = conn
+        .execute("DELETE FROM leader_state WHERE instance_id = '__leader__'", &[])
+        .await;
+    let _ = conn
+        .execute("SELECT pg_advisory_unlock($1)", &[&LOCK_KEY])
+        .await;
+    Ok(())
 }
