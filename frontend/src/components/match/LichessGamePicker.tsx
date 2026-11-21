@@ -59,7 +59,7 @@ export function LichessGamePicker({ onSelect }: LichessGamePickerProps) {
       {loading && <p role="status">Loading recent games…</p>}
       {error && <p role="alert">{error}</p>}
 
-      {!loading && !error && games.length > 0 && (
+      {!error && games.length > 0 && (
         <>
           <label htmlFor="lichess-game-search">Search Games</label>
           <input
@@ -67,11 +67,18 @@ export function LichessGamePicker({ onSelect }: LichessGamePickerProps) {
             value={query}
             onChange={ev => setQuery(ev.target.value)}
             placeholder="Search by game ID or opponent"
+            disabled={loading}
           />
-          <ul aria-label="Recent Lichess games" role="listbox">
+          <ul aria-label="Recent Lichess games" role="listbox" aria-disabled={loading}>
             {filteredGames.map(game => (
               <li key={game.id}>
-                <button type="button" onClick={() => onSelect(game.id)}>
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => {
+                    if (!loading) onSelect(game.id);
+                  }}
+                >
                   {formatGameLabel(game)}
                 </button>
               </li>
