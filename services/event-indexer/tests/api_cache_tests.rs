@@ -570,3 +570,66 @@ async fn cache_does_not_rewrite_timestamps() {
 
     assert_eq!(restored.timestamp, expected);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. Stale-then-refresh after TTL (#2002)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The cached value is served until its TTL runs out, even after the match has
+/// changed upstream. Once the TTL expires the next reader repopulates from the
+/// current state.
+#[tokio::test]
+async fn stale_value_is_served_until_ttl_then_refreshed() {
+    let cache = ApiCache::in_memory();
+    let ttl = Duration::from_secs(1);
+    cache
+        .set_json(&match_key(5), &match_info(5, MatchStatus::Pending), ttl)
+        .await;
+
+    // The match became Active upstream, but nothing invalidated the entry.
+    let stale: MatchInfo = cache
+        .get_json(&match_key(5))
+        .await
+        .expect("entry is cached");
+    assert_eq!(stale.status, MatchStatus::Pending, "stale value served before TTL");
+
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    assert!(
+        cache.get_json::<MatchInfo>(&match_key(5)).await.is_none(),
+        "entry must expire at its TTL"
+    );
+
+    cache
+        .set_json(&match_key(5), &match_info(5, MatchStatus::Active), ttl)
+        .await;
+    let refreshed: MatchInfo = cache
+        .get_json(&match_key(5))
+        .await
+        .expect("refreshed entry is cached");
+    assert_eq!(refreshed.status, MatchStatus::Active);
+}
+
+/// A refresh after expiry carries the ledger events ingested while the old
+/// entry was cached. Here the match completed, so `completed_ledger` is new.
+#[tokio::test]
+async fn refresh_after_ttl_picks_up_new_ledger_events() {
+    let cache = ApiCache::in_memory();
+    let ttl = Duration::from_secs(1);
+    cache
+        .set_json(&match_key(6), &match_info(6, MatchStatus::Active), ttl)
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+
+    // A match:completed event was ingested after the entry was cached.
+    let mut completed = match_info(6, MatchStatus::Completed);
+    completed.completed_ledger = Some(250);
+    cache.set_json(&match_key(6), &completed, ttl).await;
+
+    let refreshed: MatchInfo = cache
+        .get_json(&match_key(6))
+        .await
+        .expect("refreshed entry is cached");
+    assert_eq!(refreshed.status, MatchStatus::Completed);
+    assert_eq!(refreshed.completed_ledger, Some(250));
+}
