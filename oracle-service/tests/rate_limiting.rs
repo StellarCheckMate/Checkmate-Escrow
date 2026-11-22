@@ -210,6 +210,66 @@ async fn test_different_ips_independent() {
     );
 }
 
+/// A burst that exceeds the per-IP capacity must be rejected: the request
+/// beyond capacity returns 429 and carries a `Retry-After` header.
+#[tokio::test]
+async fn test_burst_exceeding_capacity_rejected() {
+    let base = spawn_rate_limit_only_server(RateLimitState::new()).await;
+    let client = reqwest::Client::new();
+    let test_ip = "10.5.0.1";
+
+    // Fire a burst larger than the 100 req/min capacity.
+    let mut last_status = 0u16;
+    let mut rejected = None;
+    for i in 1..=150 {
+        let resp = client
+            .get(format!("{}/ping", base))
+            .header("x-forwarded-for", test_ip)
+            .send()
+            .await
+            .unwrap();
+        last_status = resp.status().as_u16();
+        if last_status == 429 {
+            rejected = Some(resp);
+            break;
+        }
+        assert_eq!(last_status, 200, "request {i} within capacity must succeed");
+    }
+
+    let resp = rejected.expect("burst exceeding capacity must be rejected with 429");
+    assert_eq!(
+        resp.status().as_u16(),
+        429,
+        "request beyond capacity must return 429, got {last_status}"
+    );
+    assert!(
+        resp.headers().contains_key("retry-after"),
+        "rejected burst request must include Retry-After header"
+    );
+}
+
+/// Requests below the per-IP capacity must all be allowed with 200.
+#[tokio::test]
+async fn test_burst_under_capacity_allowed() {
+    let base = spawn_rate_limit_only_server(RateLimitState::new()).await;
+    let client = reqwest::Client::new();
+    let test_ip = "10.5.0.2";
+
+    for i in 1..=50 {
+        let resp = client
+            .get(format!("{}/ping", base))
+            .header("x-forwarded-for", test_ip)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "request {i} under capacity must be allowed"
+        );
+    }
+}
+
 // ── WAF tests ─────────────────────────────────────────────────────────────────
 
 /// A POST with Content-Length > 1 MiB must be blocked by the WAF with 413.
