@@ -149,7 +149,7 @@ export function getContractErrorMessage(code: number | null | undefined): string
   if (code === null || code === undefined || !Number.isFinite(code)) {
     return UNKNOWN_CONTRACT_ERROR_MESSAGE;
   }
-  return CONTRACT_ERROR_MESSAGES[code] ?? UNKNOWN_CONTRACT_ERROR_MESSAGE;
+  return CONTRACT_ERROR_MESSAGES[code] ?? `${UNKNOWN_CONTRACT_ERROR_MESSAGE} (Code: ${code})`;
 }
 
 /**
@@ -205,3 +205,5 @@ export function parseContractError(error: unknown): string {
 
   return UNKNOWN_CONTRACT_ERROR_MESSAGE;
 }
+
+export { parseContractError as mapContractError };

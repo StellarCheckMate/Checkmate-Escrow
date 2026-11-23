@@ -54,7 +54,7 @@ export function MatchList({ matches, loading = false, error = null, onRefresh }:
     return (
       <div>
         <p role="status" aria-live="polite">Loading matches…</p>
-        <ul aria-hidden="true">
+        <ul aria-hidden="true" data-testid="match-list-skeleton">
           {Array.from({ length: 3 }, (_, i) => (
             <li key={i}>
               <MatchCardSkeleton />

@@ -1,5 +1,5 @@
 import { vi } from 'vitest';
-import { fetchRecentLichessGames, formatGameLabel } from './lichessService';
+import { fetchRecentLichessGames, formatGameLabel, LichessHttpError } from './lichessService';
 
 const NDJSON_RESPONSE = [
   JSON.stringify({
@@ -27,15 +27,11 @@ const NDJSON_RESPONSE = [
 
 describe('lichessService', () => {
   afterEach(() => {
-    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   test('fetches and normalizes recent games for a username', async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      statusText: 'OK',
-      text: () => Promise.resolve(NDJSON_RESPONSE),
-    }) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(NDJSON_RESPONSE, { status: 200 })));
 
     const games = await fetchRecentLichessGames('TestPlayer');
 
@@ -45,19 +41,23 @@ describe('lichessService', () => {
   });
 
   test('returns an empty array for a blank username', async () => {
-    global.fetch = vi.fn();
+    vi.stubGlobal('fetch', vi.fn());
     const games = await fetchRecentLichessGames('   ');
     expect(games).toEqual([]);
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   test('throws when the Lichess API responds with an error', async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      statusText: 'Not Found',
-    }) as unknown as typeof fetch;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 404, statusText: 'Not Found' })));
 
     await expect(fetchRecentLichessGames('missinguser')).rejects.toThrow('Not Found');
+  });
+
+  test('exposes a typed HTTP error on 401', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 401, statusText: 'Unauthorized' })));
+    const request = fetchRecentLichessGames('TestPlayer');
+    await expect(request).rejects.toBeInstanceOf(LichessHttpError);
+    await expect(request).rejects.toMatchObject({ status: 401, message: expect.stringContaining('Unauthorized') });
   });
 
   test('formatGameLabel includes id, opponent, and result', () => {

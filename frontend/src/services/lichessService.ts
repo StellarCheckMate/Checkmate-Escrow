@@ -1,5 +1,12 @@
 const LICHESS_API_BASE = import.meta.env.VITE_LICHESS_API_URL ?? 'https://lichess.org';
 
+export class LichessHttpError extends Error {
+  constructor(readonly status: number, statusText: string) {
+    super(`Failed to fetch Lichess games: ${statusText || status}`);
+    this.name = 'LichessHttpError';
+  }
+}
+
 export interface LichessGame {
   id: string;
   opponent: string;
@@ -43,7 +50,7 @@ export async function fetchRecentLichessGames(
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch Lichess games: ${response.statusText}`);
+    throw new LichessHttpError(response.status, response.statusText);
   }
 
   const text = await response.text();

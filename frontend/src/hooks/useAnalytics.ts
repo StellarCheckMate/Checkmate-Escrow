@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useMatches } from './useMatches';
+import { useMatches, type MatchSummary } from './useMatches';
 import { computeAnalytics } from '../services/analyticsService';
 import type { TimePeriod, AnalyticsResult } from '../services/analyticsService';
 
@@ -8,6 +8,7 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 interface CacheEntry {
   result: AnalyticsResult;
   ts: number;
+  matches: MatchSummary[];
 }
 
 const cache = new Map<string, CacheEntry>();
@@ -22,39 +23,39 @@ export function useAnalytics(
   tokenFilter?: string,
   statusFilter?: string,
 ) {
-  const { matches, loading: matchesLoading, error: matchesError } = useMatches({ limit: 500 });
-  const [result, setResult] = useState<AnalyticsResult | null>(null);
+  const { matches, loading: matchesLoading, error: matchesError } = useMatches({ limit: 500, account: userAddress });
+  const key = userAddress ? cacheKey(userAddress, period, tokenFilter, statusFilter) : null;
+  const [overview, setOverview] = useState<{ key: string; result: AnalyticsResult } | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!userAddress || matchesLoading) return;
+    if (!userAddress || key === null || matchesLoading || matchesError) return;
 
-    const key = cacheKey(userAddress, period, tokenFilter, statusFilter);
     const cached = cache.get(key);
 
     let computed: AnalyticsResult;
-    if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+    if (cached && cached.matches === matches && Date.now() - cached.ts < CACHE_TTL_MS) {
       computed = cached.result;
     } else {
       computed = computeAnalytics(matches, userAddress, period, tokenFilter, statusFilter);
-      cache.set(key, { result: computed, ts: Date.now() });
+      cache.set(key, { result: computed, ts: Date.now(), matches });
     }
 
     // The cache freshness check above (Date.now()) is inherently
     // time-impure and has to live in an effect, so the resulting setState
     // is unavoidably synchronous here.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setResult(computed);
+    setOverview({ key, result: computed });
 
     // Invalidate cache after TTL so next render recomputes
     timerRef.current = setTimeout(() => cache.delete(key), CACHE_TTL_MS);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [matches, matchesLoading, userAddress, period, tokenFilter, statusFilter]);
+  }, [matches, matchesLoading, matchesError, userAddress, key, period, tokenFilter, statusFilter]);
 
   return {
-    result,
+    result: !matchesLoading && !matchesError && overview?.key === key ? overview.result : null,
     loading: matchesLoading,
     error: matchesError,
   };
