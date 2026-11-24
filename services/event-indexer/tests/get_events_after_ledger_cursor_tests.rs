@@ -5,6 +5,7 @@
 //! - `after_index` parameter works with `after_ledger` for stable pagination
 //! - Events are ordered ascending by ledger_sequence, then by event_index_in_txn
 //! - Cursor-based pagination is stable across requests
+//! - Response cursor echoes the last consumed ledger sequence
 
 use axum::body::to_bytes;
 use axum::http::{Request, StatusCode};
@@ -50,9 +51,9 @@ async fn get_events_accepts_after_ledger_cursor() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(parsed["success"], true);
-    assert!(parsed["data"].is_array());
+    assert!(parsed["data"]["events"].is_array());
 
-    if let Some(events) = parsed["data"].as_array() {
+    if let Some(events) = parsed["data"]["events"].as_array() {
         // All events should have ledger_sequence > 0
         for event in events {
             let ledger = event["ledger_sequence"].as_i64().unwrap();
@@ -83,7 +84,7 @@ async fn get_events_accepts_after_ledger_and_after_index() {
     let parsed1: serde_json::Value = serde_json::from_slice(&body1).unwrap();
 
     // Extract ledger and index from first event
-    if let Some(events) = parsed1["data"].as_array() {
+    if let Some(events) = parsed1["data"]["events"].as_array() {
         if events.len() > 0 {
             let first_ledger = events[0]["ledger_sequence"].as_i64().unwrap();
             let first_index = events[0]["event_index_in_txn"].as_i64().unwrap_or(0);
@@ -103,7 +104,7 @@ async fn get_events_accepts_after_ledger_and_after_index() {
             let parsed2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
             assert_eq!(parsed2["success"], true);
 
-            if let Some(events2) = parsed2["data"].as_array() {
+            if let Some(events2) = parsed2["data"]["events"].as_array() {
                 // All returned events should be strictly after the cursor
                 for event in events2 {
                     let ledger = event["ledger_sequence"].as_i64().unwrap();
@@ -143,7 +144,7 @@ async fn get_events_returns_ordered_results() {
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(parsed["success"], true);
 
-    if let Some(events) = parsed["data"].as_array() {
+    if let Some(events) = parsed["data"]["events"].as_array() {
         let mut prev_ledger = 0i64;
         let mut prev_index = 0i64;
 
@@ -185,7 +186,7 @@ async fn get_events_cursor_pagination_stable() {
     let body1 = to_bytes(response1.into_body(), usize::MAX).await.unwrap();
     let parsed1: serde_json::Value = serde_json::from_slice(&body1).unwrap();
 
-    if let Some(events1) = parsed1["data"].as_array() {
+    if let Some(events1) = parsed1["data"]["events"].as_array() {
         if events1.len() > 0 {
             let last_event = &events1[events1.len() - 1];
             let last_ledger = last_event["ledger_sequence"].as_i64().unwrap();
@@ -205,7 +206,7 @@ async fn get_events_cursor_pagination_stable() {
             let body2 = to_bytes(response2.into_body(), usize::MAX).await.unwrap();
             let parsed2: serde_json::Value = serde_json::from_slice(&body2).unwrap();
 
-            if let Some(events2) = parsed2["data"].as_array() {
+            if let Some(events2) = parsed2["data"]["events"].as_array() {
                 // Verify no duplicates between pages
                 for event2 in events2 {
                     let ledger2 = event2["ledger_sequence"].as_i64().unwrap();
@@ -222,4 +223,62 @@ async fn get_events_cursor_pagination_stable() {
             }
         }
     }
+}
+
+/// The `/events` response cursor echoes the ledger sequence of the last returned event.
+///
+/// This is a database-backed test: it fetches one event page and asserts that
+/// `data.cursor` equals the `ledger_sequence` of the last event in `data.events`.
+#[tokio::test]
+async fn get_events_response_cursor_reflects_last_consumed_ledger() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!(
+            "Skipping get_events_response_cursor_reflects_last_consumed_ledger: DATABASE_URL not set"
+        );
+        return;
+    }
+
+    let app = app().await;
+
+    // Fetch up to 1 event so the last-event check is deterministic.
+    let request = Request::builder()
+        .uri("/events?limit=1")
+        .method("GET")
+        .body(axum::body::Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    // No events in the DB → nothing to assert.
+    if response.status() == StatusCode::NOT_FOUND {
+        println!("Skipping cursor assertion: no events in the database");
+        return;
+    }
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(parsed["success"], true);
+
+    // cursor must be present and must equal the ledger_sequence of the last event.
+    let cursor = parsed["data"]["cursor"]
+        .as_u64()
+        .expect("cursor must be a non-null integer when events are returned");
+
+    let events = parsed["data"]["events"]
+        .as_array()
+        .expect("events must be an array");
+    assert!(!events.is_empty(), "events array must not be empty on 200");
+
+    let last_ledger = events
+        .last()
+        .unwrap()["ledger_sequence"]
+        .as_u64()
+        .expect("ledger_sequence must be an integer");
+
+    assert_eq!(
+        cursor, last_ledger,
+        "cursor must equal the ledger_sequence of the last returned event"
+    );
 }

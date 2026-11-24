@@ -441,6 +441,19 @@ async fn metrics_handler(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
+/// Response body for `GET /events`, including a cursor for poll-based clients.
+///
+/// `cursor` is the `ledger_sequence` of the last event in the result set.
+/// Clients can pass this value back as `after_ledger` on the next poll to
+/// consume only new events, without risk of skipping ledgers between polls.
+/// It is `null` when the response is empty (no events matched the query).
+#[derive(Serialize, Deserialize)]
+pub struct EventsResponse {
+    pub events: Vec<IndexedEvent>,
+    /// The ledger sequence of the last returned event, or `null` when empty.
+    pub cursor: Option<u32>,
+}
+
 /// `GET /events` – query events with optional filters.
 ///
 /// All filtering and sorting happens via the **read pool** so this endpoint
@@ -448,7 +461,7 @@ async fn metrics_handler(State(state): State<AppState>) -> Response {
 async fn get_events(
     State(state): State<AppState>,
     TypedQuery(query): TypedQuery<EventQuery>,
-) -> (StatusCode, Json<ApiResponse<Vec<IndexedEvent>>>) {
+) -> (StatusCode, Json<ApiResponse<EventsResponse>>) {
     let filters = QueryFilters {
         player_address: query.player_address,
         status: query.status,
@@ -470,11 +483,12 @@ async fn get_events(
                     }),
                 )
             } else {
+                let cursor = events.last().map(|e| e.ledger_sequence);
                 (
                     StatusCode::OK,
                     Json(ApiResponse {
                         success: true,
-                        data: Some(events),
+                        data: Some(EventsResponse { events, cursor }),
                         error: None,
                     }),
                 )

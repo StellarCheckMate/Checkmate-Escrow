@@ -535,9 +535,11 @@ async fn api_get_events_by_player_returns_correct_subset() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let parsed: ApiResponse<Vec<IndexedEvent>> = serde_json::from_slice(&body).unwrap();
+    let parsed: ApiResponse<event_indexer::api::EventsResponse> =
+        serde_json::from_slice(&body).unwrap();
     assert!(parsed.success);
-    let events = parsed.data.unwrap();
+    let events_response = parsed.data.unwrap();
+    let events = events_response.events;
     assert_eq!(events.len(), 2, "exactly 2 events for PLAYER_X");
 
     // Cleanup
