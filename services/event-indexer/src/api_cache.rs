@@ -492,6 +492,40 @@ impl ApiCache {
         self.counters.invalidations.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Invalidate every cached response that a ledger reorg/rollback can make
+    /// stale.
+    ///
+    /// A rollback rewinds the event table to a previous ledger, so *any* match
+    /// summary may now describe a state that never happened on the canonical
+    /// chain.  Unlike [`ApiCache::invalidate_match`], which targets a single
+    /// match, this drops:
+    /// 1. every match-list response (`/matches`, including the pending list),
+    /// 2. every analytics response (counters are derived from the event table),
+    /// 3. the per-match summaries for the matches touched by the rollback.
+    ///
+    /// `affected_match_ids` should contain the ids of the matches whose events
+    /// were rolled back; pass an empty slice when the rollback's affected set is
+    /// unknown, in which case only the list and analytics families are dropped
+    /// (individual match entries then expire on their own short TTLs).
+    ///
+    /// This is a no-op on a disabled cache.
+    pub async fn invalidate_on_rollback(&self, affected_match_ids: &[u64]) {
+        if !self.is_enabled() {
+            return;
+        }
+
+        let mut keys = all_match_list_keys();
+        keys.extend(all_analytics_keys());
+        keys.extend(affected_match_ids.iter().map(|id| match_key(*id)));
+
+        self.delete(&keys).await;
+        self.counters.invalidations.fetch_add(1, Ordering::Relaxed);
+        debug!(
+            affected = affected_match_ids.len(),
+            "invalidated cached responses after ledger rollback"
+        );
+    }
+
     /// Drop every key this service owns.  Only the in-memory backend is cleared
     /// wholesale; for Redis the known key families are deleted so foreign keys
     /// in a shared instance survive.
@@ -836,6 +870,83 @@ mod tests {
     async fn invalidation_on_a_disabled_cache_is_a_noop() {
         let cache = ApiCache::disabled();
         cache.invalidate_match(1).await;
+        assert_eq!(cache.stats().invalidations, 0);
+    }
+
+    // ── Reorg / rollback ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn rollback_drops_stale_match_state() {
+        let cache = ApiCache::in_memory();
+
+        // Populate the cache as a normal request cycle would.
+        cache
+            .set_json(&match_key(7), &payload(7), match_ttl())
+            .await;
+        cache
+            .set_json(&match_key(8), &payload(8), match_ttl())
+            .await;
+        for key in all_match_list_keys() {
+            cache
+                .set_json(&key, &payload(7), pending_matches_ttl())
+                .await;
+        }
+        let stats_key = analytics_key(ANALYTICS_STATS);
+        cache
+            .set_json(&stats_key, &payload(7), analytics_ttl())
+            .await;
+
+        // A reorg rolls back events for match 7 only.
+        cache.invalidate_on_rollback(&[7]).await;
+
+        let stale: Option<Payload> = cache.get_json(&match_key(7)).await;
+        assert!(stale.is_none(), "rolled-back match must not be served");
+
+        for key in all_match_list_keys() {
+            let got: Option<Payload> = cache.get_json(&key).await;
+            assert!(got.is_none(), "{} must be dropped after a reorg", key);
+        }
+
+        let analytics: Option<Payload> = cache.get_json(&stats_key).await;
+        assert!(analytics.is_none(), "analytics must be dropped after a reorg");
+
+        // A match untouched by the rollback keeps its cached summary.
+        let untouched: Option<Payload> = cache.get_json(&match_key(8)).await;
+        assert_eq!(untouched, Some(payload(8)));
+
+        assert_eq!(cache.stats().invalidations, 1);
+    }
+
+    #[tokio::test]
+    async fn rollback_without_known_matches_still_drops_lists_and_analytics() {
+        let cache = ApiCache::in_memory();
+        cache
+            .set_json(&match_key(1), &payload(1), match_ttl())
+            .await;
+        for key in all_match_list_keys() {
+            cache
+                .set_json(&key, &payload(1), pending_matches_ttl())
+                .await;
+        }
+        let stats_key = analytics_key(ANALYTICS_STATS);
+        cache
+            .set_json(&stats_key, &payload(1), analytics_ttl())
+            .await;
+
+        cache.invalidate_on_rollback(&[]).await;
+
+        for key in all_match_list_keys() {
+            let got: Option<Payload> = cache.get_json(&key).await;
+            assert!(got.is_none(), "{} must be dropped after a reorg", key);
+        }
+        let analytics: Option<Payload> = cache.get_json(&stats_key).await;
+        assert!(analytics.is_none());
+    }
+
+    #[tokio::test]
+    async fn rollback_invalidation_on_a_disabled_cache_is_a_noop() {
+        let cache = ApiCache::disabled();
+        cache.invalidate_on_rollback(&[1, 2, 3]).await;
         assert_eq!(cache.stats().invalidations, 0);
     }
 

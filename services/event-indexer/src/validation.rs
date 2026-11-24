@@ -352,6 +352,12 @@ pub fn validate_game_id(field: &str, value: &str) -> ValidationResult<String> {
 ///
 /// Match ids are `u64` and start at **0** (`MatchCount` is initialised to zero
 /// and the current count is used as the next id), so zero is valid.
+///
+/// This is the single source of truth for `match_id` format: the request
+/// middleware applies it to the `match_id` query parameter (and to the
+/// `:match_id` path segment), and handlers that need the parsed value call it
+/// directly at the boundary so a malformed id yields a `400` rather than a
+/// downstream `500`.
 pub fn validate_match_id(field: &str, raw: &str) -> ValidationResult<u64> {
     let trimmed = raw.trim();
 
@@ -366,8 +372,18 @@ pub fn validate_match_id(field: &str, raw: &str) -> ValidationResult<u64> {
         ));
     }
 
+    if trimmed.starts_with('+') {
+        return Err(ValidationError::new(
+            field,
+            "must not carry a sign; write the digits only",
+        ));
+    }
+
     if !trimmed.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(ValidationError::new(field, "must be a whole number"));
+        return Err(ValidationError::new(
+            field,
+            format!("must be a whole number, got {:?}", trimmed),
+        ));
     }
 
     trimmed
@@ -961,11 +977,43 @@ mod tests {
         assert!(validate_match_id("match_id", "abc").is_err());
         assert!(validate_match_id("match_id", "1;DROP").is_err());
         assert!(validate_match_id("match_id", "").is_err());
+        assert!(validate_match_id("match_id", "   ").is_err());
+        assert!(validate_match_id("match_id", "+1").is_err());
     }
 
     #[test]
     fn match_id_beyond_u64_is_rejected() {
         assert!(validate_match_id("match_id", &"9".repeat(25)).is_err());
+    }
+
+    #[test]
+    fn match_id_errors_are_field_scoped() {
+        let err = validate_match_id("match_id", "abc").unwrap_err();
+        assert_eq!(err.field, "match_id");
+        assert!(err.message.contains("whole number"), "got {:?}", err.message);
+
+        let err = validate_match_id("match_id", "-1").unwrap_err();
+        assert_eq!(err.field, "match_id");
+        assert!(err.message.contains("negative"), "got {:?}", err.message);
+
+        let err = validate_match_id("match_id", "").unwrap_err();
+        assert_eq!(err.field, "match_id");
+        assert!(err.message.contains("empty"), "got {:?}", err.message);
+
+        let err = validate_match_id("match_id", &"9".repeat(25)).unwrap_err();
+        assert_eq!(err.field, "match_id");
+        assert!(err.message.contains("out of range"), "got {:?}", err.message);
+    }
+
+    #[test]
+    fn events_query_with_non_numeric_match_id_is_rejected() {
+        // The middleware must catch a malformed `match_id` on /events so the
+        // handler never sees it and the caller gets a 400, not a 500.
+        let err = validate_query_string("match_id=abc").unwrap_err();
+        assert_eq!(err.field, "match_id");
+
+        assert!(validate_query_string("match_id=42").is_ok());
+        assert!(validate_query_string("match_id=0").is_ok());
     }
 
     // ── Tokens ────────────────────────────────────────────────────────────

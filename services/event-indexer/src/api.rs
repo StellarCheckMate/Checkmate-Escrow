@@ -54,6 +54,9 @@ use crate::{
     validation::{self, ValidationError},
 };
 
+/// Upper bound on the page size accepted by the paginated list endpoints.
+const MAX_PAGE_LIMIT: i64 = 200;
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -143,6 +146,10 @@ where
 #[derive(Deserialize)]
 pub struct EventQuery {
     pub player_address: Option<String>,
+    /// Optional `match_id` filter. Received as a raw string so the handler can
+    /// validate it at the boundary and answer a non-numeric value with a `400`
+    /// instead of letting it surface as a `500`.
+    pub match_id: Option<String>,
     #[serde(default, deserialize_with = "empty_status_as_none")]
     pub status: Option<MatchStatus>,
     #[serde(default, deserialize_with = "empty_i64_as_none")]
@@ -449,6 +456,22 @@ async fn get_events(
     State(state): State<AppState>,
     TypedQuery(query): TypedQuery<EventQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<IndexedEvent>>>) {
+    // Validate `match_id` at the handler boundary: a non-numeric value must be
+    // a `400` with a field-scoped message, not a `500` from the database layer.
+    if let Some(raw) = non_empty(&query.match_id) {
+        if let Err(e) = validation::validate_match_id("match_id", raw) {
+            let (status, Json(body)) = e.into_response_tuple();
+            return (
+                status,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: body.error,
+                }),
+            );
+        }
+    }
+
     let filters = QueryFilters {
         player_address: query.player_address,
         status: query.status,
@@ -654,9 +677,18 @@ async fn get_matches(
 /// Returns an empty array when no active matches exist.
 async fn get_active_matches(
     State(state): State<AppState>,
-    TypedQuery(_query): TypedQuery<ActiveMatchesQuery>,
+    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
-    let cache_key = api_cache::matches_key(Some(&MatchStatus::Active));
+    let limit = query.limit.unwrap_or(50).clamp(1, MAX_PAGE_LIMIT);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    // Pagination is part of the cache key so distinct pages don't collide.
+    let cache_key = format!(
+        "{}:offset={}:limit={}",
+        api_cache::matches_key(Some(&MatchStatus::Active)),
+        offset,
+        limit
+    );
 
     if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
         return (
@@ -671,7 +703,7 @@ async fn get_active_matches(
 
     match state
         .db
-        .get_matches_by_status(Some(&MatchStatus::Active))
+        .get_matches_by_status_paginated(Some(&MatchStatus::Active), limit, offset)
         .await
     {
         Ok(matches) => {
@@ -705,9 +737,18 @@ async fn get_active_matches(
 /// Returns an empty array when no pending matches exist.
 async fn get_pending_matches(
     State(state): State<AppState>,
-    TypedQuery(_query): TypedQuery<ActiveMatchesQuery>,
+    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
-    let cache_key = api_cache::matches_key(Some(&MatchStatus::Pending));
+    let limit = query.limit.unwrap_or(50).clamp(1, MAX_PAGE_LIMIT);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    // Pagination is part of the cache key so distinct pages don't collide.
+    let cache_key = format!(
+        "{}:offset={}:limit={}",
+        api_cache::matches_key(Some(&MatchStatus::Pending)),
+        offset,
+        limit
+    );
 
     if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
         return (
@@ -722,7 +763,7 @@ async fn get_pending_matches(
 
     match state
         .db
-        .get_matches_by_status(Some(&MatchStatus::Pending))
+        .get_matches_by_status_paginated(Some(&MatchStatus::Pending), limit, offset)
         .await
     {
         Ok(matches) => {
