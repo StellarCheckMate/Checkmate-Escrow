@@ -18,6 +18,11 @@ actually being checked as its own gate.
     advisories` (complementary vulnerability DB coverage to cargo-audit)
     and `cargo deny check bans licenses sources` (the rest of the existing
     policy).
+  - A "Upload cargo audit report" step publishes `audit-report.json` as the
+    `cargo-audit-report` artifact with 30-day retention. It uses `if: always()`
+    so advisories can be inspected on both green and failed runs; a missing
+    file (for example when installation fails) only warns rather than failing
+    the job a second time.
 - `deny.toml`: documented the advisory database source
   (`db-urls = ["https://github.com/rustsec/advisory-db"]`) under
   `[advisories]`.
