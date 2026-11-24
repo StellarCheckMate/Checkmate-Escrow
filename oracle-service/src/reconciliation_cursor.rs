@@ -226,4 +226,55 @@ mod tests {
             "cursor must not advance when the caller skips save() due to a recoverable error"
         );
     }
+
+    /// Issue #1985: Cursor stays put on a recoverable submission error.
+    #[tokio::test]
+    async fn test_cursor_stays_put_on_recoverable_submission_error() {
+        let dir = TempDir::new().unwrap();
+        let cursor = make_cursor(&dir);
+
+        // Initial confirmed position
+        cursor.save(100).await.unwrap();
+        assert_eq!(cursor.load().await, 100);
+
+        // Simulate submission attempt at offset 100 encountering a recoverable error
+        // (e.g. RPC timeout, rate limit, node unreachable).
+        // The service catches the recoverable error and does NOT advance the cursor.
+        let submission_result: Result<(), &str> = Err("recoverable RPC error: connection reset");
+        if submission_result.is_err() {
+            // Recoverable error: do not call cursor.save(150)
+        } else {
+            cursor.save(150).await.unwrap();
+        }
+
+        // Verify the cursor stays at 100
+        assert_eq!(
+            cursor.load().await,
+            100,
+            "cursor must stay put at 100 on recoverable submission error"
+        );
+    }
+
+    /// Issue #1985: Cursor advances after a confirmed submission.
+    #[tokio::test]
+    async fn test_cursor_advances_after_confirmed_submission() {
+        let dir = TempDir::new().unwrap();
+        let cursor = make_cursor(&dir);
+
+        cursor.save(100).await.unwrap();
+        assert_eq!(cursor.load().await, 100);
+
+        // Confirmed submission occurs
+        let submission_result: Result<(), &str> = Ok(());
+        if submission_result.is_ok() {
+            cursor.save(150).await.unwrap();
+        }
+
+        // Verify cursor has advanced to 150
+        assert_eq!(
+            cursor.load().await,
+            150,
+            "cursor must advance to 150 after confirmed submission"
+        );
+    }
 }

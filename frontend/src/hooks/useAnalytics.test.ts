@@ -1,35 +1,107 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
 import { useAnalytics } from './useAnalytics';
+import * as matchesHook from './useMatches';
+import type { MatchSummary } from './useMatches';
 
-function feed(account: string, id: number) {
-  return Response.json({
-    success: true,
-    data: [{ match_id: id, player1: account, player2: 'opponent', status: 'completed' }],
-    error: null,
+vi.mock('./useMatches');
+
+describe('useAnalytics', () => {
+  const mockMatches: MatchSummary[] = [
+    {
+      match_id: 1,
+      player1: 'GACCOUNT_A',
+      player2: 'GACCOUNT_B',
+      status: 'completed',
+      winner: 'GACCOUNT_A',
+      stake_amount: '100',
+      token: 'XLM',
+      timestamp: '2026-01-01T10:00:00Z',
+    },
+    {
+      match_id: 2,
+      player1: 'GACCOUNT_A',
+      player2: 'GACCOUNT_B',
+      status: 'completed',
+      winner: 'GACCOUNT_B',
+      stake_amount: '50',
+      token: 'XLM',
+      timestamp: '2026-01-02T10:00:00Z',
+    },
+    {
+      match_id: 3,
+      player1: 'GACCOUNT_B',
+      player2: 'GACCOUNT_C',
+      status: 'completed',
+      winner: 'GACCOUNT_B',
+      stake_amount: '200',
+      token: 'XLM',
+      timestamp: '2026-01-03T10:00:00Z',
+    },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(matchesHook.useMatches).mockReturnValue({
+      matches: mockMatches,
+      loading: false,
+      error: null,
+      total: mockMatches.length,
+    });
   });
-}
 
-afterEach(() => vi.unstubAllGlobals());
+  it('fetches overview on mount with connected account', () => {
+    const { result } = renderHook(() => useAnalytics('GACCOUNT_A'));
 
-it('clears the previous overview and refetches when the account changes', async () => {
-  let finishNextRequest!: (response: Response) => void;
-  const nextResponse = new Promise<Response>(resolve => { finishNextRequest = resolve; });
-  const fetchMatches = vi.fn()
-    .mockResolvedValueOnce(feed('first', 1))
-    .mockReturnValueOnce(nextResponse);
-  vi.stubGlobal('fetch', fetchMatches);
-
-  const { result, rerender } = renderHook(({ account }) => useAnalytics(account), {
-    initialProps: { account: 'first' },
+    expect(result.current.loading).toBe(false);
+    expect(result.current.error).toBeNull();
+    expect(result.current.result).not.toBeNull();
+    expect(result.current.result?.stats.totalMatches).toBe(2);
+    expect(result.current.result?.stats.wins).toBe(1);
+    expect(result.current.result?.stats.losses).toBe(1);
+    expect(result.current.result?.stats.totalEarnings).toBe(50); // +100 - 50
   });
-  await waitFor(() => expect(result.current.result?.filteredMatches[0]?.match_id).toBe(1));
 
-  rerender({ account: 'second' });
-  expect(fetchMatches).toHaveBeenCalledTimes(2);
-  expect(result.current.loading).toBe(true);
-  expect(result.current.result).toBeNull();
+  it('refetches overview when the connected wallet account changes', () => {
+    let account = 'GACCOUNT_A';
+    const { result, rerender } = renderHook(
+      ({ userAddress }) => useAnalytics(userAddress),
+      { initialProps: { userAddress: account } },
+    );
 
-  await act(async () => finishNextRequest(feed('second', 2)));
-  await waitFor(() => expect(result.current.result?.filteredMatches[0]?.match_id).toBe(2));
+    expect(result.current.result?.stats.totalMatches).toBe(2);
+    expect(result.current.result?.stats.wins).toBe(1);
+    expect(result.current.result?.stats.losses).toBe(1);
+    expect(result.current.result?.stats.totalEarnings).toBe(50);
+
+    // Switch account to GACCOUNT_B
+    rerender({ userAddress: 'GACCOUNT_B' });
+
+    expect(result.current.result?.stats.totalMatches).toBe(3);
+    expect(result.current.result?.stats.wins).toBe(2);
+    expect(result.current.result?.stats.losses).toBe(1);
+    expect(result.current.result?.stats.totalEarnings).toBe(150); // -100 + 50 + 200
+
+    // Switch account to GACCOUNT_C
+    rerender({ userAddress: 'GACCOUNT_C' });
+
+    expect(result.current.result?.stats.totalMatches).toBe(1);
+    expect(result.current.result?.stats.wins).toBe(0);
+    expect(result.current.result?.stats.losses).toBe(1);
+    expect(result.current.result?.stats.totalEarnings).toBe(-200);
+  });
+
+  it('clears or resets result when wallet account disconnects (null)', () => {
+    const { result, rerender } = renderHook(
+      ({ userAddress }: { userAddress: string | null }) => useAnalytics(userAddress),
+      { initialProps: { userAddress: 'GACCOUNT_A' as string | null } },
+    );
+
+    expect(result.current.result).not.toBeNull();
+
+    // Disconnect wallet
+    rerender({ userAddress: null });
+
+    expect(result.current.result).toBeNull();
+  });
 });

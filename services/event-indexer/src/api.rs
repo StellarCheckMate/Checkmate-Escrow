@@ -41,7 +41,7 @@ use crate::{
     cache::EventCache,
     db::Database,
     models::{
-        AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters,
+        AnalyticsOverview, DisputeInfo, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters,
         TokenAnalytics,
     },
     metrics,
@@ -201,6 +201,14 @@ pub struct ActiveMatchesQuery {
 }
 
 #[derive(Deserialize)]
+pub struct DisputesQuery {
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
+    pub limit: Option<i64>,
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
+    pub offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
 pub struct PlayerMatchesQuery {
     #[serde(default, deserialize_with = "empty_status_as_none")]
     pub status: Option<MatchStatus>,
@@ -299,11 +307,13 @@ pub fn build_router(
         .route("/api/openapi.yaml", get(api_openapi_yaml))
         .route("/events", get(get_events))
         .route("/events/:match_id", get(get_match_events))
+        .route("/disputes", get(get_disputes))
         .route("/matches", get(get_matches))
         .route("/matches/active", get(get_active_matches))
         .route("/matches/pending", get(get_pending_matches))
         .route("/match/:match_id", get(get_match_info))
         .route("/matches/:match_id", get(get_match_info))
+        .route("/matches/:match_id/depositors", get(get_match_depositors))
         .route("/players/:address/matches", get(get_player_matches))
         .route(
             "/transactions/player/:player_address",
@@ -796,6 +806,69 @@ async fn get_match_info(
                 }),
             )
         }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Match {} not found", match_id)),
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /disputes` – list open disputes with pagination.
+///
+/// Accepts `limit` (default 50, max 1000) and `offset` (default 0) query parameters.
+async fn get_disputes(
+    State(state): State<AppState>,
+    TypedQuery(query): TypedQuery<DisputesQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<DisputeInfo>>>) {
+    let limit = query.limit.unwrap_or(50).clamp(1, 1000);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    match state.db.get_open_disputes(limit, offset).await {
+        Ok(disputes) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(disputes),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /matches/:match_id/depositors` – list depositor addresses for a match.
+async fn get_match_depositors(
+    State(state): State<AppState>,
+    Path(match_id): Path<u64>,
+) -> (StatusCode, Json<ApiResponse<Vec<String>>>) {
+    match state.db.get_match_depositors(match_id).await {
+        Ok(Some(depositors)) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(depositors),
+                error: None,
+            }),
+        ),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiResponse {

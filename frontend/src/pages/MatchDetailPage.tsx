@@ -1,4 +1,16 @@
-import { MatchDetail } from '../components/match/MatchDetail';
+import { MatchDetail, type MatchDetailProps } from '../components/match/MatchDetail';
+
+export interface MatchDetailPageProps {
+  matchId: number;
+  disputeStatus?: MatchDetailProps['disputeStatus'];
+  player1?: string;
+  player2?: string;
+  stakeAmount?: string;
+  token?: string;
+  status?: MatchDetailProps['status'];
+  platform?: MatchDetailProps['platform'];
+  tokenDecimals?: number;
+}
 
 /**
  * Route target for `/match/:matchId`.
@@ -9,17 +21,29 @@ import { MatchDetail } from '../components/match/MatchDetail';
  * `/v1/indexer/match/{match_id}` endpoint) - wired up separately from the
  * deep-linking work this page exists for.
  */
-export function MatchDetailPage({ matchId }: { matchId: number }) {
+export function MatchDetailPage({
+  matchId,
+  disputeStatus,
+  player1 = '—',
+  player2 = '—',
+  stakeAmount = '—',
+  token = '',
+  status = 'pending',
+  platform = 'lichess',
+  tokenDecimals,
+}: MatchDetailPageProps) {
   return (
     <main id="match-detail-page">
       <MatchDetail
         matchId={matchId}
-        player1="—"
-        player2="—"
-        stakeAmount="—"
-        token=""
-        status="pending"
-        platform="lichess"
+        player1={player1}
+        player2={player2}
+        stakeAmount={stakeAmount}
+        token={token}
+        status={status}
+        platform={platform}
+        tokenDecimals={tokenDecimals}
+        disputeStatus={disputeStatus}
       />
     </main>
   );

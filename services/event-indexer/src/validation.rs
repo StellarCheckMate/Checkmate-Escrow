@@ -686,6 +686,8 @@ pub fn validate_path(path: &str) -> ValidationResult<()> {
     match segments.as_slice() {
         // /match/:match_id and /events/:match_id
         ["match", id] | ["events", id] => validate_match_id("match_id", id).map(|_| ()),
+        // /matches/:match_id/depositors
+        ["matches", id, "depositors"] => validate_match_id("match_id", id).map(|_| ()),
         // /matches/:match_id — "active" and "pending" are static sibling routes,
         // not match ids, so they're left for routing to handle.
         ["matches", id] if *id != "active" && *id != "pending" => {

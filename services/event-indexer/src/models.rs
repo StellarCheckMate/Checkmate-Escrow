@@ -117,6 +117,19 @@ pub struct QueryFilters {
     pub offset: Option<i64>,
 }
 
+/// An open dispute record returned by `GET /disputes`.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DisputeInfo {
+    pub dispute_id: u64,
+    pub match_id: u64,
+    pub disputer: String,
+    pub status: String,
+    pub evidence_hash: Option<String>,
+    pub dispute_bond: Option<String>,
+    pub created_ledger: u32,
+    pub created_at: Option<DateTime<Utc>>,
+}
+
 // ── Analytics models ──────────────────────────────────────────────────────────
 
 /// Platform-wide statistics returned by `GET /analytics/overview`.

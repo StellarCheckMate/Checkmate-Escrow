@@ -24,20 +24,40 @@ export function clearTokenDecimalsCache(): void {
 }
 
 /**
+ * Default number of decimals for native XLM (stroops).
+ */
+export const DEFAULT_TOKEN_DECIMALS = 7;
+
+/**
+ * Returns the BigInt divisor for a given number of token decimals.
+ * The divisor is configurable per token decimals (e.g. 10^7 for XLM, 10^6 for USDC, 10^18 for standard ERC-20/SEP-41 tokens).
+ *
+ * @example getTokenDivisor(7) === 10_000_000n
+ * @example getTokenDivisor(6) === 1_000_000n
+ */
+export function getTokenDivisor(decimals: number = DEFAULT_TOKEN_DECIMALS): bigint {
+  if (decimals <= 0) return 1n;
+  return 10n ** BigInt(decimals);
+}
+
+/**
  * Formats a raw on-chain integer amount (stroops, or the smallest unit of
  * any Stellar token) into a human-readable decimal string using the
- * token's `decimals` value.
+ * token's `decimals` value (defaults to 7 for XLM/stroops).
  *
  * @example formatTokenAmount(1_000_000, 7) === "0.1"
  * @example formatTokenAmount("2500000000", 7) === "250"
  */
-export function formatTokenAmount(rawAmount: string | number | bigint, decimals: number): string {
+export function formatTokenAmount(
+  rawAmount: string | number | bigint,
+  decimals: number = DEFAULT_TOKEN_DECIMALS,
+): string {
   const raw = BigInt(rawAmount);
   if (decimals <= 0) return raw.toString();
 
   const negative = raw < 0n;
   const abs = negative ? -raw : raw;
-  const divisor = 10n ** BigInt(decimals);
+  const divisor = getTokenDivisor(decimals);
   const whole = abs / divisor;
   const fraction = (abs % divisor).toString().padStart(decimals, '0').replace(/0+$/, '');
 
@@ -54,14 +74,14 @@ export function formatTokenAmount(rawAmount: string | number | bigint, decimals:
  */
 export function formatTokenAmountFixed(
   rawAmount: string | number | bigint,
-  decimals: number,
-  displayDecimals: number,
+  decimals: number = DEFAULT_TOKEN_DECIMALS,
+  displayDecimals: number = 2,
 ): string {
   const raw = BigInt(rawAmount);
   const places = Math.max(0, Math.trunc(displayDecimals));
   if (places === 0) {
     // Round-half-up to the nearest whole unit.
-    const divisor = 10n ** BigInt(Math.max(0, decimals));
+    const divisor = getTokenDivisor(Math.max(0, decimals));
     const negative = raw < 0n;
     const abs = negative ? -raw : raw;
     const rounded = (abs + divisor / 2n) / divisor;
@@ -70,14 +90,14 @@ export function formatTokenAmountFixed(
 
   const negative = raw < 0n;
   const abs = negative ? -raw : raw;
-  const targetDivisor = 10n ** BigInt(places);
+  const targetDivisor = getTokenDivisor(places);
 
   let scaled: bigint;
   if (decimals >= places) {
-    const drop = 10n ** BigInt(decimals - places);
+    const drop = getTokenDivisor(decimals - places);
     scaled = (abs + drop / 2n) / drop;
   } else {
-    scaled = abs * 10n ** BigInt(places - decimals);
+    scaled = abs * getTokenDivisor(places - decimals);
   }
 
   const whole = scaled / targetDivisor;

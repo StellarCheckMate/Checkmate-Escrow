@@ -210,6 +210,66 @@ async fn test_different_ips_independent() {
     );
 }
 
+/// A burst that exceeds the per-IP capacity must be rejected: the request
+/// beyond capacity returns 429 and carries a `Retry-After` header.
+#[tokio::test]
+async fn test_burst_exceeding_capacity_rejected() {
+    let base = spawn_rate_limit_only_server(RateLimitState::new()).await;
+    let client = reqwest::Client::new();
+    let test_ip = "10.5.0.1";
+
+    // Fire a burst larger than the 100 req/min capacity.
+    let mut last_status = 0u16;
+    let mut rejected = None;
+    for i in 1..=150 {
+        let resp = client
+            .get(format!("{}/ping", base))
+            .header("x-forwarded-for", test_ip)
+            .send()
+            .await
+            .unwrap();
+        last_status = resp.status().as_u16();
+        if last_status == 429 {
+            rejected = Some(resp);
+            break;
+        }
+        assert_eq!(last_status, 200, "request {i} within capacity must succeed");
+    }
+
+    let resp = rejected.expect("burst exceeding capacity must be rejected with 429");
+    assert_eq!(
+        resp.status().as_u16(),
+        429,
+        "request beyond capacity must return 429, got {last_status}"
+    );
+    assert!(
+        resp.headers().contains_key("retry-after"),
+        "rejected burst request must include Retry-After header"
+    );
+}
+
+/// Requests below the per-IP capacity must all be allowed with 200.
+#[tokio::test]
+async fn test_burst_under_capacity_allowed() {
+    let base = spawn_rate_limit_only_server(RateLimitState::new()).await;
+    let client = reqwest::Client::new();
+    let test_ip = "10.5.0.2";
+
+    for i in 1..=50 {
+        let resp = client
+            .get(format!("{}/ping", base))
+            .header("x-forwarded-for", test_ip)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "request {i} under capacity must be allowed"
+        );
+    }
+}
+
 // ── WAF tests ─────────────────────────────────────────────────────────────────
 
 /// A POST with Content-Length > 1 MiB must be blocked by the WAF with 413.
@@ -251,6 +311,68 @@ async fn test_waf_blocks_long_uri() {
         status, 400,
         "WAF must return 400 for overly long URI, got {status}"
     );
+}
+
+/// A request with an SQL-injection-style payload in the URI must be blocked with 400.
+#[tokio::test]
+async fn test_waf_blocks_sqli_payload() {
+    let base = spawn_waf_only_server(WafState::new()).await;
+    let client = reqwest::Client::new();
+
+    let sqli_payloads = [
+        "/ping?id=1'%20OR%20'1'='1",
+        "/ping?name=admin'%20or%201=1--",
+        "/ping?q=UNION%20SELECT%20*%20FROM%20users",
+        "/ping?q=1;%20DROP%20TABLE%20matches--",
+    ];
+
+    for (idx, payload) in sqli_payloads.iter().enumerate() {
+        let resp = client
+            .get(format!("{}{}", base, payload))
+            .header("x-forwarded-for", format!("10.3.1.{}", idx + 1))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status().as_u16(),
+            400,
+            "WAF must return 400 for SQLi payload {}, got {}",
+            payload,
+            resp.status().as_u16()
+        );
+    }
+}
+
+/// Benign requests with valid queries and paths must be allowed through the WAF.
+#[tokio::test]
+async fn test_waf_allows_benign_request() {
+    let base = spawn_waf_only_server(WafState::new()).await;
+    let client = reqwest::Client::new();
+
+    let benign_paths = [
+        "/ping",
+        "/ping?game_id=lichess_abc123",
+        "/ping?match_id=42&platform=chesscom",
+        "/ping?limit=50&offset=0",
+    ];
+
+    for (idx, path) in benign_paths.iter().enumerate() {
+        let resp = client
+            .get(format!("{}{}", base, path))
+            .header("x-forwarded-for", format!("10.3.2.{}", idx + 1))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "WAF must allow benign request {}, got {}",
+            path,
+            resp.status().as_u16()
+        );
+    }
 }
 
 /// Rapid burst from one IP (>20 req/s) should be blocked by WAF with 429.

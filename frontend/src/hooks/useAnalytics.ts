@@ -29,7 +29,11 @@ export function useAnalytics(
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    if (!userAddress || key === null || matchesLoading || matchesError) return;
+    if (!userAddress) {
+      setResult(null);
+      return;
+    }
+    if (matchesLoading) return;
 
     const cached = cache.get(key);
 
