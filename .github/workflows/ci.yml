@@ -98,6 +98,15 @@ jobs:
               print(f"::warning::{len(vulns)} advisory(ies) found below HIGH severity; not blocking merge.")
           PY
 
+      - name: Upload cargo audit report
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: cargo-audit-report
+          path: audit-report.json
+          retention-days: 30
+          if-no-files-found: warn
+
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked --quiet
 
