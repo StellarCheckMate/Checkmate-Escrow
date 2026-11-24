@@ -1,4 +1,19 @@
+export class InvalidLichessTokenError extends Error {
+  constructor(message = 'Invalid Lichess API token') {
+    super(message);
+    this.name = 'InvalidLichessTokenError';
+    Object.setPrototypeOf(this, InvalidLichessTokenError.prototype);
+  }
+}
+
 const LICHESS_API_BASE = import.meta.env.VITE_LICHESS_API_URL ?? 'https://lichess.org';
+
+export class LichessHttpError extends Error {
+  constructor(readonly status: number, statusText: string) {
+    super(`Failed to fetch Lichess games: ${statusText || status}`);
+    this.name = 'LichessHttpError';
+  }
+}
 
 export interface LichessGame {
   id: string;
@@ -42,8 +57,12 @@ export async function fetchRecentLichessGames(
     headers: { Accept: 'application/x-ndjson' },
   });
 
+  if (response.status === 401) {
+    throw new InvalidLichessTokenError();
+  }
+
   if (!response.ok) {
-    throw new Error(`Failed to fetch Lichess games: ${response.statusText}`);
+    throw new LichessHttpError(response.status, response.statusText);
   }
 
   const text = await response.text();

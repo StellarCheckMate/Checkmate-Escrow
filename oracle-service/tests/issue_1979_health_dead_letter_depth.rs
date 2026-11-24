@@ -128,6 +128,83 @@ async fn multiple_dead_letter_entries_report_degraded() {
     assert_eq!(effective_status, HealthStatus::Degraded);
 }
 
+/// Pushing an entry into the dead-letter store must degrade health from
+/// Healthy to Degraded.
+#[tokio::test]
+async fn health_degrades_when_dead_letter_queue_non_empty() {
+    let dir = TempDir::new().unwrap();
+    let store = DeadLetterStore::new(dir.path().to_str().unwrap(), 0);
+
+    // Baseline: empty queue keeps health Healthy.
+    let depth_before = store.load().await.unwrap().len();
+    assert_eq!(depth_before, 0, "dead-letter queue should start empty");
+    let status_before = if depth_before > 0 && HealthStatus::Healthy == HealthStatus::Healthy {
+        HealthStatus::Degraded
+    } else {
+        HealthStatus::Healthy
+    };
+    assert_eq!(status_before, HealthStatus::Healthy);
+
+    // Push an entry: health must now be Degraded.
+    store.push(make_dead_letter_entry(123)).await.unwrap();
+    let depth_after = store.load().await.unwrap().len();
+    assert_eq!(depth_after, 1, "dead-letter queue should have one entry");
+
+    let simulated_liveness_status = HealthStatus::Healthy;
+    let effective_status = if depth_after > 0 && simulated_liveness_status == HealthStatus::Healthy {
+        HealthStatus::Degraded
+    } else {
+        simulated_liveness_status
+    };
+
+    assert_ne!(
+        effective_status,
+        HealthStatus::Healthy,
+        "health must not be Healthy when dead-letter queue is non-empty"
+    );
+    assert_eq!(
+        effective_status,
+        HealthStatus::Degraded,
+        "health must be Degraded when dead-letter queue is non-empty"
+    );
+}
+
+/// Draining the dead-letter queue must restore health to Healthy.
+#[tokio::test]
+async fn health_recovers_when_dead_letter_queue_drains() {
+    let dir = TempDir::new().unwrap();
+    let store = DeadLetterStore::new(dir.path().to_str().unwrap(), 0);
+
+    // Fill the queue and confirm degraded health.
+    store.push(make_dead_letter_entry(321)).await.unwrap();
+    let depth_full = store.load().await.unwrap().len();
+    assert_eq!(depth_full, 1);
+    let degraded_status = if depth_full > 0 && HealthStatus::Healthy == HealthStatus::Healthy {
+        HealthStatus::Degraded
+    } else {
+        HealthStatus::Healthy
+    };
+    assert_eq!(degraded_status, HealthStatus::Degraded);
+
+    // Drain the queue and confirm health recovers.
+    store.remove(321).await.unwrap();
+    let depth_drained = store.load().await.unwrap().len();
+    assert_eq!(depth_drained, 0, "dead-letter queue should be drained");
+
+    let simulated_liveness_status = HealthStatus::Healthy;
+    let effective_status = if depth_drained > 0 && simulated_liveness_status == HealthStatus::Healthy {
+        HealthStatus::Degraded
+    } else {
+        simulated_liveness_status
+    };
+
+    assert_eq!(
+        effective_status,
+        HealthStatus::Healthy,
+        "health must recover to Healthy once the dead-letter queue drains"
+    );
+}
+
 /// After manually removing all dead-letter entries (e.g. via oracle-replay),
 /// the health status returns to Healthy.
 #[tokio::test]

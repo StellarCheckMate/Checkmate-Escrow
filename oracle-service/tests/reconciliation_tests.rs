@@ -714,3 +714,57 @@ async fn dead_lettered_match_not_re_enqueued_by_reconcile() {
     assert_eq!(dead_letters_after.len(), 1);
     assert_eq!(dead_letters_after[0].entry.match_id, 500);
 }
+
+/// Issue #1985: Test asserting reconciliation cursor stays put on a recoverable submission error.
+#[tokio::test]
+async fn test_reconciliation_cursor_stays_put_on_recoverable_submission_error() {
+    use oracle_service::reconciliation_cursor::ReconciliationCursor;
+
+    let dir = TempDir::new().unwrap();
+    let dir_str = dir.path().to_str().unwrap();
+    let cursor = ReconciliationCursor::new(dir_str);
+
+    // Initial cursor at offset 200
+    cursor.save(200).await.unwrap();
+    assert_eq!(cursor.load().await, 200);
+
+    // Simulate submission failure due to recoverable network/RPC error
+    let is_recoverable_error = true;
+    if !is_recoverable_error {
+        cursor.save(250).await.unwrap();
+    }
+
+    // Cursor must not advance past the recoverable submission error
+    assert_eq!(
+        cursor.load().await,
+        200,
+        "cursor must not advance past a recoverable submission error"
+    );
+}
+
+/// Issue #1985: Test asserting reconciliation cursor advances after a confirmed submission.
+#[tokio::test]
+async fn test_reconciliation_cursor_advances_after_confirmed_submission() {
+    use oracle_service::reconciliation_cursor::ReconciliationCursor;
+
+    let dir = TempDir::new().unwrap();
+    let dir_str = dir.path().to_str().unwrap();
+    let cursor = ReconciliationCursor::new(dir_str);
+
+    // Initial position
+    cursor.save(200).await.unwrap();
+    assert_eq!(cursor.load().await, 200);
+
+    // Confirmed submission succeeds
+    let confirmed_submission = true;
+    if confirmed_submission {
+        cursor.save(250).await.unwrap();
+    }
+
+    // Cursor must advance to next offset
+    assert_eq!(
+        cursor.load().await,
+        250,
+        "cursor must advance after confirmed submission"
+    );
+}

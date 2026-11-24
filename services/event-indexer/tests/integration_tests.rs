@@ -974,6 +974,157 @@ async fn analytics_overview_returns_200_with_correct_shape() {
     assert!(data["cancelled_matches"].is_number());
 }
 
+/// `GET /analytics/overview` returns zeroed aggregates for an empty database (#2004).
+#[tokio::test]
+async fn analytics_overview_empty_db_returns_zeroed_aggregates() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping analytics_overview_empty_db: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
+    db.init_schema().await.expect("schema");
+
+    // Clear events table to ensure DB is empty
+    let conn = event_indexer::db::build_pool(&db_url, 1)
+        .unwrap()
+        .get()
+        .await
+        .unwrap();
+    let _ = conn.execute("DELETE FROM events", &[]).await;
+
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
+    let app = build_router(db, cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/analytics/overview")
+                .header(API_KEY_HEADER, TEST_API_KEY)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(parsed["success"], true);
+    assert!(parsed["error"].is_null());
+    let data = &parsed["data"];
+    assert!(data.is_object(), "data must be an object");
+
+    // Assert zeroed aggregates
+    assert_eq!(data["total_matches"], 0);
+    assert_eq!(data["total_volume"], "0");
+    assert_eq!(data["average_stake"], "0");
+    assert_eq!(data["completed_matches"], 0);
+    assert_eq!(data["cancelled_matches"], 0);
+}
+
+/// `GET /analytics/overview` returns identical response shape for empty and non-empty database (#2004).
+#[tokio::test]
+async fn analytics_overview_response_shape_matches_non_empty_case() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping analytics_overview_response_shape: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
+    db.init_schema().await.expect("schema");
+
+    let pool = event_indexer::db::build_pool(&db_url, 1).unwrap();
+    let conn = pool.get().await.unwrap();
+
+    // 1. Fetch empty DB response
+    let _ = conn.execute("DELETE FROM events", &[]).await;
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
+    let app = build_router(db.clone(), cache, rpc.clone(), no_cache(), Some(TEST_API_KEY.to_string()));
+
+    let empty_res = app
+        .oneshot(
+            Request::builder()
+                .uri("/analytics/overview")
+                .header(API_KEY_HEADER, TEST_API_KEY)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(empty_res.status(), StatusCode::OK);
+    let empty_body = to_bytes(empty_res.into_body(), usize::MAX).await.unwrap();
+    let empty_json: serde_json::Value = serde_json::from_slice(&empty_body).unwrap();
+
+    // 2. Insert event and fetch non-empty DB response
+    let evt = make_event("test-shape-evt-1", 9999, 100);
+    let _ = conn
+        .execute(
+            r#"
+            INSERT INTO events (id, ledger_sequence, match_id, event_type, player1, player2, status, stake_amount, token, timestamp)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            "#,
+            &[
+                &evt.id,
+                &(evt.ledger_sequence as i64),
+                &(evt.match_id as i64),
+                &evt.event_type,
+                &evt.player1,
+                &evt.player2,
+                &evt.status,
+                &evt.stake_amount,
+                &evt.token,
+                &evt.timestamp,
+            ],
+        )
+        .await;
+
+    let app2 = build_router(db, Arc::new(RwLock::new(EventCache::new(100))), rpc, no_cache(), Some(TEST_API_KEY.to_string()));
+    let non_empty_res = app2
+        .oneshot(
+            Request::builder()
+                .uri("/analytics/overview")
+                .header(API_KEY_HEADER, TEST_API_KEY)
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(non_empty_res.status(), StatusCode::OK);
+    let non_empty_body = to_bytes(non_empty_res.into_body(), usize::MAX).await.unwrap();
+    let non_empty_json: serde_json::Value = serde_json::from_slice(&non_empty_body).unwrap();
+
+    // Clean up inserted test event
+    let _ = conn.execute("DELETE FROM events WHERE id = 'test-shape-evt-1'", &[]).await;
+
+    // Both top-level keys must match: "success", "data", "error"
+    let empty_top_keys: std::collections::BTreeSet<_> = empty_json.as_object().unwrap().keys().collect();
+    let non_empty_top_keys: std::collections::BTreeSet<_> = non_empty_json.as_object().unwrap().keys().collect();
+    assert_eq!(empty_top_keys, non_empty_top_keys, "Top-level JSON keys must match");
+
+    // Both "data" object keys must match
+    let empty_data_keys: std::collections::BTreeSet<_> = empty_json["data"].as_object().unwrap().keys().collect();
+    let non_empty_data_keys: std::collections::BTreeSet<_> = non_empty_json["data"].as_object().unwrap().keys().collect();
+    assert_eq!(empty_data_keys, non_empty_data_keys, "Data object keys must match between empty and non-empty DB");
+
+    // Both must have identical value types for all fields
+    for key in empty_data_keys {
+        let empty_val = &empty_json["data"][key];
+        let non_empty_val = &non_empty_json["data"][key];
+        assert_eq!(
+            std::mem::discriminant(empty_val),
+            std::mem::discriminant(non_empty_val),
+            "Value type for field '{}' must match between empty and non-empty responses",
+            key
+        );
+    }
+}
+
 /// `GET /analytics/overview` accepts optional time range filters.
 #[tokio::test]
 async fn analytics_overview_accepts_time_range_params() {
@@ -1182,6 +1333,49 @@ fn analytics_overview_serializes_correctly() {
     assert_eq!(parsed["average_stake"], "23809");
     assert_eq!(parsed["completed_matches"], 30);
     assert_eq!(parsed["cancelled_matches"], 12);
+}
+
+#[test]
+fn analytics_overview_empty_zeroed_serializes_and_matches_shape() {
+    use event_indexer::models::AnalyticsOverview;
+
+    let empty = AnalyticsOverview {
+        total_matches: 0,
+        total_volume: "0".to_string(),
+        average_stake: "0".to_string(),
+        completed_matches: 0,
+        cancelled_matches: 0,
+    };
+
+    let populated = AnalyticsOverview {
+        total_matches: 42,
+        total_volume: "1000000".to_string(),
+        average_stake: "23809".to_string(),
+        completed_matches: 30,
+        cancelled_matches: 12,
+    };
+
+    let empty_json = serde_json::to_value(&empty).unwrap();
+    let populated_json = serde_json::to_value(&populated).unwrap();
+
+    // Verify empty fields have zeroed values
+    assert_eq!(empty_json["total_matches"], 0);
+    assert_eq!(empty_json["total_volume"], "0");
+    assert_eq!(empty_json["average_stake"], "0");
+    assert_eq!(empty_json["completed_matches"], 0);
+    assert_eq!(empty_json["cancelled_matches"], 0);
+
+    // Verify shape matches populated case
+    let empty_keys: std::collections::BTreeSet<_> = empty_json.as_object().unwrap().keys().collect();
+    let populated_keys: std::collections::BTreeSet<_> = populated_json.as_object().unwrap().keys().collect();
+    assert_eq!(empty_keys, populated_keys);
+
+    for key in empty_keys {
+        assert_eq!(
+            std::mem::discriminant(&empty_json[key]),
+            std::mem::discriminant(&populated_json[key])
+        );
+    }
 }
 
 #[test]

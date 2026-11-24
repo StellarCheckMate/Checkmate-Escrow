@@ -285,6 +285,62 @@ async fn reorg_invalidation_clears_aggregates_only() {
 }
 
 #[tokio::test]
+async fn ledger_rollback_drops_stale_list_and_analytics_entries() {
+    let cache = ApiCache::in_memory();
+
+    // Warm the cache with the state a reader would see before the reorg.
+    cache
+        .set_json(
+            &matches_key(Some(&MatchStatus::Completed)),
+            &vec![match_info(3, MatchStatus::Completed)],
+            pending_matches_ttl(),
+        )
+        .await;
+    cache
+        .set_json(
+            &matches_key(Some(&MatchStatus::Active)),
+            &vec![match_info(4, MatchStatus::Active)],
+            pending_matches_ttl(),
+        )
+        .await;
+    cache
+        .set_json(
+            &analytics_key(ANALYTICS_STATS),
+            &Stats {
+                total_events: 99,
+                cache_size: 2,
+            },
+            analytics_ttl(),
+        )
+        .await;
+
+    // A ledger reorg/rollback rewinds the event table.
+    cache.invalidate_on_rollback().await;
+
+    assert!(
+        cache
+            .get_json::<Vec<MatchInfo>>(&matches_key(Some(&MatchStatus::Completed)))
+            .await
+            .is_none(),
+        "the completed list is stale after a rollback"
+    );
+    assert!(
+        cache
+            .get_json::<Vec<MatchInfo>>(&matches_key(Some(&MatchStatus::Active)))
+            .await
+            .is_none(),
+        "the active list is stale after a rollback"
+    );
+    assert!(
+        cache
+            .get_json::<Stats>(&analytics_key(ANALYTICS_STATS))
+            .await
+            .is_none(),
+        "analytics counters are derived from the rolled-back event table"
+    );
+}
+
+#[tokio::test]
 async fn repeated_invalidation_is_idempotent() {
     let cache = ApiCache::in_memory();
     cache
@@ -569,4 +625,67 @@ async fn cache_does_not_rewrite_timestamps() {
     let restored: IndexedEvent = cache.get_json("cm:api:test:event").await.unwrap();
 
     assert_eq!(restored.timestamp, expected);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. Stale-then-refresh after TTL (#2002)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The cached value is served until its TTL runs out, even after the match has
+/// changed upstream. Once the TTL expires the next reader repopulates from the
+/// current state.
+#[tokio::test]
+async fn stale_value_is_served_until_ttl_then_refreshed() {
+    let cache = ApiCache::in_memory();
+    let ttl = Duration::from_secs(1);
+    cache
+        .set_json(&match_key(5), &match_info(5, MatchStatus::Pending), ttl)
+        .await;
+
+    // The match became Active upstream, but nothing invalidated the entry.
+    let stale: MatchInfo = cache
+        .get_json(&match_key(5))
+        .await
+        .expect("entry is cached");
+    assert_eq!(stale.status, MatchStatus::Pending, "stale value served before TTL");
+
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    assert!(
+        cache.get_json::<MatchInfo>(&match_key(5)).await.is_none(),
+        "entry must expire at its TTL"
+    );
+
+    cache
+        .set_json(&match_key(5), &match_info(5, MatchStatus::Active), ttl)
+        .await;
+    let refreshed: MatchInfo = cache
+        .get_json(&match_key(5))
+        .await
+        .expect("refreshed entry is cached");
+    assert_eq!(refreshed.status, MatchStatus::Active);
+}
+
+/// A refresh after expiry carries the ledger events ingested while the old
+/// entry was cached. Here the match completed, so `completed_ledger` is new.
+#[tokio::test]
+async fn refresh_after_ttl_picks_up_new_ledger_events() {
+    let cache = ApiCache::in_memory();
+    let ttl = Duration::from_secs(1);
+    cache
+        .set_json(&match_key(6), &match_info(6, MatchStatus::Active), ttl)
+        .await;
+
+    tokio::time::sleep(Duration::from_millis(1_100)).await;
+
+    // A match:completed event was ingested after the entry was cached.
+    let mut completed = match_info(6, MatchStatus::Completed);
+    completed.completed_ledger = Some(250);
+    cache.set_json(&match_key(6), &completed, ttl).await;
+
+    let refreshed: MatchInfo = cache
+        .get_json(&match_key(6))
+        .await
+        .expect("refreshed entry is cached");
+    assert_eq!(refreshed.status, MatchStatus::Completed);
+    assert_eq!(refreshed.completed_ledger, Some(250));
 }

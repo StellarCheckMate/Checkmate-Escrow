@@ -49,14 +49,25 @@ pub fn is_protected_path(path: &str) -> bool {
 /// Compare two strings in time proportional to their length, not to how many
 /// bytes match, so an attacker cannot learn the key byte-by-byte from response
 /// timing.  Length is intentionally leaked (it is not secret-worthy here).
+///
+/// The length difference is folded into the accumulator instead of being
+/// checked with an early return, so the comparison does not branch on whether
+/// the lengths match.  Unequal lengths still always yield `false`.
 pub fn constant_time_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+
+    // Fold the length difference into the accumulator rather than returning
+    // early; any difference makes the final result non-zero.
+    let mut diff = (a.len() ^ b.len()) as u64;
+
+    // Compare over the shorter length so indexing never goes out of bounds.
+    let len = a.len().min(b.len());
+    for i in 0..len {
+        diff |= (a[i] ^ b[i]) as u64;
     }
-    a.bytes()
-        .zip(b.bytes())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
+
+    diff == 0
 }
 
 /// Standard `401` envelope for this service, matching the shape every other
@@ -161,36 +172,15 @@ mod tests {
         assert!(!constant_time_eq("", "x"));
     }
 
-    /// A missing key (empty string from an absent header) is always rejected.
     #[test]
-    fn missing_key_is_rejected() {
-        let configured = "test-api-key-0123456789abcdef";
-        // An absent X-Api-Key header produces an empty string in the middleware.
-        assert!(
-            !constant_time_eq("", configured),
-            "missing key (empty string) must not match a configured secret"
-        );
-    }
-
-    /// A malformed key (wrong characters / wrong length) is always rejected.
-    #[test]
-    fn malformed_key_is_rejected() {
-        let configured = "test-api-key-0123456789abcdef";
-        // Wrong length.
-        assert!(
-            !constant_time_eq("short", configured),
-            "shorter key must not match"
-        );
-        // Same length but wrong content.
-        let wrong: String = "X".repeat(configured.len());
-        assert!(
-            !constant_time_eq(&wrong, configured),
-            "same-length but wrong key must not match"
-        );
-        // Contains non-ASCII / special characters.
-        assert!(
-            !constant_time_eq("test-api-key-!!!!!!!!!!!!!!!", configured),
-            "malformed key with special characters must not match"
-        );
+    fn constant_time_eq_rejects_different_lengths_safely() {
+        // Keys of differing lengths must be rejected without panicking, even
+        // when one is a prefix of the other or either side is empty.
+        assert!(!constant_time_eq("", "secret-key"));
+        assert!(!constant_time_eq("secret-key", ""));
+        assert!(!constant_time_eq("secret", "secret-key"));
+        assert!(!constant_time_eq("secret-key", "secret"));
+        assert!(!constant_time_eq("a", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(!constant_time_eq("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "a"));
     }
 }

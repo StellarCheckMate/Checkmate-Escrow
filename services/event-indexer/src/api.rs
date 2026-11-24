@@ -22,7 +22,9 @@
 
 use axum::{
     async_trait,
-    extract::{rejection::QueryRejection, FromRequestParts, Path, Query, Request, State},
+    extract::{
+        rejection::QueryRejection, Extension, FromRequestParts, Path, Query, Request, State,
+    },
     http::{header, request::Parts, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Response},
@@ -41,7 +43,7 @@ use crate::{
     cache::EventCache,
     db::Database,
     models::{
-        AnalyticsOverview, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters,
+        AnalyticsOverview, DisputeInfo, IndexedEvent, MatchInfo, MatchStatus, PlayerAnalytics, QueryFilters,
         TokenAnalytics,
     },
     metrics,
@@ -53,6 +55,9 @@ use crate::{
     },
     validation::{self, ValidationError},
 };
+
+/// Upper bound on the page size accepted by the paginated list endpoints.
+const MAX_PAGE_LIMIT: i64 = 200;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -76,7 +81,50 @@ pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<String>,
+    /// Correlation id echoed from the `X-Request-ID` header (see
+    /// [`request_id`]). Present on every response, and especially useful on
+    /// error responses so a client report can be matched to the server logs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
+
+impl<T> ApiResponse<T> {
+    /// A successful response carrying `data`.
+    pub fn ok(data: T) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+            request_id: None,
+        }
+    }
+
+    /// An error response carrying `message`.
+    pub fn error(message: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(message.into()),
+            request_id: None,
+        }
+    }
+
+    /// Attach the request id so it is echoed in the response body.
+    pub fn with_request_id(mut self, request_id: Option<String>) -> Self {
+        self.request_id = request_id;
+        self
+    }
+}
+
+/// Read the request id that [`request_id::request_id_middleware`] stored in the
+/// request extensions, if any.
+fn request_id_from_parts(parts: &Parts) -> Option<String> {
+    parts
+        .extensions
+        .get::<request_id::RequestId>()
+        .map(|id| id.0.clone())
+}
+=======
 
 // ── Custom query extractor ────────────────────────────────────────────────────
 
@@ -93,17 +141,20 @@ where
     type Rejection = (StatusCode, Json<ApiResponse<()>>);
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let request_id = request_id_from_parts(parts);
         axum::extract::Query::<T>::from_request_parts(parts, state)
             .await
             .map(|axum::extract::Query(inner)| TypedQuery(inner))
             .map_err(|e: QueryRejection| {
                 (
                     StatusCode::BAD_REQUEST,
-                    Json(ApiResponse {
-                        success: false,
-                        data: None,
-                        error: Some(format!("Invalid query parameter: {}", e.body_text())),
-                    }),
+                    Json(
+                        ApiResponse::error(format!(
+                            "Invalid query parameter: {}",
+                            e.body_text()
+                        ))
+                        .with_request_id(request_id),
+                    ),
                 )
             })
     }
@@ -143,6 +194,10 @@ where
 #[derive(Deserialize)]
 pub struct EventQuery {
     pub player_address: Option<String>,
+    /// Optional `match_id` filter. Received as a raw string so the handler can
+    /// validate it at the boundary and answer a non-numeric value with a `400`
+    /// instead of letting it surface as a `500`.
+    pub match_id: Option<String>,
     #[serde(default, deserialize_with = "empty_status_as_none")]
     pub status: Option<MatchStatus>,
     #[serde(default, deserialize_with = "empty_i64_as_none")]
@@ -194,6 +249,14 @@ pub struct PaginationQuery {
 
 #[derive(Deserialize)]
 pub struct ActiveMatchesQuery {
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
+    pub limit: Option<i64>,
+    #[serde(default, deserialize_with = "empty_i64_as_none")]
+    pub offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct DisputesQuery {
     #[serde(default, deserialize_with = "empty_i64_as_none")]
     pub limit: Option<i64>,
     #[serde(default, deserialize_with = "empty_i64_as_none")]
@@ -255,7 +318,14 @@ pub struct TransactionHistoryQuery {
 /// including responses short-circuited by [`validation::validate_request`].
 async fn request_logging_middleware(req: Request, next: Next) -> Response {
     let start = Instant::now();
-    let request_id = uuid::Uuid::new_v4().to_string();
+    // Reuse the id assigned by `request_id_middleware` so the log line and the
+    // response body/header carry the same value. Fall back to a fresh id only
+    // if the inner layer somehow didn't run.
+    let request_id = req
+        .extensions()
+        .get::<request_id::RequestId>()
+        .map(|id| id.0.clone())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
 
@@ -299,11 +369,13 @@ pub fn build_router(
         .route("/api/openapi.yaml", get(api_openapi_yaml))
         .route("/events", get(get_events))
         .route("/events/:match_id", get(get_match_events))
+        .route("/disputes", get(get_disputes))
         .route("/matches", get(get_matches))
         .route("/matches/active", get(get_active_matches))
         .route("/matches/pending", get(get_pending_matches))
         .route("/match/:match_id", get(get_match_info))
         .route("/matches/:match_id", get(get_match_info))
+        .route("/matches/:match_id/depositors", get(get_match_depositors))
         .route("/players/:address/matches", get(get_player_matches))
         .route(
             "/transactions/player/:player_address",
@@ -315,7 +387,8 @@ pub fn build_router(
         .route("/stats", get(get_stats))
         // Layers wrap the router built so far, so the last `.layer()` call is
         // the outermost.  Order here: logging → auth → validation → request id.
-        // Request ID is innermost so every other layer can attach it to logs.
+        // Request ID is innermost so every other layer (and every handler) can
+        // read it from the request extensions and echo it in error responses.
         .layer(axum::middleware::from_fn(request_id::request_id_middleware))
         // Validation runs before routing dispatches to a handler, so malformed
         // input never reaches the database.
@@ -329,7 +402,7 @@ pub fn build_router(
         ))
         // Outermost layer: logs every request, including ones rejected by
         // validation and auth above, with the status and latency the caller
-        // observed.
+        // observed.  Reuses the request id assigned by the innermost layer.
         .layer(axum::middleware::from_fn(request_logging_middleware))
         .with_state(state)
 }
@@ -460,8 +533,25 @@ pub struct EventsResponse {
 /// scales horizontally when `DATABASE_READ_URL` points to a replica.
 async fn get_events(
     State(state): State<AppState>,
+    Extension(request_id): Extension<request_id::RequestId>,
     TypedQuery(query): TypedQuery<EventQuery>,
-) -> (StatusCode, Json<ApiResponse<EventsResponse>>) {
+) -> (StatusCode, Json<ApiResponse<Vec<IndexedEvent>>>) {
+    // Validate `match_id` at the handler boundary: a non-numeric value must be
+    // a `400` with a field-scoped message, not a `500` from the database layer.
+    if let Some(raw) = non_empty(&query.match_id) {
+        if let Err(e) = validation::validate_match_id("match_id", raw) {
+            let (status, Json(body)) = e.into_response_tuple();
+            return (
+                status,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: body.error,
+                }),
+            );
+        }
+    }
+
     let filters = QueryFilters {
         player_address: query.player_address,
         status: query.status,
@@ -476,31 +566,24 @@ async fn get_events(
             if events.is_empty() {
                 (
                     StatusCode::NOT_FOUND,
-                    Json(ApiResponse {
-                        success: false,
-                        data: None,
-                        error: Some("No events found".to_string()),
-                    }),
+                    Json(
+                        ApiResponse::error("No events found").with_request_id(request_id),
+                    ),
                 )
             } else {
                 let cursor = events.last().map(|e| e.ledger_sequence);
                 (
                     StatusCode::OK,
-                    Json(ApiResponse {
-                        success: true,
-                        data: Some(EventsResponse { events, cursor }),
-                        error: None,
-                    }),
+                    Json(ApiResponse::ok(events).with_request_id(request_id)),
                 )
             }
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Database error: {}", e)),
-            }),
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
         ),
     }
 }
@@ -508,9 +591,11 @@ async fn get_events(
 /// `GET /events/:match_id` – events for a single match with cache-first lookup.
 async fn get_match_events(
     State(state): State<AppState>,
+    Extension(request_id): Extension<request_id::RequestId>,
     Path(match_id): Path<u64>,
     Query(pagination): Query<PaginationQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<IndexedEvent>>>) {
+    let request_id = Some(request_id.0);
     let limit = pagination.limit.unwrap_or(100);
     let offset = pagination.offset.unwrap_or(0);
 
@@ -523,11 +608,7 @@ async fn get_match_events(
         if !cached_events.is_empty() {
             return (
                 StatusCode::OK,
-                Json(ApiResponse {
-                    success: true,
-                    data: Some(cached_events),
-                    error: None,
-                }),
+                Json(ApiResponse::ok(cached_events).with_request_id(request_id)),
             );
         }
     }
@@ -541,30 +622,27 @@ async fn get_match_events(
             if events.is_empty() {
                 (
                     StatusCode::NOT_FOUND,
-                    Json(ApiResponse {
-                        success: false,
-                        data: None,
-                        error: Some(format!("No events found for match {}", match_id)),
-                    }),
+                    Json(
+                        ApiResponse::error(format!(
+                            "No events found for match {}",
+                            match_id
+                        ))
+                        .with_request_id(request_id),
+                    ),
                 )
             } else {
                 (
                     StatusCode::OK,
-                    Json(ApiResponse {
-                        success: true,
-                        data: Some(events),
-                        error: None,
-                    }),
+                    Json(ApiResponse::ok(events).with_request_id(request_id)),
                 )
             }
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Database error: {}", e)),
-            }),
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
         ),
     }
 }
@@ -588,8 +666,10 @@ async fn get_match_events(
 /// distinct pages don't collide.
 async fn get_matches(
     State(state): State<AppState>,
+    Extension(request_id): Extension<request_id::RequestId>,
     TypedQuery(query): TypedQuery<MatchQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
+    let request_id = Some(request_id.0);
     let status = query.status;
     let cache_key = format!(
         "{}:after={:?}:before={:?}:offset={:?}:limit={:?}",
@@ -603,11 +683,7 @@ async fn get_matches(
     if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
         return (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(cached),
-                error: None,
-            }),
+            Json(ApiResponse::ok(cached).with_request_id(request_id)),
         );
     }
 
@@ -644,20 +720,15 @@ async fn get_matches(
                 .await;
             (
                 StatusCode::OK,
-                Json(ApiResponse {
-                    success: true,
-                    data: Some(paged),
-                    error: None,
-                }),
+                Json(ApiResponse::ok(paged).with_request_id(request_id)),
             )
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Database error: {}", e)),
-            }),
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
         ),
     }
 }
@@ -668,24 +739,29 @@ async fn get_matches(
 /// Returns an empty array when no active matches exist.
 async fn get_active_matches(
     State(state): State<AppState>,
-    TypedQuery(_query): TypedQuery<ActiveMatchesQuery>,
+    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
-    let cache_key = api_cache::matches_key(Some(&MatchStatus::Active));
+    let limit = query.limit.unwrap_or(50).clamp(1, MAX_PAGE_LIMIT);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    // Pagination is part of the cache key so distinct pages don't collide.
+    let cache_key = format!(
+        "{}:offset={}:limit={}",
+        api_cache::matches_key(Some(&MatchStatus::Active)),
+        offset,
+        limit
+    );
 
     if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
         return (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(cached),
-                error: None,
-            }),
+            Json(ApiResponse::ok(cached).with_request_id(request_id)),
         );
     }
 
     match state
         .db
-        .get_matches_by_status(Some(&MatchStatus::Active))
+        .get_matches_by_status_paginated(Some(&MatchStatus::Active), limit, offset)
         .await
     {
         Ok(matches) => {
@@ -695,20 +771,15 @@ async fn get_active_matches(
                 .await;
             (
                 StatusCode::OK,
-                Json(ApiResponse {
-                    success: true,
-                    data: Some(matches),
-                    error: None,
-                }),
+                Json(ApiResponse::ok(matches).with_request_id(request_id)),
             )
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Database error: {}", e)),
-            }),
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
         ),
     }
 }
@@ -719,24 +790,29 @@ async fn get_active_matches(
 /// Returns an empty array when no pending matches exist.
 async fn get_pending_matches(
     State(state): State<AppState>,
-    TypedQuery(_query): TypedQuery<ActiveMatchesQuery>,
+    TypedQuery(query): TypedQuery<ActiveMatchesQuery>,
 ) -> (StatusCode, Json<ApiResponse<Vec<MatchInfo>>>) {
-    let cache_key = api_cache::matches_key(Some(&MatchStatus::Pending));
+    let limit = query.limit.unwrap_or(50).clamp(1, MAX_PAGE_LIMIT);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    // Pagination is part of the cache key so distinct pages don't collide.
+    let cache_key = format!(
+        "{}:offset={}:limit={}",
+        api_cache::matches_key(Some(&MatchStatus::Pending)),
+        offset,
+        limit
+    );
 
     if let Some(cached) = state.api_cache.get_json::<Vec<MatchInfo>>(&cache_key).await {
         return (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(cached),
-                error: None,
-            }),
+            Json(ApiResponse::ok(cached).with_request_id(request_id)),
         );
     }
 
     match state
         .db
-        .get_matches_by_status(Some(&MatchStatus::Pending))
+        .get_matches_by_status_paginated(Some(&MatchStatus::Pending), limit, offset)
         .await
     {
         Ok(matches) => {
@@ -746,20 +822,15 @@ async fn get_pending_matches(
                 .await;
             (
                 StatusCode::OK,
-                Json(ApiResponse {
-                    success: true,
-                    data: Some(matches),
-                    error: None,
-                }),
+                Json(ApiResponse::ok(matches).with_request_id(request_id)),
             )
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Database error: {}", e)),
-            }),
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
         ),
     }
 }
@@ -782,18 +853,16 @@ async fn get_pending_matches(
 /// about to be indexed must not be sticky.
 async fn get_match_info(
     State(state): State<AppState>,
+    Extension(request_id): Extension<request_id::RequestId>,
     Path(match_id): Path<u64>,
 ) -> (StatusCode, Json<ApiResponse<MatchInfo>>) {
+    let request_id = Some(request_id.0);
     let cache_key = api_cache::match_key(match_id);
 
     if let Some(cached) = state.api_cache.get_json::<MatchInfo>(&cache_key).await {
         return (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(cached),
-                error: None,
-            }),
+            Json(ApiResponse::ok(cached).with_request_id(request_id)),
         );
     }
 
@@ -803,13 +872,70 @@ async fn get_match_info(
             state.api_cache.set_json(&cache_key, &match_info, ttl).await;
             (
                 StatusCode::OK,
-                Json(ApiResponse {
-                    success: true,
-                    data: Some(match_info),
-                    error: None,
-                }),
+                Json(ApiResponse::ok(match_info).with_request_id(request_id)),
             )
         }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(
+                ApiResponse::error(format!("Match {} not found", match_id))
+                    .with_request_id(request_id),
+            ),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
+        ),
+    }
+}
+
+/// `GET /disputes` – list open disputes with pagination.
+///
+/// Accepts `limit` (default 50, max 1000) and `offset` (default 0) query parameters.
+async fn get_disputes(
+    State(state): State<AppState>,
+    TypedQuery(query): TypedQuery<DisputesQuery>,
+) -> (StatusCode, Json<ApiResponse<Vec<DisputeInfo>>>) {
+    let limit = query.limit.unwrap_or(50).clamp(1, 1000);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    match state.db.get_open_disputes(limit, offset).await {
+        Ok(disputes) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(disputes),
+                error: None,
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Database error: {}", e)),
+            }),
+        ),
+    }
+}
+
+/// `GET /matches/:match_id/depositors` – list depositor addresses for a match.
+async fn get_match_depositors(
+    State(state): State<AppState>,
+    Path(match_id): Path<u64>,
+) -> (StatusCode, Json<ApiResponse<Vec<String>>>) {
+    match state.db.get_match_depositors(match_id).await {
+        Ok(Some(depositors)) => (
+            StatusCode::OK,
+            Json(ApiResponse {
+                success: true,
+                data: Some(depositors),
+                error: None,
+            }),
+        ),
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiResponse {
@@ -840,9 +966,11 @@ async fn get_match_info(
 /// be poor while the staleness would be user-visible.
 async fn get_player_matches(
     State(state): State<AppState>,
+    Extension(request_id): Extension<request_id::RequestId>,
     Path(address): Path<String>,
     TypedQuery(query): TypedQuery<PlayerMatchesQuery>,
 ) -> (StatusCode, Json<ApiResponse<PlayerMatchesResponse>>) {
+    let request_id = Some(request_id.0);
     let limit = query.limit.unwrap_or(50);
     let offset = query.offset.unwrap_or(0);
 
@@ -853,24 +981,22 @@ async fn get_player_matches(
     {
         Ok((matches, total)) => (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(PlayerMatchesResponse {
+            Json(
+                ApiResponse::ok(PlayerMatchesResponse {
                     matches,
                     total,
                     limit,
                     offset,
-                }),
-                error: None,
-            }),
+                })
+                .with_request_id(request_id),
+            ),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Database error: {}", e)),
-            }),
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
         ),
     }
 }
@@ -887,20 +1013,21 @@ async fn get_player_matches(
 /// be poor while the staleness would be user-visible.
 async fn get_player_transactions(
     State(state): State<AppState>,
+    Extension(request_id): Extension<request_id::RequestId>,
     Path(player_address): Path<String>,
     TypedQuery(query): TypedQuery<TransactionHistoryQuery>,
 ) -> (StatusCode, Json<ApiResponse<TransactionPage>>) {
+    let request_id = Some(request_id.0);
     let filters = match build_transaction_filters(&player_address, &query) {
         Ok(filters) => filters,
         Err(e) => {
             let (status, Json(body)) = e.into_response_tuple();
             return (
                 status,
-                Json(ApiResponse {
-                    success: false,
-                    data: None,
-                    error: body.error,
-                }),
+                Json(
+                    ApiResponse::error(body.error.unwrap_or_default())
+                        .with_request_id(request_id),
+                ),
             );
         }
     };
@@ -910,24 +1037,22 @@ async fn get_player_transactions(
         // have no transactions in the requested window.
         Ok((transactions, total)) => (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(TransactionPage::new(
+            Json(
+                ApiResponse::ok(TransactionPage::new(
                     transactions,
                     total,
                     filters.limit,
                     filters.offset,
-                )),
-                error: None,
-            }),
+                ))
+                .with_request_id(request_id),
+            ),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Database error: {}", e)),
-            }),
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
         ),
     }
 }
@@ -1028,15 +1153,15 @@ pub struct PlayerMatchesResponse {
 /// and no caller needs them fresher than a minute.  The cached value is
 /// invalidated whenever a contract event is ingested, so an idle service still
 /// reports accurate numbers immediately after new activity.
-async fn get_stats(State(state): State<AppState>) -> Json<ApiResponse<Stats>> {
+async fn get_stats(
+    State(state): State<AppState>,
+    Extension(request_id): Extension<request_id::RequestId>,
+) -> Json<ApiResponse<Stats>> {
+    let request_id = Some(request_id.0);
     let cache_key = api_cache::analytics_key(api_cache::ANALYTICS_STATS);
 
     if let Some(cached) = state.api_cache.get_json::<Stats>(&cache_key).await {
-        return Json(ApiResponse {
-            success: true,
-            data: Some(cached),
-            error: None,
-        });
+        return Json(ApiResponse::ok(cached).with_request_id(request_id));
     }
 
     let cache_lock = state.cache.read().await;
@@ -1055,11 +1180,7 @@ async fn get_stats(State(state): State<AppState>) -> Json<ApiResponse<Stats>> {
         .set_json(&cache_key, &stats, api_cache::analytics_ttl())
         .await;
 
-    Json(ApiResponse {
-        success: true,
-        data: Some(stats),
-        error: None,
-    })
+    Json(ApiResponse::ok(stats).with_request_id(request_id))
 }
 
 // ── Analytics ─────────────────────────────────────────────────────────────────
@@ -1070,8 +1191,10 @@ async fn get_stats(State(state): State<AppState>) -> Json<ApiResponse<Stats>> {
 /// - `start_date` / `end_date` — ISO-8601 timestamps for time-range filtering.
 async fn analytics_overview(
     State(state): State<AppState>,
+    Extension(request_id): Extension<request_id::RequestId>,
     TypedQuery(query): TypedQuery<AnalyticsQuery>,
 ) -> (StatusCode, Json<ApiResponse<AnalyticsOverview>>) {
+    let request_id = Some(request_id.0);
     match state
         .db
         .analytics_overview(query.start_date, query.end_date)
@@ -1079,19 +1202,14 @@ async fn analytics_overview(
     {
         Ok(overview) => (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(overview),
-                error: None,
-            }),
+            Json(ApiResponse::ok(overview).with_request_id(request_id)),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Database error: {}", e)),
-            }),
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
         ),
     }
 }
@@ -1103,9 +1221,11 @@ async fn analytics_overview(
 /// - `start_date` / `end_date` — time-range filter.
 async fn analytics_player(
     State(state): State<AppState>,
+    Extension(request_id): Extension<request_id::RequestId>,
     Path(player_address): Path<String>,
     TypedQuery(query): TypedQuery<AnalyticsQuery>,
 ) -> (StatusCode, Json<ApiResponse<PlayerAnalytics>>) {
+    let request_id = Some(request_id.0);
     let limit = query.limit.unwrap_or(50).min(200);
     let offset = query.offset.unwrap_or(0).max(0);
 
@@ -1122,19 +1242,14 @@ async fn analytics_player(
     {
         Ok(analytics) => (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(analytics),
-                error: None,
-            }),
+            Json(ApiResponse::ok(analytics).with_request_id(request_id)),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Database error: {}", e)),
-            }),
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
         ),
     }
 }
@@ -1146,9 +1261,11 @@ async fn analytics_player(
 /// - `start_date` / `end_date` — time-range filter.
 async fn analytics_token(
     State(state): State<AppState>,
+    Extension(request_id): Extension<request_id::RequestId>,
     Path(token_address): Path<String>,
     TypedQuery(query): TypedQuery<AnalyticsQuery>,
 ) -> (StatusCode, Json<ApiResponse<TokenAnalytics>>) {
+    let request_id = Some(request_id.0);
     let limit = query.limit.unwrap_or(50).min(200);
     let offset = query.offset.unwrap_or(0).max(0);
 
@@ -1165,19 +1282,14 @@ async fn analytics_token(
     {
         Ok(analytics) => (
             StatusCode::OK,
-            Json(ApiResponse {
-                success: true,
-                data: Some(analytics),
-                error: None,
-            }),
+            Json(ApiResponse::ok(analytics).with_request_id(request_id)),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Database error: {}", e)),
-            }),
+            Json(
+                ApiResponse::error(format!("Database error: {}", e))
+                    .with_request_id(request_id),
+            ),
         ),
     }
 }
