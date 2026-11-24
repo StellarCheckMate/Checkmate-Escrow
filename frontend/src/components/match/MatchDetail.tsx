@@ -12,12 +12,15 @@ export interface MatchDetailProps {
   platform: 'lichess' | 'chessdotcom';
   /** Decimal places for `token`; when set, stakeAmount is formatted from raw units. */
   tokenDecimals?: number;
+  /** Dispute status of the match, if any. */
+  disputeStatus?: 'open' | 'resolved' | null;
 }
 
 /**
  * Builds the shareable deep-link URL for a given match, e.g. `/match/1234`.
  * Exported for reuse/testing outside of the component's click handler.
  */
+// eslint-disable-next-line react-refresh/only-export-components
 export function buildMatchLink(matchId: number, origin: string = window.location.origin): string {
   return `${origin}/match/${matchId}`;
 }
@@ -31,6 +34,7 @@ export function MatchDetail({
   status,
   platform,
   tokenDecimals,
+  disputeStatus,
 }: MatchDetailProps) {
   const [copied, setCopied] = useState(false);
   const displayStake =
@@ -59,6 +63,14 @@ export function MatchDetail({
         <dt>Player 2</dt><dd>{player2}</dd>
         <dt>Stake</dt><dd>{displayStake} {token}</dd>
         <dt>Platform</dt><dd>{platform === 'lichess' ? 'Lichess' : 'Chess.com'}</dd>
+        {disputeStatus && (
+          <>
+            <dt>Dispute Status</dt>
+            <dd data-testid="dispute-status">
+              {disputeStatus === 'open' ? 'Open' : 'Resolved'}
+            </dd>
+          </>
+        )}
       </dl>
       <button type="button" onClick={handleCopyLink}>
         {copied ? 'Link copied!' : 'Copy Link'}
