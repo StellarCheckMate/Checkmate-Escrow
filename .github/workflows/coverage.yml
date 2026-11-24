@@ -5,11 +5,17 @@ on:
     branches: [main, master]
     paths:
       - 'contracts/escrow/**'
+      - 'contracts/oracle/**'
+      - 'oracle-service/**'
+      - 'services/event-indexer/**'
       - '.github/workflows/coverage.yml'
   pull_request:
     branches: [main, master]
     paths:
       - 'contracts/escrow/**'
+      - 'contracts/oracle/**'
+      - 'oracle-service/**'
+      - 'services/event-indexer/**'
       - '.github/workflows/coverage.yml'
 
 env:
