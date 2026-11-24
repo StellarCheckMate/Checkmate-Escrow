@@ -41,6 +41,16 @@ describe('formatTokenAmount', () => {
     expect(formatTokenAmount(2_500_000_000)).toBe('250');
   });
 
+  it('formats XLM with 7 decimals', () => {
+    expect(formatTokenAmount(12_345_678, 7)).toBe('1.2345678');
+  });
+
+  it('formats a custom token with its configured decimals', () => {
+    const customToken = { decimals: 5 };
+
+    expect(formatTokenAmount(1_234_567, customToken.decimals)).toBe('12.34567');
+  });
+
   it('formats non-XLM 6-decimal tokens (USDC) with the correct 6-decimal divisor', () => {
     // 1 USDC = 1_000_000 raw units
     expect(formatTokenAmount(1_000_000, 6)).toBe('1');
