@@ -285,6 +285,62 @@ async fn reorg_invalidation_clears_aggregates_only() {
 }
 
 #[tokio::test]
+async fn ledger_rollback_drops_stale_list_and_analytics_entries() {
+    let cache = ApiCache::in_memory();
+
+    // Warm the cache with the state a reader would see before the reorg.
+    cache
+        .set_json(
+            &matches_key(Some(&MatchStatus::Completed)),
+            &vec![match_info(3, MatchStatus::Completed)],
+            pending_matches_ttl(),
+        )
+        .await;
+    cache
+        .set_json(
+            &matches_key(Some(&MatchStatus::Active)),
+            &vec![match_info(4, MatchStatus::Active)],
+            pending_matches_ttl(),
+        )
+        .await;
+    cache
+        .set_json(
+            &analytics_key(ANALYTICS_STATS),
+            &Stats {
+                total_events: 99,
+                cache_size: 2,
+            },
+            analytics_ttl(),
+        )
+        .await;
+
+    // A ledger reorg/rollback rewinds the event table.
+    cache.invalidate_on_rollback().await;
+
+    assert!(
+        cache
+            .get_json::<Vec<MatchInfo>>(&matches_key(Some(&MatchStatus::Completed)))
+            .await
+            .is_none(),
+        "the completed list is stale after a rollback"
+    );
+    assert!(
+        cache
+            .get_json::<Vec<MatchInfo>>(&matches_key(Some(&MatchStatus::Active)))
+            .await
+            .is_none(),
+        "the active list is stale after a rollback"
+    );
+    assert!(
+        cache
+            .get_json::<Stats>(&analytics_key(ANALYTICS_STATS))
+            .await
+            .is_none(),
+        "analytics counters are derived from the rolled-back event table"
+    );
+}
+
+#[tokio::test]
 async fn repeated_invalidation_is_idempotent() {
     let cache = ApiCache::in_memory();
     cache
