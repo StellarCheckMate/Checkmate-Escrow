@@ -11,9 +11,15 @@ actually being checked as its own gate.
 
 - `.github/workflows/ci.yml`:
   - The "Run cargo audit" step now runs `cargo audit --json`, parses the
-    report, and fails the build (`exit 1`) only when a HIGH or CRITICAL
-    severity advisory is present. Lower-severity advisories are printed as
-    a `::warning::` instead of blocking the merge.
+    report with `scripts/cargo_audit_severity.py`, and fails the build
+    (`exit 1`) only when a HIGH or CRITICAL severity advisory is present.
+    Lower-severity advisories are printed as a `::warning::` instead of
+    blocking the merge.
+  - Advisories that expose only a CVSS vector (for example
+    `CVSS:3.1/.../S:U/C:H/I:N/A:N`) are now classified by parsing their
+    impact metrics (`C:H`, `I:H`, `A:H`) or numeric score, so a HIGH CVE with
+    no `severity` keyword still blocks. `scripts/test_cargo_audit_severity.py`
+    is the regression suite for this behavior.
   - `cargo deny check` was split into two explicit steps: `cargo deny check
     advisories` (complementary vulnerability DB coverage to cargo-audit)
     and `cargo deny check bans licenses sources` (the rest of the existing

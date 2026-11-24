@@ -64,39 +64,13 @@ jobs:
         # regardless of severity. We want low/medium advisories to be
         # visible but not block merges, while HIGH/CRITICAL (CVSS >= 7.0)
         # always fails the build. `--json` + a severity check gives us that
-        # distinction; RUSTSEC advisories without a CVSS score are treated
-        # as unknown severity and reported, not blocking, since they can't
-        # be automatically classified.
+        # distinction. Advisories with only a CVSS vector are classified by
+        # parsing its impact metrics (C:H / I:H / A:H) or numeric score, so a
+        # HIGH CVE without a severity keyword still blocks the build.
         run: |
           set -o pipefail
           cargo audit --json > audit-report.json || true
-          python3 - <<'PY'
-          import json, sys
-          with open("audit-report.json") as f:
-              report = json.load(f)
-          vulns = report.get("vulnerabilities", {}).get("list", [])
-          high_or_critical = []
-          for v in vulns:
-              advisory = v.get("advisory", {})
-              cvss = advisory.get("cvss")
-              score = None
-              if isinstance(cvss, str):
-                  # e.g. "CVSS:3.1/AV:N/.../S:U/C:H/I:H/A:H" has no numeric
-                  # score embedded; fall back to treating any CVSS string
-                  # with "C:H" or similar high-impact markers as high.
-                  score = None
-              severity = advisory.get("severity") or advisory.get("informational")
-              id_ = advisory.get("id", "unknown")
-              title = advisory.get("title", "")
-              print(f"advisory {id_}: {title} (severity={severity})")
-              if severity in ("high", "critical"):
-                  high_or_critical.append(id_)
-          if high_or_critical:
-              print(f"::error::HIGH/CRITICAL advisories found: {', '.join(high_or_critical)}")
-              sys.exit(1)
-          if vulns:
-              print(f"::warning::{len(vulns)} advisory(ies) found below HIGH severity; not blocking merge.")
-          PY
+          python3 scripts/cargo_audit_severity.py audit-report.json
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked --quiet
