@@ -19,10 +19,14 @@ export interface MatchSummary {
   ledger_sequence?: number;
 }
 
+const EMPTY_MATCHES: MatchSummary[] = [];
+
 interface UseMatchesOptions {
   status?: MatchStatus;
   limit?: number;
   offset?: number;
+  /** Refetch the shared feed when the consuming account changes. Null disables fetching. */
+  account?: string | null;
 }
 
 interface ApiResponse<T> {
@@ -31,13 +35,15 @@ interface ApiResponse<T> {
   error: string | null;
 }
 
-export function useMatches({ status, limit = 100, offset = 0 }: UseMatchesOptions = {}) {
+export function useMatches({ status, limit = 100, offset = 0, account }: UseMatchesOptions = {}) {
   const [matches, setMatches] = useState<MatchSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
+  const [settledAccount, setSettledAccount] = useState<string | null>();
 
   useEffect(() => {
+    if (account === null) return;
     let cancelled = false;
 
     async function fetchMatches() {
@@ -72,7 +78,10 @@ export function useMatches({ status, limit = 100, offset = 0 }: UseMatchesOption
         setMatches([]);
         setTotal(0);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setSettledAccount(account);
+          setLoading(false);
+        }
       }
     }
 
@@ -81,7 +90,11 @@ export function useMatches({ status, limit = 100, offset = 0 }: UseMatchesOption
     return () => {
       cancelled = true;
     };
-  }, [status, limit, offset]);
+  }, [status, limit, offset, account]);
 
+  const awaitingAccount = account !== undefined && account !== settledAccount;
+  if (awaitingAccount) {
+    return { matches: EMPTY_MATCHES, loading: account !== null, error: null, total: 0 };
+  }
   return { matches, loading, error, total };
 }
