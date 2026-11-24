@@ -194,6 +194,22 @@ async fn sql_injection_attempt_in_the_path_is_rejected() {
     assert_rejected("/match/1;DROP%20TABLE%20events", "match_id").await;
 }
 
+#[tokio::test]
+async fn non_numeric_match_id_query_parameter_is_rejected() {
+    // The `/events` filter must be validated at the handler boundary rather
+    // than reaching SQL and failing with a 500.
+    assert_rejected("/events?match_id=abc", "match_id").await;
+    assert_rejected("/events?match_id=-1", "match_id").await;
+    assert_rejected("/events?match_id=1.5", "match_id").await;
+    assert_rejected(&format!("/events?match_id={}", "9".repeat(25)), "match_id").await;
+}
+
+#[tokio::test]
+async fn numeric_match_id_query_parameter_is_accepted() {
+    assert_accepted("/events?match_id=0").await;
+    assert_accepted("/events?match_id=12345").await;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. Pagination
 // ─────────────────────────────────────────────────────────────────────────────

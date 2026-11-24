@@ -160,6 +160,15 @@ pub async fn waf_middleware(
         return bad_request("invalid_uri", "Request URI contains invalid characters.");
     }
 
+    if is_sqli_payload(&uri) {
+        let ip = extract_ip(&req);
+        warn!(client_ip = %ip, "WAF: SQL injection payload detected in URI");
+        return bad_request(
+            "sqli_detected",
+            "Request blocked due to potential SQL injection payload.",
+        );
+    }
+
     // ── 2. Body size check ────────────────────────────────────────────────
     if let Some(content_length) = req
         .headers()
@@ -218,6 +227,51 @@ fn bad_request(code: &str, message: &str) -> Response {
         .into_response()
 }
 
+/// Detects common SQL injection signatures in a URI.
+pub fn is_sqli_payload(uri: &str) -> bool {
+    let lower = uri.to_ascii_lowercase();
+    let decoded = percent_decode_lower(&lower);
+    for text in [&lower, &decoded] {
+        if text.contains("' or '1'='1")
+            || text.contains("\" or \"1\"=\"1")
+            || text.contains("' or 1=1")
+            || text.contains("\" or 1=1")
+            || text.contains("'or'1'='1")
+            || text.contains("\"or\"1\"=\"1")
+            || (text.contains("1=1") && (text.contains("or") || text.contains("and")))
+            || text.contains("union select")
+            || text.contains("union all select")
+            || text.contains("select * from")
+            || text.contains("drop table")
+            || text.contains("insert into")
+            || text.contains("delete from")
+            || text.contains("--")
+            || text.contains("/*")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn percent_decode_lower(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex_val) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
+                out.push(hex_val as char);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
 fn payload_too_large() -> Response {
     (
         StatusCode::PAYLOAD_TOO_LARGE,
@@ -273,5 +327,43 @@ mod tests {
         e.window_start = Instant::now() - Duration::from_secs(2);
         // First request in the new window should be allowed.
         assert!(!e.record_and_check(), "should reset counter after window");
+    }
+
+    #[test]
+    fn sqli_detection_blocks_malicious_payloads() {
+        let malicious_uris = [
+            "/matches?id=1' OR '1'='1",
+            "/matches?id=1%27%20OR%20%271%27=%271",
+            "/matches?query=UNION SELECT * FROM matches",
+            "/matches?query=UNION%20ALL%20SELECT%20id%20FROM%20users",
+            "/api/v1/data; DROP TABLE matches--",
+            "/search?filter=1' or 1=1/*comment*/",
+        ];
+        for uri in malicious_uris {
+            assert!(
+                is_sqli_payload(uri),
+                "expected WAF to detect SQLi in URI: {}",
+                uri
+            );
+        }
+    }
+
+    #[test]
+    fn sqli_detection_allows_benign_uris() {
+        let benign_uris = [
+            "/ping",
+            "/health",
+            "/matches/123",
+            "/api/games/status?ids=game1,game2,game3",
+            "/matches?status=active&platform=lichess&limit=50",
+            "/transactions/player/GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+        ];
+        for uri in benign_uris {
+            assert!(
+                !is_sqli_payload(uri),
+                "expected WAF to allow benign URI: {}",
+                uri
+            );
+        }
     }
 }

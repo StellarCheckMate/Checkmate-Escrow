@@ -143,13 +143,16 @@ export const CONTRACT_ERROR_NAME_MESSAGES: Readonly<Record<string, string>> = {
 
 /**
  * Returns the user-facing message for a numeric contract error code.
- * Falls back to the generic unknown-error message for unrecognized codes.
+ * Falls back to an unknown-error message including the numeric code for unrecognized codes.
  */
 export function getContractErrorMessage(code: number | null | undefined): string {
   if (code === null || code === undefined || !Number.isFinite(code)) {
     return UNKNOWN_CONTRACT_ERROR_MESSAGE;
   }
-  return CONTRACT_ERROR_MESSAGES[code] ?? UNKNOWN_CONTRACT_ERROR_MESSAGE;
+  return (
+    CONTRACT_ERROR_MESSAGES[code] ??
+    `Something went wrong while processing the contract call (error code ${code}). Please try again.`
+  );
 }
 
 /**
@@ -205,3 +208,9 @@ export function parseContractError(error: unknown): string {
 
   return UNKNOWN_CONTRACT_ERROR_MESSAGE;
 }
+
+/**
+ * Maps a contract error (string or Error object) to a user-facing message.
+ * Alias for `parseContractError`.
+ */
+export const mapContractError = parseContractError;
