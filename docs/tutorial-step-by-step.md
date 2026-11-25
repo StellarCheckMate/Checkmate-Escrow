@@ -63,6 +63,41 @@ Pick the format that suits you — the content is identical across all three:
 > 💡 **First time only:** the contract build (`./scripts/build.sh`) can take a
 > few minutes as Rust compiles dependencies. Subsequent runs are fast.
 
+
+---
+
+## 🔑 Connecting a wallet (browser UI)
+
+The CLI steps in this tutorial interact with the contracts directly via `stellar contract invoke`. If you are using the **browser frontend** instead of the CLI, you need a connected wallet. Checkmate-Escrow supports two options:
+
+### Option A — Freighter (browser extension)
+
+Freighter is a Chrome/Firefox browser extension that stores your Stellar keys locally.
+
+1. Install from [freighter.app](https://freighter.app).
+2. Create or import an account.
+3. Switch the network to **Testnet** (top-right network selector in the extension).
+4. Click **Connect wallet** in the app and select **Freighter**.
+5. Approve the connection request in the extension popup.
+
+The app reads your public key from Freighter. No private key leaves the extension.
+
+### Option B — Albedo (web popup, no install)
+
+Albedo is a web-based key manager that opens a secure `albedo.link` popup for signing. No browser extension is needed.
+
+1. Click **Connect wallet** in the app and select **Albedo**.
+2. The Albedo popup opens. Create a new account or log in with an existing one.
+3. Approve the public key share request.
+
+Albedo signs transactions in its own popup — your key never touches the app. Some browsers block popups by default; if the popup doesn't open, check your popup-blocker settings and try again from a button click.
+
+### Switching wallets mid-session
+
+Calling `connect('albedo')` or `connect('freighter')` while already connected resets the session cleanly — no page reload required.
+
+> 🧪 **CLI tutorial:** The steps from [Setup](#️-setup--get-to-a-deployed-contract) onward use `stellar contract invoke` directly and do not require a browser wallet. The wallet section above only applies when running the frontend.
+
 ---
 
 ## 🏗️ Setup — get to a deployed contract
