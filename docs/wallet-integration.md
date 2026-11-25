@@ -226,3 +226,43 @@ try {
 | Futurenet | `Test SDF Future Network ; October 2022` |
 
 Pass the passphrase for the network your contract is deployed to. A mismatch will cause the signed transaction to be rejected by the RPC node.
+
+---
+
+## Freighter Error Codes and User Rejection
+
+Freighter surfaces errors through the `error` field on API response objects rather than by throwing directly. The wrapper functions in `src/wallets/freighter.ts` inspect this field and re-throw as a plain `Error`, so callers always receive a standard JavaScript error.
+
+### Error reference
+
+| Error message | Trigger | Recovery |
+|---------------|---------|----------|
+| `"User declined access"` | User dismissed the Freighter connection popup without approving | Show a "Connect wallet" prompt; do not retry automatically |
+| `"Transaction declined"` | User rejected the signing request inside Freighter | Inform the user the transaction was not sent; offer to retry from the action that triggered signing |
+| `"Freighter extension not detected. Please install it."` | `freighterIsAvailable()` returned `false` — the extension is absent or disabled | Direct the user to [freighter.app](https://freighter.app) to install the extension |
+| `"No account selected"` | The extension is installed but no account is active (locked or no account set up) | Ask the user to unlock Freighter and select an account, then reconnect |
+| `"Network mismatch"` | The transaction's `networkPassphrase` does not match the network Freighter is configured for | Confirm `VITE_STELLAR_NETWORK` matches the user's Freighter network setting; see the [network passphrase reference](#network-passphrase-reference) |
+
+### Handling errors from `useWallet()`
+
+`useWallet()` catches all errors from `freighterGetPublicKey` and `freighterSign` and stores the message in the `error` field of its state. Surface it to the user:
+
+```tsx
+const { connected, error, connect } = useWallet();
+
+if (error) {
+  // e.g. "User declined access" or "Network mismatch"
+  return <p className="error">{error}</p>;
+}
+```
+
+Do not re-throw or log the raw `error.message` to an external service — it may contain the user's public key or account label.
+
+### How `signTransaction` errors differ from `getAddress` errors
+
+Both `getAddress()` and `signTransaction()` return an object with an optional `error` field. The error shapes are identical — `.error.message` is always a plain string. The distinction is when each can fire:
+
+- `getAddress` errors occur at **connection time** (when `connect('freighter')` is called).
+- `signTransaction` errors occur at **signing time** (when `sign(xdr)` is called via `useTransaction`).
+
+Log them separately in your analytics if you want to distinguish abandoned connections from abandoned signatures.

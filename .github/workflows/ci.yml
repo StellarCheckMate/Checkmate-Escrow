@@ -19,6 +19,17 @@ jobs:
       - name: Validate local Markdown links
         run: bash scripts/check_links.sh
 
+  check-external-links:
+    name: Check External URL Links
+    runs-on: ubuntu-24.04
+    # Run on push to main/master; on PRs this is advisory only (continue-on-error)
+    # to avoid blocking merges due to transient network issues in CI.
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate external Markdown links
+        run: bash scripts/check_external_links.sh
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+
   check-api-refs:
     name: Check API References
     runs-on: ubuntu-24.04
@@ -243,3 +254,17 @@ jobs:
 
       - name: Validate OpenAPI schema
         run: redocly lint docs/openapi.yaml --format=stylish
+
+  spellcheck:
+    name: Spellcheck Docs and Contract Comments
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+
+      - name: Run spellcheck
+        run: bash scripts/spellcheck.sh
