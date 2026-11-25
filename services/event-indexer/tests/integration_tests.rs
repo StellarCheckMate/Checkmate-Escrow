@@ -1423,3 +1423,63 @@ fn token_analytics_serializes_correctly() {
     assert_eq!(parsed["match_count"], 50);
     assert_eq!(parsed["total_volume"], "500000");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. Address path-parameter validation (#1991)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Malformed address path parameters must be answered with a 400 at the route
+/// boundary instead of reaching the database and surfacing as a 500.
+#[tokio::test]
+async fn malformed_address_path_params_return_400() {
+    if std::env::var("DATABASE_URL").is_err() {
+        println!("Skipping malformed_address_path_params_return_400: DATABASE_URL not set");
+        return;
+    }
+
+    let db_url = std::env::var("DATABASE_URL").unwrap();
+    let db = Arc::new(event_indexer::db::Database::from_dsns(&db_url, &db_url, 2, 2).expect("db"));
+    db.init_schema().await.expect("schema");
+
+    let cache = Arc::new(RwLock::new(EventCache::new(100)));
+    let rpc = Arc::new(event_indexer::rpc::SorobanRpcClient::new("http://localhost:1").unwrap());
+    let app = build_router(db, cache, rpc, no_cache(), Some(TEST_API_KEY.to_string()));
+
+    for (uri, field) in [
+        // Illegal character in the token identifier.
+        ("/analytics/token/bad$token", "token_address"),
+        // 56 characters but the checksum is wrong (last character altered).
+        (
+            "/analytics/token/CAAACAQDAQCQMBYIBEFAWDANBYHRAEISCMKBKFQXDAMRUGY4DUPB6N4A",
+            "token_address",
+        ),
+        // Not a Stellar account address.
+        ("/players/NOT_AN_ADDRESS/matches", "player_address"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header(API_KEY_HEADER, TEST_API_KEY)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "expected 400 for {uri}"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["success"], false);
+        let error = parsed["error"].as_str().unwrap_or("");
+        assert!(
+            error.contains(field),
+            "error for {uri} should name the field {field}: {error}"
+        );
+    }
+}
