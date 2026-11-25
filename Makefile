@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
-.PHONY: help build test lint fmt deploy-testnet frontend-dev frontend-test doc-conformance doc-conformance-test
+.PHONY: help build test lint fmt unused-deps deploy-testnet frontend-dev frontend-test doc-conformance doc-conformance-test
 
 help:
 	@echo "Usage: make <target>"
@@ -11,6 +11,7 @@ help:
 	@echo "  test                  Run Rust tests"
 	@echo "  lint                  Run Rust lints via cargo clippy"
 	@echo "  fmt                   Format Rust code"
+	@echo "  unused-deps           Check for unused Cargo dependencies (cargo-machete)"
 	@echo "  deploy-testnet        Deploy contracts to Stellar testnet"
 	@echo "  frontend-dev          Start the frontend development server"
 	@echo "  frontend-test         Run frontend tests"
@@ -28,6 +29,9 @@ lint:
 
 fmt:
 	cargo fmt --all
+
+unused-deps:
+	cargo machete
 
 deploy-testnet:
 	bash scripts/deploy_testnet.sh
