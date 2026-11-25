@@ -460,6 +460,29 @@ Checkmate-Escrow/
 
 ## Development Workflows
 
+### Check for unused dependencies
+
+CI enforces an unused-dependency check via [cargo-machete](https://github.com/bnjbvr/cargo-machete). Run it locally before opening a PR:
+
+```bash
+make unused-deps
+# or directly:
+cargo machete
+```
+
+If `cargo-machete` is not installed:
+
+```bash
+cargo install cargo-machete --locked
+```
+
+If a dependency is a known false positive (used only at build time, via macros, or by a target-specific path `cargo-machete` cannot see), add it to the crate's `Cargo.toml`:
+
+```toml
+[package.metadata.cargo-machete]
+ignored = ["crate-name"]
+```
+
 ### Test-driven development
 
 ```bash

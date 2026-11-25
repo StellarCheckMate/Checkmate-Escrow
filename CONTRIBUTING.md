@@ -97,6 +97,7 @@ how to interpret the results.
 - Run `cargo fmt --all -- --check` before opening a PR to catch formatting drift across all crates (contracts, oracle-service, e2e-tests, etc.). The CI `Test` job runs this check first and will fail without running tests if any file is out of format.
 - Optionally add a pre-commit hook to automate this: `echo 'cargo fmt --all -- --check' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit`
 - Run clippy for linting: `cargo clippy`
+- Check for unused Cargo dependencies: `make unused-deps` (or `cargo machete`; install with `cargo install cargo-machete --locked`)
 - Keep functions small and focused
 - Add comments for complex logic
 - Use descriptive variable names
