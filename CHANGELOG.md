@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Validate address path parameters on `/analytics/token/:token_address` and `/players/:address/*`; malformed values now return 400 instead of 500 (#1991)
+
 ### Added
 - Added `cursor` field to `GET /events` responses echoing the `ledger_sequence` of the last returned event, so poll-based clients can detect skipped ledgers between requests (closes #2000).
 - Added unit tests in `auth.rs` asserting that a missing API key and a malformed API key are both rejected by the authentication middleware (closes #2001).

@@ -713,10 +713,12 @@ pub fn validate_path(path: &str) -> ValidationResult<()> {
         ["transactions", "player", address] => {
             validate_account_address("player_address", address).map(|_| ())
         }
-        // /players/:address/matches
-        ["players", address, "matches"] => {
+        // /players/:address/* (every sub-route under a player)
+        ["players", address, ..] => {
             validate_account_address("player_address", address).map(|_| ())
         }
+        // /analytics/token/:token_address
+        ["analytics", "token", token] => validate_token("token_address", token).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -1220,6 +1222,22 @@ mod tests {
         assert!(validate_path(&format!("/transactions/player/{}", VALID_CONTRACT)).is_err());
     }
 
+    #[test]
+    fn analytics_token_and_player_routes_validate_the_address() {
+        assert!(validate_path("/analytics/token/USDC").is_ok());
+        assert!(validate_path(&format!("/analytics/token/{}", VALID_CONTRACT)).is_ok());
+        assert!(validate_path("/analytics/token/bad$token").is_err());
+
+        let mut typo = VALID_CONTRACT.to_string();
+        typo.pop();
+        typo.push('A');
+        assert!(validate_path(&format!("/analytics/token/{}", typo)).is_err());
+
+        assert!(validate_path(&format!("/players/{}/matches", VALID_ACCOUNT)).is_ok());
+        assert!(validate_path("/players/NOPE/matches").is_err());
+        assert!(validate_path("/players/NOPE/stats").is_err());
+    }
+    
     #[test]
     fn unknown_paths_are_left_to_the_router() {
         assert!(validate_path("/health").is_ok());
