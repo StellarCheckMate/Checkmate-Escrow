@@ -15,6 +15,8 @@ export function LichessGamePicker({ onSelect }: LichessGamePickerProps) {
   useEffect(() => {
     if (!username.trim()) {
       setGames([]);
+      setLoading(false);
+      setError(null);
       return;
     }
 

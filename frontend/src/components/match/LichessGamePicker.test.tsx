@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { LichessGamePicker } from './LichessGamePicker';
 import * as lichessService from '../../services/lichessService';
 
@@ -25,6 +25,58 @@ const MOCK_GAMES: lichessService.LichessGame[] = [
 describe('LichessGamePicker', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it.each(['', '   '])('resets a pending load when the username becomes %j', async blankUsername => {
+    let resolvePending!: (games: lichessService.LichessGame[]) => void;
+    const pending = new Promise<lichessService.LichessGame[]>(resolve => {
+      resolvePending = resolve;
+    });
+    const fetchSpy = vi.spyOn(lichessService, 'fetchRecentLichessGames')
+      .mockResolvedValueOnce(MOCK_GAMES)
+      .mockReturnValueOnce(pending)
+      .mockResolvedValueOnce(MOCK_GAMES);
+    const onSelect = vi.fn();
+    render(<LichessGamePicker onSelect={onSelect} />);
+    const username = screen.getByLabelText(/lichess username/i);
+
+    fireEvent.change(username, { target: { value: 'PlayerOne' } });
+    await screen.findByRole('button', { name: /abcd1234/i });
+    fireEvent.change(username, { target: { value: 'PlayerTwo' } });
+    expect(screen.getByRole('status')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /abcd1234/i })).toBeDisabled();
+
+    fireEvent.change(username, { target: { value: blankUsername } });
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    // A cancelled request must not repopulate the cleared picker.
+    await act(async () => { resolvePending(MOCK_GAMES); });
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(onSelect).not.toHaveBeenCalled();
+
+    fireEvent.change(username, { target: { value: 'PlayerThree' } });
+    const button = await screen.findByRole('button', { name: /abcd1234/i });
+    expect(button).toBeEnabled();
+    expect(screen.getByLabelText(/search games/i)).toBeEnabled();
+    fireEvent.click(button);
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith('abcd1234');
+  });
+
+  it('clears the previous request error when the username is cleared', async () => {
+    const fetchSpy = vi.spyOn(lichessService, 'fetchRecentLichessGames')
+      .mockRejectedValue(new Error('Unable to load games'));
+    render(<LichessGamePicker onSelect={vi.fn()} />);
+    const username = screen.getByLabelText(/lichess username/i);
+    fireEvent.change(username, { target: { value: 'PlayerOne' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load games');
+
+    fireEvent.change(username, { target: { value: '' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('loads games for a username and allows selecting a game once loaded', async () => {
