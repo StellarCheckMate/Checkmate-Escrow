@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rate limits subsection in the Chess.com Integration section of `docs/oracle.md`, documenting the PubAPI's serial/parallel throttling model, cache invalidation behavior, the oracle client's conservative 30 req/min token-bucket configuration, and how to request higher limits. Closes #1800.
 
 ### Fixed
+- Reset the Lichess game picker's loading and error state when the username is cleared, with regression tests for cancellation and subsequent selection (#2022).
 - Active matches can no longer be cancelled; attempts return `InvalidState`, and the create-match form resets when the connected wallet account changes.
 - Bracket match lookups and state-filtered match queries use maintained indexes instead of scanning the full match history.
 - Active matches with no oracle response are no longer permanently unrecoverable after the 24-hour `dispute_and_rollback_match` window elapses. The new admin recovery function closes the gap identified in Issue #1274, ensuring funds can always be recovered after a bounded stall period.
